@@ -7,6 +7,7 @@ from fastapi import FastAPI
 
 from llm_gateway import __version__
 from llm_gateway.api.health import router as health_router
+from llm_gateway.api.inference import router as inference_router
 from llm_gateway.config import Settings
 from llm_gateway.container import Container, build_container
 from llm_gateway.errors import register_error_handlers
@@ -46,4 +47,5 @@ def create_app(
     app.add_middleware(RequestContextMiddleware)
     register_error_handlers(app)
     app.include_router(health_router)
+    app.include_router(inference_router)
     return app
