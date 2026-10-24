@@ -47,11 +47,33 @@ class RecordingSleeper:
 class RecordingByteStream(httpx.AsyncByteStream):
     def __init__(self, chunks: list[bytes]) -> None:
         self._chunks = chunks
+        self.pulled = 0
         self.closed = False
 
     async def __aiter__(self) -> AsyncIterator[bytes]:
         for chunk in self._chunks:
+            self.pulled += 1
             yield chunk
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+class GuardedByteStream(httpx.AsyncByteStream):
+    """Yields exactly two event chunks, then fails if pulled again."""
+
+    def __init__(self, first: bytes, second: bytes) -> None:
+        self._first = first
+        self._second = second
+        self.pulled = 0
+        self.closed = False
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        self.pulled += 1
+        yield self._first
+        self.pulled += 1
+        yield self._second
+        raise AssertionError("stream pulled before the next chunk was requested")
 
     async def aclose(self) -> None:
         self.closed = True
@@ -122,8 +144,9 @@ def chunk_payload(
     }
 
 
-def sse_event(payload: object, *, line_end: str = "\n") -> str:
-    return f"data: {json.dumps(payload)}{line_end}{line_end}"
+def sse_event(payload: object, *, line_end: str = "\n", ensure_ascii: bool = True) -> str:
+    body = json.dumps(payload, ensure_ascii=ensure_ascii)
+    return f"data: {body}{line_end}{line_end}"
 
 
 async def collect_chunks(
@@ -357,7 +380,7 @@ async def test_stream_ignores_comments_and_non_data_fields() -> None:
 
 
 async def test_stream_parses_trailing_data_without_newline() -> None:
-    first = chunk_payload("", role="assistant")
+    first = chunk_payload("", role="assistant", finish_reason="stop")
     raw = f"data: {json.dumps(first)}".encode()
     stream = RecordingByteStream([raw])
 
@@ -369,6 +392,7 @@ async def test_stream_parses_trailing_data_without_newline() -> None:
 
     assert len(chunks) == 1
     assert chunks[0].choices[0].delta.role == "assistant"
+    assert chunks[0].choices[0].finish_reason == "stop"
     assert stream.closed
 
 
@@ -420,6 +444,164 @@ async def test_stream_early_close_releases_response() -> None:
         )
         chunk = await anext(generator)
         assert chunk.choices[0].delta.role == "assistant"
+        assert stream.pulled == 1
         await generator.aclose()
 
+    assert stream.closed
+
+
+async def test_stream_yields_first_chunk_before_body_is_consumed() -> None:
+    first = chunk_payload("", role="assistant")
+    second = chunk_payload("hello", finish_reason="stop")
+    stream = RecordingByteStream([sse_event(first).encode(), sse_event(second).encode()])
+
+    with respx.mock(assert_all_called=False) as router:
+        router.post(CHAT_URL).mock(return_value=httpx.Response(200, stream=stream))
+        provider = make_provider()
+        generator = cast(
+            AsyncGenerator[ChatCompletionChunk, None],
+            provider.stream(upstream_model="gpt-upstream", request=make_request()),
+        )
+
+        chunk = await anext(generator)
+
+        assert chunk.choices[0].delta.role == "assistant"
+        assert stream.pulled == 1
+        assert not stream.closed
+
+        await generator.aclose()
+
+    assert stream.closed
+    assert stream.pulled == 1
+
+
+async def test_stream_does_not_pull_second_event_before_requested() -> None:
+    first = sse_event(chunk_payload("", role="assistant")).encode()
+    second = sse_event(chunk_payload("hello", finish_reason="stop")).encode()
+    stream = GuardedByteStream(first, second)
+
+    with respx.mock(assert_all_called=False) as router:
+        router.post(CHAT_URL).mock(return_value=httpx.Response(200, stream=stream))
+        provider = make_provider()
+        generator = cast(
+            AsyncGenerator[ChatCompletionChunk, None],
+            provider.stream(upstream_model="gpt-upstream", request=make_request()),
+        )
+
+        first_chunk = await anext(generator)
+        assert first_chunk.choices[0].delta.role == "assistant"
+        assert stream.pulled == 1
+
+        second_chunk = await anext(generator)
+        assert second_chunk.choices[0].delta.content == "hello"
+        assert stream.pulled == 2
+
+        await generator.aclose()
+
+    assert stream.closed
+    assert stream.pulled == 2
+
+
+async def test_stream_without_done_or_finish_raises_response_error() -> None:
+    stream = RecordingByteStream([sse_event(chunk_payload("hello")).encode()])
+
+    with respx.mock(assert_all_called=False) as router:
+        router.post(CHAT_URL).mock(return_value=httpx.Response(200, stream=stream))
+        provider = make_provider()
+
+        with pytest.raises(ProviderResponseError, match="ended before completion"):
+            await collect_chunks(provider, make_request())
+
+    assert stream.closed
+
+
+async def test_stream_with_finish_reason_but_no_done_completes() -> None:
+    stream = RecordingByteStream(
+        [
+            (
+                sse_event(chunk_payload("hello")) + sse_event(chunk_payload(finish_reason="stop"))
+            ).encode()
+        ]
+    )
+
+    with respx.mock(assert_all_called=False) as router:
+        router.post(CHAT_URL).mock(return_value=httpx.Response(200, stream=stream))
+        provider = make_provider()
+
+        chunks = await collect_chunks(provider, make_request())
+
+    assert [chunk.choices[0].delta.content for chunk in chunks] == ["hello", None]
+    assert chunks[-1].choices[0].finish_reason == "stop"
+    assert stream.closed
+
+
+async def test_stream_with_done_after_token_chunk_completes() -> None:
+    stream = RecordingByteStream(
+        [(sse_event(chunk_payload("hello")) + "data: [DONE]\n\n").encode()]
+    )
+
+    with respx.mock(assert_all_called=False) as router:
+        router.post(CHAT_URL).mock(return_value=httpx.Response(200, stream=stream))
+        provider = make_provider()
+
+        chunks = await collect_chunks(provider, make_request())
+
+    assert [chunk.choices[0].delta.content for chunk in chunks] == ["hello"]
+    assert stream.closed
+
+
+async def test_stream_early_close_skips_completion_check() -> None:
+    stream = RecordingByteStream([sse_event(chunk_payload("hello")).encode()])
+
+    with respx.mock(assert_all_called=False) as router:
+        router.post(CHAT_URL).mock(return_value=httpx.Response(200, stream=stream))
+        provider = make_provider()
+        generator = cast(
+            AsyncGenerator[ChatCompletionChunk, None],
+            provider.stream(upstream_model="gpt-upstream", request=make_request()),
+        )
+
+        chunk = await anext(generator)
+        assert chunk.choices[0].delta.content == "hello"
+        assert not stream.closed
+        await generator.aclose()
+
+    assert stream.closed
+
+
+async def test_stream_decodes_multibyte_utf8_split_across_chunks() -> None:
+    payload = chunk_payload("\u4f60\u597d\U0001f642", finish_reason="stop")
+    raw = (sse_event(payload, ensure_ascii=False) + "data: [DONE]\n\n").encode()
+    split_at = raw.index("\u4f60".encode()) + 1
+    stream = RecordingByteStream([raw[:split_at], raw[split_at:]])
+
+    with respx.mock(assert_all_called=False) as router:
+        router.post(CHAT_URL).mock(return_value=httpx.Response(200, stream=stream))
+        provider = make_provider()
+
+        chunks = await collect_chunks(provider, make_request())
+
+    assert chunks[0].choices[0].delta.content == "\u4f60\u597d\U0001f642"
+    assert stream.closed
+
+
+async def test_stream_handles_crlf_separator_split_across_chunks() -> None:
+    first = chunk_payload("", role="assistant")
+    second = chunk_payload("hi", finish_reason="stop")
+    raw = (
+        sse_event(first, line_end="\r\n")
+        + sse_event(second, line_end="\r\n")
+        + "data: [DONE]\r\n\r\n"
+    ).encode()
+    split_at = raw.index(b"\r\n\r\n") + 2
+    stream = RecordingByteStream([raw[:split_at], raw[split_at:]])
+
+    with respx.mock(assert_all_called=False) as router:
+        router.post(CHAT_URL).mock(return_value=httpx.Response(200, stream=stream))
+        provider = make_provider()
+
+        chunks = await collect_chunks(provider, make_request())
+
+    assert [chunk.choices[0].delta.content for chunk in chunks] == ["", "hi"]
+    assert chunks[-1].choices[0].finish_reason == "stop"
     assert stream.closed

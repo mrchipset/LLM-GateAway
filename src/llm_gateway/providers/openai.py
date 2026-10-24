@@ -107,6 +107,22 @@ class OpenAIProvider:
         except httpx.HTTPError as exc:
             raise ProviderResponseError() from exc
 
+    async def _send_stream(self, payload: dict[str, object]) -> httpx.Response:
+        try:
+            request = self._client.build_request(
+                "POST",
+                self._endpoint,
+                json=payload,
+                headers=self._headers,
+            )
+            return await self._client.send(request, stream=True)
+        except httpx.TimeoutException as exc:
+            raise ProviderTimeoutError() from exc
+        except httpx.TransportError as exc:
+            raise ProviderConnectionError() from exc
+        except httpx.HTTPError as exc:
+            raise ProviderResponseError() from exc
+
     async def _sleep_before_retry(self, attempt: int) -> None:
         await self._sleeper(self._retry_policy.delay_for_attempt(attempt, self._rng))
 
@@ -158,7 +174,7 @@ class OpenAIProvider:
         while True:
             attempt += 1
             try:
-                response = await self._post(payload)
+                response = await self._send_stream(payload)
                 if not 200 <= response.status_code < 300:
                     await response.aread()
                     error = self._upstream_error(response)
@@ -170,11 +186,19 @@ class OpenAIProvider:
                     raise
                 await self._sleep_before_retry(attempt)
 
+        seen_done = False
+        seen_finish = False
         try:
             async for data in self._iter_sse_data(response):
                 if data == "[DONE]":
-                    return
-                yield self._parse_chunk(data)
+                    seen_done = True
+                    break
+                chunk = self._parse_chunk(data)
+                if any(choice.finish_reason is not None for choice in chunk.choices):
+                    seen_finish = True
+                yield chunk
+            if not seen_done and not seen_finish:
+                raise ProviderResponseError("Upstream stream ended before completion")
         finally:
             await response.aclose()
 
