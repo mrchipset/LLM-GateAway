@@ -10,6 +10,7 @@ from llm_gateway.clock import Clock, SystemClock
 from llm_gateway.config import Settings, StorageBackend
 from llm_gateway.providers.factory import build_providers
 from llm_gateway.providers.registry import ProviderRegistry
+from llm_gateway.storage.db import Database
 from llm_gateway.storage.memory import InMemoryApiKeyRepository, InMemoryModelRepository
 from llm_gateway.storage.repositories import ApiKeyRepository, ModelRepository
 
@@ -36,6 +37,7 @@ class Container:
     models: ModelRepository
     providers: ProviderRegistry
     readiness_checks: tuple[ReadinessCheck, ...] = ()
+    database: Database | None = None
 
     def __post_init__(self) -> None:
         seen: set[str] = set()
@@ -64,6 +66,8 @@ class Container:
 
     async def aclose(self) -> None:
         await self.providers.aclose()
+        if self.database is not None:
+            await self.database.aclose()
 
 
 def get_container(request: Request) -> Container:
@@ -75,13 +79,24 @@ def get_container(request: Request) -> Container:
 
 def build_container(settings: Settings) -> Container:
     clock = SystemClock()
+    providers = build_providers(settings, clock=clock)
+
     if settings.storage_backend is StorageBackend.POSTGRES:
-        # Phase 3 replaces this guard with SQLAlchemy-backed repositories.
-        raise RuntimeError("postgres storage backend is not wired yet")
+        database = Database.from_settings(settings)
+        return Container(
+            settings=settings,
+            clock=clock,
+            api_keys=database.api_keys,
+            models=database.models,
+            providers=providers,
+            readiness_checks=(ReadinessCheck(name="database", check=database.ping),),
+            database=database,
+        )
+
     return Container(
         settings=settings,
         clock=clock,
         api_keys=InMemoryApiKeyRepository(),
         models=InMemoryModelRepository(),
-        providers=build_providers(settings, clock=clock),
+        providers=providers,
     )

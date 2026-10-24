@@ -1,0 +1,259 @@
+from __future__ import annotations
+
+import hashlib
+import os
+from collections.abc import AsyncIterator, Iterator
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from uuid import uuid4
+
+import pytest
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import create_async_engine
+
+from llm_gateway.config import Environment, Settings, StorageBackend
+from llm_gateway.providers.base import ProviderName
+from llm_gateway.storage.db import Database
+from llm_gateway.storage.repositories import (
+    ApiKeyRecord,
+    DuplicateApiKeyError,
+    DuplicateModelError,
+    ModelConfig,
+)
+
+_TEST_DATABASE_URL = os.environ.get("GATEWAY_TEST_DATABASE_URL")
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(
+        not _TEST_DATABASE_URL,
+        reason="GATEWAY_TEST_DATABASE_URL is not set",
+    ),
+]
+
+BASE = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+
+
+def _test_url() -> str:
+    if not _TEST_DATABASE_URL:
+        raise RuntimeError("GATEWAY_TEST_DATABASE_URL is not set")
+    return _TEST_DATABASE_URL
+
+
+def _hash(label: str) -> str:
+    return hashlib.sha256(label.encode()).hexdigest()
+
+
+def _model(index: int, *, enabled: bool = True) -> ModelConfig:
+    return ModelConfig(
+        id=f"model-{index}",
+        provider=ProviderName.FAKE,
+        upstream_model=f"upstream-{index}",
+        created_at=BASE + timedelta(seconds=index),
+        enabled=enabled,
+    )
+
+
+def _key(index: int, *, key_hash: str | None = None) -> ApiKeyRecord:
+    return ApiKeyRecord(
+        id=uuid4(),
+        name=f"key-{index}",
+        key_hash=key_hash if key_hash is not None else _hash(f"key-{index}"),
+        key_prefix=f"sk-gw-{index:06d}",
+        created_at=BASE + timedelta(seconds=index),
+    )
+
+
+def _build_settings() -> Settings:
+    return Settings(
+        **{
+            "_env_file": None,
+            "environment": Environment.TEST,
+            "master_key": "test-master-key-0123456789abcdef",
+            "storage_backend": StorageBackend.POSTGRES,
+            "database_url": _test_url(),
+        }
+    )
+
+
+async def _truncate() -> None:
+    engine = create_async_engine(_test_url())
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(text("TRUNCATE api_keys, models RESTART IDENTITY CASCADE"))
+    finally:
+        await engine.dispose()
+
+
+@pytest.fixture(scope="module")
+def migrated_schema() -> Iterator[None]:
+    # alembic/env.py reads GATEWAY_DATABASE_URL directly so migrations never
+    # depend on the application Settings (which would require a master key).
+    previous = os.environ.get("GATEWAY_DATABASE_URL")
+    os.environ["GATEWAY_DATABASE_URL"] = _test_url()
+    try:
+        config = Config(str(_REPO_ROOT / "alembic.ini"))
+        config.set_main_option("script_location", str(_REPO_ROOT / "alembic"))
+        command.upgrade(config, "head")
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop("GATEWAY_DATABASE_URL", None)
+        else:
+            os.environ["GATEWAY_DATABASE_URL"] = previous
+
+
+@pytest.fixture
+def postgres_settings(migrated_schema: None) -> Settings:
+    return _build_settings()
+
+
+@pytest.fixture
+async def database(postgres_settings: Settings) -> AsyncIterator[Database]:
+    await _truncate()
+    db = Database.from_settings(postgres_settings)
+    try:
+        yield db
+    finally:
+        await db.aclose()
+
+
+async def test_model_round_trip_preserves_fields(database: Database) -> None:
+    model = _model(1)
+
+    created = await database.models.create_model(model)
+    stored = await database.models.get_model(model.id)
+
+    assert created == model, "create_model must return the persisted domain record"
+    assert stored == model, "stored model must round-trip unchanged"
+    assert stored is not None
+    assert stored.provider is ProviderName.FAKE
+    assert stored.created_at.tzinfo is not None, "created_at must stay timezone-aware"
+
+
+async def test_model_list_is_newest_first_with_pagination(database: Database) -> None:
+    for index in range(5):
+        await database.models.create_model(_model(index))
+
+    items, total = await database.models.list_models(limit=2, offset=1)
+
+    assert total == 5
+    assert [item.id for item in items] == ["model-3", "model-2"]
+
+
+async def test_model_list_enabled_only_filters_before_pagination(database: Database) -> None:
+    await database.models.create_model(_model(0))
+    await database.models.create_model(_model(1))
+    await database.models.create_model(_model(2, enabled=False))
+
+    items, total = await database.models.list_models(limit=1, offset=0, enabled_only=True)
+
+    assert total == 2, "total must count only enabled models"
+    assert [item.id for item in items] == ["model-1"]
+
+
+async def test_model_duplicate_create_raises(database: Database) -> None:
+    model = _model(1)
+    await database.models.create_model(model)
+
+    with pytest.raises(DuplicateModelError, match="model 'model-1' already exists"):
+        await database.models.create_model(model)
+
+
+async def test_model_delete_returns_false_once_missing(database: Database) -> None:
+    model = _model(1)
+    await database.models.create_model(model)
+
+    assert await database.models.delete_model(model.id) is True
+    assert await database.models.get_model(model.id) is None
+    assert await database.models.delete_model(model.id) is False
+
+
+@pytest.mark.parametrize(
+    ("limit", "offset", "message"),
+    [(0, 0, "limit must be >= 1"), (-1, 0, "limit must be >= 1"), (1, -1, "offset must be >= 0")],
+)
+async def test_model_list_rejects_invalid_pagination(
+    database: Database, limit: int, offset: int, message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        await database.models.list_models(limit=limit, offset=offset)
+
+
+async def test_api_key_round_trip_preserves_fields(database: Database) -> None:
+    key = _key(1)
+
+    created = await database.api_keys.create_key(key)
+
+    assert created == key, "create_key must return the persisted domain record"
+    assert await database.api_keys.get_key(key.id) == key
+    assert await database.api_keys.get_key_by_hash(key.key_hash) == key
+    assert await database.api_keys.get_key(uuid4()) is None
+    assert await database.api_keys.get_key_by_hash(_hash("missing")) is None
+
+
+async def test_api_key_duplicate_hash_raises(database: Database) -> None:
+    shared_hash = _hash("shared")
+    await database.api_keys.create_key(_key(1, key_hash=shared_hash))
+
+    with pytest.raises(DuplicateApiKeyError):
+        await database.api_keys.create_key(_key(2, key_hash=shared_hash))
+
+
+async def test_api_key_revoke_transitions_once(database: Database) -> None:
+    key = _key(1)
+    await database.api_keys.create_key(key)
+
+    assert await database.api_keys.revoke_key(key.id, BASE) is True
+    revoked = await database.api_keys.get_key(key.id)
+    assert revoked is not None
+    assert revoked.revoked_at == BASE
+    assert await database.api_keys.revoke_key(key.id, BASE) is False
+
+
+async def test_api_key_touch_last_used_updates_record(database: Database) -> None:
+    key = _key(1)
+    await database.api_keys.create_key(key)
+
+    await database.api_keys.touch_last_used(key.id, BASE)
+
+    updated = await database.api_keys.get_key(key.id)
+    assert updated is not None
+    assert updated.last_used_at == BASE
+
+
+async def test_api_key_touch_last_used_raises_for_missing_key(database: Database) -> None:
+    with pytest.raises(KeyError, match="not found"):
+        await database.api_keys.touch_last_used(uuid4(), BASE)
+
+
+async def test_api_key_list_is_newest_first_with_pagination(database: Database) -> None:
+    for index in range(5):
+        await database.api_keys.create_key(_key(index))
+
+    items, total = await database.api_keys.list_keys(limit=2, offset=1)
+
+    assert total == 5
+    assert [item.name for item in items] == ["key-3", "key-2"]
+
+
+async def test_api_key_list_rejects_invalid_pagination(database: Database) -> None:
+    with pytest.raises(ValueError, match="limit must be >= 1"):
+        await database.api_keys.list_keys(limit=0, offset=0)
+
+
+async def test_ping_returns_true_and_aclose_allows_new_database(
+    postgres_settings: Settings,
+) -> None:
+    first = Database.from_settings(postgres_settings)
+    assert await first.ping() is True
+    await first.aclose()
+
+    second = Database.from_settings(postgres_settings)
+    try:
+        assert await second.ping() is True
+    finally:
+        await second.aclose()

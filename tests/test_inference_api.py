@@ -507,7 +507,7 @@ async def test_stream_sse_aclose_releases_upstream_exactly_once() -> None:
     assert closed == 1
 
 
-def test_build_container_rejects_postgres_backend() -> None:
+async def test_build_container_uses_database_backend_for_postgres() -> None:
     postgres_settings = Settings(
         **{
             "_env_file": None,
@@ -518,5 +518,20 @@ def test_build_container_rejects_postgres_backend() -> None:
         }
     )
 
-    with pytest.raises(RuntimeError, match="postgres storage backend is not wired yet"):
-        build_container(postgres_settings)
+    container = build_container(postgres_settings)
+    try:
+        assert container.database is not None
+        assert container.api_keys is container.database.api_keys
+        assert container.models is container.database.models
+        assert [check.name for check in container.readiness_checks] == ["database"]
+    finally:
+        await container.aclose()
+
+
+def test_build_container_uses_memory_backend_without_readiness_checks(
+    settings: Settings,
+) -> None:
+    container = build_container(settings)
+
+    assert container.database is None
+    assert container.readiness_checks == ()
