@@ -50,15 +50,6 @@ def _error(
 
 def map_provider_error(exc: ProviderError) -> ApiError:
     """Translate one provider failure into a stable client-facing error."""
-    status_code = getattr(exc, "status_code", None)
-    logger.warning(
-        "provider_error",
-        extra={
-            "provider_error": type(exc).__name__,
-            "status_code": status_code,
-        },
-    )
-
     if isinstance(exc, ProviderTimeoutError):
         return _error(
             status_code=504,
@@ -115,7 +106,7 @@ def map_provider_error(exc: ProviderError) -> ApiError:
         return _error(
             status_code=400,
             code=ApiErrorCode.UPSTREAM_REJECTED,
-            message=exc.message,
+            message="Upstream provider rejected the request",
             error_type="invalid_request_error",
         )
 
@@ -124,6 +115,20 @@ def map_provider_error(exc: ProviderError) -> ApiError:
         code=ApiErrorCode.UPSTREAM_UNAVAILABLE,
         message="Upstream provider is unavailable",
         error_type="server_error",
+    )
+
+
+def _log_provider_error(exc: ProviderError, *, provider: str, model_id: str) -> None:
+    logger.warning(
+        "provider_error",
+        extra={
+            "provider": provider,
+            "model_id": model_id,
+            "provider_error": type(exc).__name__,
+            "status_code": getattr(exc, "status_code", None),
+            # `message` is reserved by logging.LogRecord.
+            "provider_message": exc.message,
+        },
     )
 
 
@@ -143,9 +148,12 @@ class ChatStream:
         self._closed = False
 
     async def chunks(self) -> AsyncGenerator[ChatCompletionChunk, None]:
-        yield self.first_chunk
-        async for chunk in self._upstream:
-            yield chunk.model_copy(update={"model": self.model_id})
+        try:
+            yield self.first_chunk
+            async for chunk in self._upstream:
+                yield chunk.model_copy(update={"model": self.model_id})
+        finally:
+            await self.aclose()
 
     async def aclose(self) -> None:
         if self._closed:
@@ -153,10 +161,13 @@ class ChatStream:
         self._closed = True
         try:
             await self._upstream.aclose()
-        except RuntimeError:
+        except RuntimeError as exc:
             # The generator may already be closing because the client
             # disconnected while it was running.
-            return
+            logger.warning(
+                "upstream_stream_close_failed",
+                extra={"model_id": self.model_id, "error": type(exc).__name__},
+            )
 
 
 class ChatService:
@@ -200,6 +211,11 @@ class ChatService:
                 request=request,
             )
         except ProviderError as exc:
+            _log_provider_error(
+                exc,
+                provider=resolved.config.provider.value,
+                model_id=resolved.config.id,
+            )
             raise map_provider_error(exc) from exc
         return response.model_copy(update={"model": resolved.config.id})
 
@@ -221,7 +237,15 @@ class ChatService:
             ) from None
         except ProviderError as exc:
             await upstream.aclose()
+            _log_provider_error(
+                exc,
+                provider=resolved.config.provider.value,
+                model_id=resolved.config.id,
+            )
             raise map_provider_error(exc) from exc
+        except BaseException:
+            await upstream.aclose()
+            raise
 
         return ChatStream(
             first_chunk=first_chunk.model_copy(update={"model": resolved.config.id}),

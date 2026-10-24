@@ -7,8 +7,9 @@ from typing import Any, Literal
 import httpx
 import pytest
 
-from llm_gateway.config import Settings
-from llm_gateway.container import Container
+from llm_gateway.api.inference import _stream_sse
+from llm_gateway.config import Environment, Settings, StorageBackend
+from llm_gateway.container import Container, build_container
 from llm_gateway.providers.base import (
     ChatProvider,
     ProviderError,
@@ -25,6 +26,7 @@ from llm_gateway.schemas.chat import (
     ChatCompletionResponse,
     ChatDelta,
 )
+from llm_gateway.services.chat import ChatStream
 from support import FrozenClock, seed_api_key, seed_model
 
 FAKE_MODEL = "fake-model"
@@ -427,6 +429,8 @@ async def test_mid_stream_error_returns_sse_error_frame_and_closes_upstream(
 
     error_frame = json.loads(frames[1])
     assert error_frame["error"]["code"] == "upstream_rejected"
+    assert error_frame["error"]["message"] == "Upstream provider rejected the request"
+    assert "upstream rejected" not in response.text
     assert provider.closed == 1
 
 
@@ -473,3 +477,47 @@ async def test_models_requires_api_key(
 
     assert response.status_code == 401
     assert _error(response)["code"] == "missing_api_key"
+
+
+async def test_stream_sse_aclose_releases_upstream_exactly_once() -> None:
+    closed = 0
+
+    async def upstream() -> AsyncGenerator[ChatCompletionChunk, None]:
+        nonlocal closed
+        try:
+            yield _upstream_chunk("one")
+            yield _upstream_chunk("two")
+        finally:
+            closed += 1
+
+    iterator = upstream()
+    first_chunk = await anext(iterator)
+    stream = ChatStream(
+        first_chunk=first_chunk,
+        model_id=FAKE_MODEL,
+        upstream=iterator,
+    )
+    generator = _stream_sse(stream)
+
+    frame = await anext(generator)
+    assert frame.startswith(b"data: ")
+    assert closed == 0
+
+    await generator.aclose()
+
+    assert closed == 1
+
+
+def test_build_container_rejects_postgres_backend() -> None:
+    postgres_settings = Settings(
+        **{
+            "_env_file": None,
+            "environment": Environment.TEST,
+            "master_key": "test-master-key-0123456789abcdef",
+            "storage_backend": StorageBackend.POSTGRES,
+            "database_url": "postgresql+asyncpg://user:pass@localhost/db",
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="postgres storage backend is not wired yet"):
+        build_container(postgres_settings)

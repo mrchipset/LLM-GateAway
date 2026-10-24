@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from fastapi import Request
 
 from llm_gateway.clock import Clock, SystemClock
-from llm_gateway.config import Settings
+from llm_gateway.config import Settings, StorageBackend
 from llm_gateway.providers.factory import build_providers
 from llm_gateway.providers.registry import ProviderRegistry
 from llm_gateway.storage.memory import InMemoryApiKeyRepository, InMemoryModelRepository
@@ -75,6 +75,9 @@ def get_container(request: Request) -> Container:
 
 def build_container(settings: Settings) -> Container:
     clock = SystemClock()
+    if settings.storage_backend is StorageBackend.POSTGRES:
+        # Phase 3 replaces this guard with SQLAlchemy-backed repositories.
+        raise RuntimeError("postgres storage backend is not wired yet")
     return Container(
         settings=settings,
         clock=clock,

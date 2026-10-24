@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Literal, cast
 
 import pytest
 
@@ -70,7 +71,7 @@ class RecordingProvider:
         self,
         *,
         chunks: list[ChatCompletionChunk] | None = None,
-        stream_error: ProviderError | None = None,
+        stream_error: Exception | None = None,
     ) -> None:
         self.upstream_models: list[str] = []
         self.yielded = 0
@@ -194,7 +195,7 @@ async def collect(stream: ChatStream) -> list[ChatCompletionChunk]:
             400,
             ApiErrorCode.UPSTREAM_REJECTED,
             "invalid_request_error",
-            "teapot",
+            "Upstream provider rejected the request",
         ),
         (
             ProviderError("plain failure"),
@@ -231,6 +232,15 @@ def test_upstream_auth_failure_does_not_leak_upstream_details() -> None:
     assert error.message == "Upstream provider rejected the gateway credentials"
     assert secret not in error.message
     assert "invalid key" not in error.message
+
+
+def test_map_provider_error_does_not_log(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.WARNING, logger="llm_gateway.services.chat")
+
+    map_provider_error(ProviderTimeoutError())
+
+    records = [record for record in caplog.records if record.name == "llm_gateway.services.chat"]
+    assert records == []
 
 
 async def test_resolve_model_returns_config_and_provider() -> None:
@@ -360,3 +370,57 @@ async def test_iterating_chunks_after_aclose_does_not_hang() -> None:
 
     assert len(collected) == 1
     assert collected[0].model == PUBLIC_MODEL
+
+
+async def test_open_stream_closes_upstream_and_reraises_unexpected_error() -> None:
+    provider = RecordingProvider(stream_error=RuntimeError("provider blew up"))
+    service = await make_service(provider)
+
+    with pytest.raises(RuntimeError, match="provider blew up"):
+        await service.open_stream(make_request())
+
+    assert provider.closed == 1
+
+
+async def test_closing_chunks_generator_early_closes_upstream() -> None:
+    provider = RecordingProvider(chunks=[make_chunk("one"), make_chunk("two")])
+    service = await make_service(provider)
+    stream = await service.open_stream(make_request())
+    chunks = stream.chunks()
+
+    first = await anext(chunks)
+    assert first.model == PUBLIC_MODEL
+    assert provider.closed == 0
+
+    await chunks.aclose()
+
+    assert provider.closed == 1
+
+
+class RuntimeErrorUpstream:
+    async def __aiter__(self) -> AsyncGenerator[ChatCompletionChunk, None]:
+        yield make_chunk("unused")
+
+    async def aclose(self) -> None:
+        raise RuntimeError("aclose(): asynchronous generator is already running")
+
+
+async def test_aclose_logs_upstream_close_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.WARNING, logger="llm_gateway.services.chat")
+    stream = ChatStream(
+        first_chunk=make_chunk("first"),
+        model_id=PUBLIC_MODEL,
+        upstream=cast(AsyncGenerator[ChatCompletionChunk, None], RuntimeErrorUpstream()),
+    )
+
+    await stream.aclose()
+
+    records = [
+        record for record in caplog.records if record.getMessage() == "upstream_stream_close_failed"
+    ]
+    assert len(records) == 1
+    attributes = records[0].__dict__
+    assert attributes["model_id"] == PUBLIC_MODEL
+    assert attributes["error"] == "RuntimeError"

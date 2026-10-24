@@ -33,10 +33,15 @@ class InMemoryModelRepository:
         self._models: dict[str, ModelConfig] = {}
         self._lock = asyncio.Lock()
 
-    async def list_models(self, *, limit: int, offset: int) -> tuple[Sequence[ModelConfig], int]:
+    async def list_models(
+        self, *, limit: int, offset: int, enabled_only: bool = False
+    ) -> tuple[Sequence[ModelConfig], int]:
         _validate_page(limit=limit, offset=offset)
+        models: list[ModelConfig] = list(self._models.values())
+        if enabled_only:
+            models = [model for model in models if model.enabled]
         ordered = sorted(
-            self._models.values(),
+            models,
             key=lambda model: (model.created_at, model.id),
             reverse=True,
         )

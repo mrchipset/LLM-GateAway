@@ -62,7 +62,12 @@ async def require_api_key(
     try:
         await container.api_keys.touch_last_used(record.id, now)
     except Exception:
-        logger.warning("api_key_touch_failed", extra={"key_id": str(record.id)})
+        # Best effort: a storage failure must not reject an authenticated request.
+        logger.warning(
+            "api_key_touch_failed",
+            extra={"key_id": str(record.id)},
+            exc_info=True,
+        )
 
     return AuthenticatedKey(record=record)
 

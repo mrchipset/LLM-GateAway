@@ -4,6 +4,7 @@ import json
 from collections.abc import AsyncGenerator
 from typing import Annotated
 
+import anyio
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
@@ -47,12 +48,21 @@ async def _stream_sse(stream: ChatStream) -> AsyncGenerator[bytes, None]:
         request_id = get_request_id() or ""
         logger.warning(
             "stream_provider_error",
-            extra={"code": error.code.value, "request_id": request_id},
+            extra={
+                "code": error.code.value,
+                "request_id": request_id,
+                "provider_error": type(exc).__name__,
+                "status_code": getattr(exc, "status_code", None),
+                "provider_message": exc.message,
+            },
         )
         yield _sse_frame(json.dumps(error_payload(request_id, error)))
         yield _sse_frame("[DONE]")
     finally:
-        await stream.aclose()
+        # Client disconnects cancel this generator; shield the release so the
+        # upstream connection is always closed.
+        with anyio.CancelScope(shield=True):
+            await stream.aclose()
 
 
 @router.post("/v1/chat/completions", response_model=ChatCompletionResponse)
@@ -77,7 +87,9 @@ async def list_models(
     _: Annotated[AuthenticatedKey, Depends(require_api_key)],
     container: Annotated[Container, Depends(get_container)],
 ) -> ModelListResponse:
-    models, _total = await container.models.list_models(limit=MODEL_LIST_LIMIT, offset=0)
+    models, _total = await container.models.list_models(
+        limit=MODEL_LIST_LIMIT, offset=0, enabled_only=True
+    )
     data = [
         ModelSummary(
             id=model.id,
@@ -85,6 +97,5 @@ async def list_models(
             owned_by=model.provider.value,
         )
         for model in models
-        if model.enabled
     ]
     return ModelListResponse(data=data)
