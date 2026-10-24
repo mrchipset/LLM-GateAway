@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from llm_gateway import __version__
+from llm_gateway.api.admin import router as admin_router
 from llm_gateway.api.health import router as health_router
 from llm_gateway.api.inference import router as inference_router
 from llm_gateway.config import Settings
@@ -48,4 +49,5 @@ def create_app(
     register_error_handlers(app)
     app.include_router(health_router)
     app.include_router(inference_router)
+    app.include_router(admin_router)
     return app
