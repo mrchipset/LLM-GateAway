@@ -1,29 +1,17 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager
 
 import httpx
+import pytest
 
 from llm_gateway import __version__
-from llm_gateway.app import create_app
 from llm_gateway.clock import SystemClock
 from llm_gateway.config import Settings
-from llm_gateway.container import Container
+from llm_gateway.container import Container, ReadinessCheck
 
-
-@asynccontextmanager
-async def _client_for(
-    settings: Settings,
-    container: Container,
-) -> AsyncIterator[httpx.AsyncClient]:
-    app = create_app(settings=settings, container=container)
-    transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
-    async with httpx.AsyncClient(
-        transport=transport,
-        base_url="http://testserver",
-    ) as client:
-        yield client
+ClientFactory = Callable[..., AbstractAsyncContextManager[httpx.AsyncClient]]
 
 
 async def test_healthz_returns_status_and_version(client: httpx.AsyncClient) -> None:
@@ -42,17 +30,20 @@ async def test_readyz_is_ok_without_checks_in_memory_mode(
     assert response.json() == {"status": "ok", "checks": {}}
 
 
-async def test_readyz_reports_named_checks(settings: Settings) -> None:
-    async def storage_check() -> tuple[str, bool]:
-        return ("storage", True)
+async def test_readyz_reports_named_checks(
+    settings: Settings,
+    make_client: ClientFactory,
+) -> None:
+    async def storage_check() -> bool:
+        return True
 
     container = Container(
         settings=settings,
         clock=SystemClock(),
-        readiness_checks=(storage_check,),
+        readiness_checks=(ReadinessCheck(name="storage", check=storage_check),),
     )
 
-    async with _client_for(settings, container) as client:
+    async with make_client(settings, container) as client:
         response = await client.get("/readyz")
 
     assert response.status_code == 200
@@ -61,23 +52,42 @@ async def test_readyz_reports_named_checks(settings: Settings) -> None:
 
 async def test_readyz_is_unavailable_when_check_raises(
     settings: Settings,
+    make_client: ClientFactory,
 ) -> None:
-    async def failing_check() -> tuple[str, bool]:
+    async def failing_check() -> bool:
         raise RuntimeError("database unavailable at internal-host")
 
     container = Container(
         settings=settings,
         clock=SystemClock(),
-        readiness_checks=(failing_check,),
+        readiness_checks=(ReadinessCheck(name="database", check=failing_check),),
     )
 
-    async with _client_for(settings, container) as client:
+    async with make_client(settings, container) as client:
         response = await client.get("/readyz")
 
     assert response.status_code == 503
     assert response.json() == {
         "status": "unavailable",
-        "checks": {"failing_check": "error"},
+        "checks": {"database": "error"},
     }
     assert "database unavailable" not in response.text
     assert "internal-host" not in response.text
+
+
+def test_duplicate_readiness_check_names_are_rejected(settings: Settings) -> None:
+    async def first_check() -> bool:
+        return True
+
+    async def second_check() -> bool:
+        return True
+
+    with pytest.raises(ValueError, match="duplicate readiness check name"):
+        Container(
+            settings=settings,
+            clock=SystemClock(),
+            readiness_checks=(
+                ReadinessCheck(name="database", check=first_check),
+                ReadinessCheck(name="database", check=second_check),
+            ),
+        )

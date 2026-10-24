@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping
 from enum import StrEnum
 
 from fastapi import FastAPI, Request
@@ -21,6 +22,8 @@ class ApiErrorCode(StrEnum):
     MASTER_KEY_REQUIRED = "master_key_required"
     NOT_FOUND = "not_found"
     METHOD_NOT_ALLOWED = "method_not_allowed"
+    PERMISSION_DENIED = "permission_denied"
+    RATE_LIMITED = "rate_limited"
     INTERNAL_ERROR = "internal_error"
 
 
@@ -105,11 +108,17 @@ def _resolve_request_id(request: Request) -> str:
     return uuid.uuid4().hex
 
 
-def _response(request_id: str, error: ApiError) -> JSONResponse:
+def _response(
+    request_id: str,
+    error: ApiError,
+    headers: Mapping[str, str] | None = None,
+) -> JSONResponse:
+    response_headers = dict(headers or {})
+    response_headers[REQUEST_ID_HEADER] = request_id
     return JSONResponse(
         status_code=error.status_code,
         content=error_payload(request_id, error),
-        headers={REQUEST_ID_HEADER: request_id},
+        headers=response_headers,
     )
 
 
@@ -146,21 +155,34 @@ async def _http_error_handler(request: Request, exc: Exception) -> JSONResponse:
         raise exc
     request_id = _resolve_request_id(request)
 
-    if exc.status_code == 404:
+    if exc.status_code == 401:
+        code = ApiErrorCode.INVALID_API_KEY
+        error_type = "authentication_error"
+    elif exc.status_code == 403:
+        code = ApiErrorCode.PERMISSION_DENIED
+        error_type = "permission_error"
+    elif exc.status_code == 429:
+        code = ApiErrorCode.RATE_LIMITED
+        error_type = "rate_limit_error"
+    elif exc.status_code == 404:
         code = ApiErrorCode.NOT_FOUND
+        error_type = "invalid_request_error"
     elif exc.status_code == 405:
         code = ApiErrorCode.METHOD_NOT_ALLOWED
+        error_type = "invalid_request_error"
     elif exc.status_code >= 500:
         code = ApiErrorCode.INTERNAL_ERROR
+        error_type = "server_error"
     else:
         code = ApiErrorCode.INVALID_REQUEST_BODY
+        error_type = "invalid_request_error"
 
     if exc.status_code >= 500:
         message = "Internal server error"
-        error_type = "server_error"
+    elif isinstance(exc.detail, str):
+        message = exc.detail
     else:
-        message = str(exc.detail)
-        error_type = "invalid_request_error"
+        message = "Request failed"
 
     error = ApiError(
         status_code=exc.status_code,
@@ -168,7 +190,7 @@ async def _http_error_handler(request: Request, exc: Exception) -> JSONResponse:
         message=message,
         error_type=error_type,
     )
-    return _response(request_id, error)
+    return _response(request_id, error, headers=exc.headers)
 
 
 async def _unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:

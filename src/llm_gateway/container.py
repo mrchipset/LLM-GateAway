@@ -9,7 +9,11 @@ from fastapi import Request
 from llm_gateway.clock import Clock, SystemClock
 from llm_gateway.config import Settings
 
-ReadinessCheck = Callable[[], Awaitable[tuple[str, bool]]]
+
+@dataclass(frozen=True, slots=True)
+class ReadinessCheck:
+    name: str
+    check: Callable[[], Awaitable[bool]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,19 +28,25 @@ class Container:
     clock: Clock
     readiness_checks: tuple[ReadinessCheck, ...] = ()
 
+    def __post_init__(self) -> None:
+        seen: set[str] = set()
+        for item in self.readiness_checks:
+            if item.name in seen:
+                raise ValueError(f"duplicate readiness check name: {item.name}")
+            seen.add(item.name)
+
     async def check_readiness(self) -> ReadinessReport:
         results = await asyncio.gather(
-            *(check() for check in self.readiness_checks),
+            *(item.check() for item in self.readiness_checks),
             return_exceptions=True,
         )
 
         checks: dict[str, str] = {}
-        for check, result in zip(self.readiness_checks, results, strict=True):
+        for item, result in zip(self.readiness_checks, results, strict=True):
             if isinstance(result, BaseException):
-                checks[_check_name(check)] = "error"
+                checks[item.name] = "error"
                 continue
-            name, ok = result
-            checks[name] = "ok" if ok else "error"
+            checks[item.name] = "ok" if result else "error"
 
         return ReadinessReport(
             ready=all(status == "ok" for status in checks.values()),
@@ -45,11 +55,6 @@ class Container:
 
     async def aclose(self) -> None:
         return None
-
-
-def _check_name(check: ReadinessCheck) -> str:
-    name = getattr(check, "__name__", None)
-    return name if isinstance(name, str) else "readiness_check"
 
 
 def get_container(request: Request) -> Container:

@@ -18,6 +18,9 @@ def create_app(
     settings: Settings | None = None,
     container: Container | None = None,
 ) -> FastAPI:
+    if settings is not None and container is not None and container.settings != settings:
+        raise ValueError("container.settings must match the provided settings")
+
     if container is None:
         resolved_settings = settings if settings is not None else Settings(**{})
         resolved_container = build_container(resolved_settings)
@@ -29,8 +32,10 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        yield
-        await resolved_container.aclose()
+        try:
+            yield
+        finally:
+            await resolved_container.aclose()
 
     app = FastAPI(
         title="LLM-GateAway",

@@ -67,10 +67,18 @@ class RequestContextMiddleware:
         _bind_request_id(scope, request_id)
 
         status_code = 500
-        raised = False
+        client_disconnected = False
+        response_started = False
+
+        async def receive_with_disconnect() -> Message:
+            nonlocal client_disconnected
+            message = await receive()
+            if message["type"] == "http.disconnect":
+                client_disconnected = True
+            return message
 
         async def send_with_request_id(message: Message) -> None:
-            nonlocal status_code
+            nonlocal status_code, client_disconnected, response_started
             if message["type"] == "http.response.start":
                 status_code = int(message["status"])
                 headers = [
@@ -80,15 +88,21 @@ class RequestContextMiddleware:
                 ]
                 headers.append((REQUEST_ID_HEADER.encode(), request_id.encode()))
                 message["headers"] = headers
-            await send(message)
+                await send(message)
+                response_started = True
+                return
+
+            try:
+                await send(message)
+            except BaseException:
+                if response_started:
+                    client_disconnected = True
+                raise
 
         start = perf_counter()
         with request_id_scope(request_id):
             try:
-                await self.app(scope, receive, send_with_request_id)
-            except BaseException:
-                raised = True
-                raise
+                await self.app(scope, receive_with_disconnect, send_with_request_id)
             finally:
                 _access_logger.info(
                     "request_completed",
@@ -96,7 +110,8 @@ class RequestContextMiddleware:
                         "request_id": request_id,
                         "method": scope.get("method", ""),
                         "path": scope.get("path", ""),
-                        "status_code": 500 if raised else status_code,
+                        "status_code": status_code,
                         "duration_ms": round((perf_counter() - start) * 1000, 2),
+                        "client_disconnected": client_disconnected,
                     },
                 )

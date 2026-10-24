@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Callable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 
 import httpx
 import pytest
@@ -31,11 +31,19 @@ async def make_client(
 ) -> AsyncIterator[httpx.AsyncClient]:
     app = create_app(settings=settings, container=container)
     transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
-    async with httpx.AsyncClient(
-        transport=transport,
-        base_url="http://testserver",
-    ) as client:
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+        ) as client,
+    ):
         yield client
+
+
+@pytest.fixture(name="make_client")
+def _make_client_fixture() -> Callable[..., AbstractAsyncContextManager[httpx.AsyncClient]]:
+    return make_client
 
 
 @pytest.fixture

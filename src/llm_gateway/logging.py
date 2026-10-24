@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from decimal import Decimal
+from enum import Enum
+from uuid import UUID
 
 from llm_gateway.request_context import get_request_id
 
@@ -11,11 +14,18 @@ _SENSITIVE_KEYS = frozenset(
         "authorization",
         "api_key",
         "apikey",
+        "x-api-key",
+        "openai_api_key",
         "master_key",
         "password",
         "secret",
         "token",
         "key_hash",
+        "prompt",
+        "prompts",
+        "messages",
+        "body",
+        "content",
     }
 )
 
@@ -48,6 +58,18 @@ _RESERVED_RECORD_ATTRIBUTES = frozenset(
 )
 
 _RESERVED_PAYLOAD_KEYS = frozenset({"ts", "level", "logger", "message", "request_id", "exception"})
+
+
+def _json_default(value: object) -> str:
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, UUID):
+        return str(value)
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, Enum):
+        return str(value.value)
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
 def _redact(value: object) -> object:
@@ -88,7 +110,7 @@ class JsonFormatter(logging.Formatter):
         if record.exc_info is not None:
             payload["exception"] = self.formatException(record.exc_info)
 
-        return json.dumps(payload, ensure_ascii=False, default=str)
+        return json.dumps(payload, ensure_ascii=False, default=_json_default)
 
 
 def configure_logging(level: str) -> None:
@@ -103,6 +125,12 @@ def configure_logging(level: str) -> None:
     handler.setFormatter(JsonFormatter())
     root.addHandler(handler)
     root.setLevel(level.upper())
+
+    for logger_name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+        uvicorn_logger = logging.getLogger(logger_name)
+        uvicorn_logger.handlers.clear()
+        uvicorn_logger.propagate = True
+    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 
 
 def get_logger(name: str) -> logging.Logger:

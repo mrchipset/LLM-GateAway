@@ -28,7 +28,7 @@ class Settings(BaseSettings):
         frozen=True,
     )
 
-    environment: Environment = Environment.DEVELOPMENT
+    environment: Environment
     log_level: str = "INFO"
     master_key: SecretStr = Field(min_length=16)
     storage_backend: StorageBackend = StorageBackend.MEMORY
@@ -51,10 +51,17 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _validate_environment(self) -> Self:
+        secret = self.master_key.get_secret_value()
+        normalized_secret = secret.lower()
+        if "change-me" in normalized_secret or "changeme" in normalized_secret:
+            raise ValueError("master_key must not contain a placeholder value")
+
         if self.storage_backend is StorageBackend.POSTGRES and not self.database_url:
             raise ValueError("database_url is required when storage_backend is postgres")
 
         if self.environment is Environment.PRODUCTION:
+            if len(secret) < 32:
+                raise ValueError("production master_key must be at least 32 characters")
             if self.storage_backend is not StorageBackend.POSTGRES:
                 raise ValueError("production requires storage_backend=postgres")
             if self.fake_provider_enabled:

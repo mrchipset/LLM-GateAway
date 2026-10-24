@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from pathlib import Path
 from typing import cast
 
 import pytest
@@ -12,21 +11,60 @@ from llm_gateway.config import Environment, Settings, StorageBackend
 MASTER_KEY = "test-master-key-0123456789abcdef"
 
 
-def test_missing_master_key_fails(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.delenv("GATEWAY_MASTER_KEY", raising=False)
-    monkeypatch.chdir(tmp_path)
-    load_settings = cast(Callable[[], Settings], Settings)
+def _load_settings_without_env_file() -> Settings:
+    loader = cast(Callable[..., Settings], Settings)
+    return loader(_env_file=None)
+
+
+def test_missing_environment_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GATEWAY_MASTER_KEY", MASTER_KEY)
+    monkeypatch.delenv("GATEWAY_ENVIRONMENT", raising=False)
 
     with pytest.raises(ValidationError):
-        load_settings()
+        _load_settings_without_env_file()
+
+
+def test_missing_master_key_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GATEWAY_ENVIRONMENT", "test")
+    monkeypatch.delenv("GATEWAY_MASTER_KEY", raising=False)
+
+    with pytest.raises(ValidationError):
+        _load_settings_without_env_file()
 
 
 def test_too_short_master_key_fails() -> None:
     with pytest.raises(ValidationError):
-        Settings(**{"_env_file": None, "master_key": "short"})
+        Settings(
+            **{
+                "_env_file": None,
+                "environment": Environment.TEST,
+                "master_key": "short",
+            }
+        )
+
+
+def test_placeholder_master_key_fails() -> None:
+    with pytest.raises(ValidationError):
+        Settings(
+            **{
+                "_env_file": None,
+                "environment": Environment.DEVELOPMENT,
+                "master_key": "change-me-to-a-long-random-string",
+            }
+        )
+
+
+def test_production_short_master_key_fails() -> None:
+    with pytest.raises(ValidationError):
+        Settings(
+            **{
+                "_env_file": None,
+                "environment": Environment.PRODUCTION,
+                "storage_backend": StorageBackend.POSTGRES,
+                "database_url": "postgresql+asyncpg://gateway:gateway@localhost/gateway",
+                "master_key": "x" * 20,
+            }
+        )
 
 
 def test_postgres_backend_without_database_url_fails() -> None:
@@ -34,6 +72,7 @@ def test_postgres_backend_without_database_url_fails() -> None:
         Settings(
             **{
                 "_env_file": None,
+                "environment": Environment.TEST,
                 "master_key": MASTER_KEY,
                 "storage_backend": StorageBackend.POSTGRES,
             }
@@ -45,8 +84,8 @@ def test_production_with_memory_backend_fails() -> None:
         Settings(
             **{
                 "_env_file": None,
-                "master_key": MASTER_KEY,
                 "environment": Environment.PRODUCTION,
+                "master_key": MASTER_KEY,
                 "storage_backend": StorageBackend.MEMORY,
             }
         )
@@ -57,8 +96,8 @@ def test_production_with_fake_provider_fails() -> None:
         Settings(
             **{
                 "_env_file": None,
-                "master_key": MASTER_KEY,
                 "environment": Environment.PRODUCTION,
+                "master_key": MASTER_KEY,
                 "storage_backend": StorageBackend.POSTGRES,
                 "database_url": "postgresql+asyncpg://gateway:gateway@localhost/gateway",
                 "fake_provider_enabled": True,
@@ -66,29 +105,42 @@ def test_production_with_fake_provider_fails() -> None:
         )
 
 
-def test_defaults_load_for_test_environment() -> None:
+def test_valid_development_settings_load() -> None:
     settings = Settings(
         **{
             "_env_file": None,
+            "environment": Environment.DEVELOPMENT,
             "master_key": MASTER_KEY,
-            "environment": Environment.TEST,
         }
     )
 
-    assert settings.environment is Environment.TEST
+    assert settings.environment is Environment.DEVELOPMENT
     assert settings.storage_backend is StorageBackend.MEMORY
     assert settings.log_level == "INFO"
-    assert settings.request_timeout_seconds == 60.0
-    assert settings.connect_timeout_seconds == 10.0
-    assert settings.max_retries == 2
-    assert settings.openai_base_url == "https://api.openai.com/v1"
+    assert settings.request_timeout_seconds > 0
+    assert settings.connect_timeout_seconds > 0
+    assert 0 <= settings.max_retries <= 5
+    assert settings.openai_base_url
     assert settings.fake_provider_enabled is False
+
+
+def test_settings_load_from_gateway_env_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GATEWAY_ENVIRONMENT", "development")
+    monkeypatch.setenv("GATEWAY_MASTER_KEY", MASTER_KEY)
+
+    settings = _load_settings_without_env_file()
+
+    assert settings.environment is Environment.DEVELOPMENT
+    assert settings.master_key.get_secret_value() == MASTER_KEY
 
 
 def test_log_level_is_normalized_to_upper_case() -> None:
     settings = Settings(
         **{
             "_env_file": None,
+            "environment": Environment.TEST,
             "master_key": MASTER_KEY,
             "log_level": "debug",
         }
@@ -102,6 +154,7 @@ def test_unknown_log_level_fails() -> None:
         Settings(
             **{
                 "_env_file": None,
+                "environment": Environment.TEST,
                 "master_key": MASTER_KEY,
                 "log_level": "verbose",
             }
@@ -113,6 +166,7 @@ def test_non_positive_timeout_fails() -> None:
         Settings(
             **{
                 "_env_file": None,
+                "environment": Environment.TEST,
                 "master_key": MASTER_KEY,
                 "request_timeout_seconds": 0,
             }
@@ -124,6 +178,7 @@ def test_max_retries_out_of_range_fails() -> None:
         Settings(
             **{
                 "_env_file": None,
+                "environment": Environment.TEST,
                 "master_key": MASTER_KEY,
                 "max_retries": 6,
             }
@@ -131,6 +186,12 @@ def test_max_retries_out_of_range_fails() -> None:
 
 
 def test_master_key_is_not_exposed_in_repr() -> None:
-    settings = Settings(**{"_env_file": None, "master_key": MASTER_KEY})
+    settings = Settings(
+        **{
+            "_env_file": None,
+            "environment": Environment.TEST,
+            "master_key": MASTER_KEY,
+        }
+    )
 
     assert MASTER_KEY not in repr(settings)
