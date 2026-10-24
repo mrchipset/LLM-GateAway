@@ -7,8 +7,11 @@ import httpx
 import pytest
 
 from llm_gateway.app import create_app
+from llm_gateway.clock import Clock, SystemClock
 from llm_gateway.config import Environment, Settings
-from llm_gateway.container import Container
+from llm_gateway.container import Container, ReadinessCheck
+from llm_gateway.providers.registry import ProviderRegistry
+from llm_gateway.storage.memory import InMemoryApiKeyRepository, InMemoryModelRepository
 
 TEST_MASTER_KEY = "test-master-key-0123456789abcdef"
 
@@ -22,6 +25,28 @@ def settings() -> Settings:
             "master_key": TEST_MASTER_KEY,
         }
     )
+
+
+def make_container(
+    settings: Settings,
+    *,
+    readiness_checks: tuple[ReadinessCheck, ...] = (),
+    providers: ProviderRegistry | None = None,
+    clock: Clock | None = None,
+) -> Container:
+    return Container(
+        settings=settings,
+        clock=clock if clock is not None else SystemClock(),
+        api_keys=InMemoryApiKeyRepository(),
+        models=InMemoryModelRepository(),
+        providers=providers if providers is not None else ProviderRegistry({}),
+        readiness_checks=readiness_checks,
+    )
+
+
+@pytest.fixture(name="make_container")
+def _make_container_fixture() -> Callable[..., Container]:
+    return make_container
 
 
 @asynccontextmanager

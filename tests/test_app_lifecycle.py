@@ -10,13 +10,21 @@ from llm_gateway.app import create_app
 from llm_gateway.clock import SystemClock
 from llm_gateway.config import Environment, Settings
 from llm_gateway.container import Container
+from llm_gateway.providers.registry import ProviderRegistry
+from llm_gateway.storage.memory import InMemoryApiKeyRepository, InMemoryModelRepository
 
 ClientFactory = Callable[..., AbstractAsyncContextManager[httpx.AsyncClient]]
 
 
 class _TrackingContainer(Container):
     def __init__(self, settings: Settings) -> None:
-        super().__init__(settings=settings, clock=SystemClock())
+        super().__init__(
+            settings=settings,
+            clock=SystemClock(),
+            api_keys=InMemoryApiKeyRepository(),
+            models=InMemoryModelRepository(),
+            providers=ProviderRegistry({}),
+        )
         self.closed = False
 
     async def aclose(self) -> None:
@@ -37,7 +45,10 @@ async def test_lifespan_closes_container_after_client_exit(
     assert container.closed is True
 
 
-def test_create_app_rejects_mismatched_settings(settings: Settings) -> None:
+def test_create_app_rejects_mismatched_settings(
+    settings: Settings,
+    make_container: Callable[..., Container],
+) -> None:
     other_settings = Settings(
         **{
             "_env_file": None,
@@ -45,7 +56,7 @@ def test_create_app_rejects_mismatched_settings(settings: Settings) -> None:
             "master_key": "another-test-key-0123456789abcdef",
         }
     )
-    container = Container(settings=other_settings, clock=SystemClock())
+    container = make_container(other_settings)
 
     with pytest.raises(ValueError, match=r"container\.settings"):
         create_app(settings=settings, container=container)

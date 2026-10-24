@@ -20,10 +20,22 @@ class ApiErrorCode(StrEnum):
     MISSING_API_KEY = "missing_api_key"
     INVALID_API_KEY = "invalid_api_key"
     MASTER_KEY_REQUIRED = "master_key_required"
+    MASTER_KEY_NOT_ALLOWED = "master_key_not_allowed"
     NOT_FOUND = "not_found"
     METHOD_NOT_ALLOWED = "method_not_allowed"
     PERMISSION_DENIED = "permission_denied"
     RATE_LIMITED = "rate_limited"
+    MODEL_NOT_FOUND = "model_not_found"
+    MODEL_DISABLED = "model_disabled"
+    DUPLICATE_MODEL = "duplicate_model"
+    KEY_NOT_FOUND = "key_not_found"
+    PROVIDER_NOT_CONFIGURED = "provider_not_configured"
+    UPSTREAM_AUTH_FAILED = "upstream_auth_failed"
+    UPSTREAM_RATE_LIMITED = "upstream_rate_limited"
+    UPSTREAM_TIMEOUT = "upstream_timeout"
+    UPSTREAM_UNAVAILABLE = "upstream_unavailable"
+    UPSTREAM_REJECTED = "upstream_rejected"
+    UPSTREAM_INVALID_RESPONSE = "upstream_invalid_response"
     INTERNAL_ERROR = "internal_error"
 
 
@@ -36,6 +48,7 @@ class ApiError(Exception):
         message: str,
         error_type: str,
         param: str | None = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
@@ -43,6 +56,7 @@ class ApiError(Exception):
         self.message = message
         self.error_type = error_type
         self.param = param
+        self.headers = headers
 
     @classmethod
     def invalid_request(cls, message: str, *, param: str | None = None) -> ApiError:
@@ -55,12 +69,19 @@ class ApiError(Exception):
         )
 
     @classmethod
-    def unauthorized(cls, message: str, *, code: ApiErrorCode) -> ApiError:
+    def unauthorized(
+        cls,
+        message: str,
+        *,
+        code: ApiErrorCode,
+        headers: dict[str, str] | None = None,
+    ) -> ApiError:
         return cls(
             status_code=401,
             code=code,
             message=message,
             error_type="authentication_error",
+            headers=headers,
         )
 
     @classmethod
@@ -126,7 +147,7 @@ async def _api_error_handler(request: Request, exc: Exception) -> JSONResponse:
     if not isinstance(exc, ApiError):
         raise exc
     request_id = _resolve_request_id(request)
-    return _response(request_id, exc)
+    return _response(request_id, exc, exc.headers)
 
 
 async def _validation_error_handler(request: Request, exc: Exception) -> JSONResponse:

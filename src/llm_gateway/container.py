@@ -8,6 +8,10 @@ from fastapi import Request
 
 from llm_gateway.clock import Clock, SystemClock
 from llm_gateway.config import Settings
+from llm_gateway.providers.factory import build_providers
+from llm_gateway.providers.registry import ProviderRegistry
+from llm_gateway.storage.memory import InMemoryApiKeyRepository, InMemoryModelRepository
+from llm_gateway.storage.repositories import ApiKeyRepository, ModelRepository
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,8 +28,13 @@ class ReadinessReport:
 
 @dataclass(slots=True)
 class Container:
+    """Everything the request path depends on, built once at startup."""
+
     settings: Settings
     clock: Clock
+    api_keys: ApiKeyRepository
+    models: ModelRepository
+    providers: ProviderRegistry
     readiness_checks: tuple[ReadinessCheck, ...] = ()
 
     def __post_init__(self) -> None:
@@ -54,7 +63,7 @@ class Container:
         )
 
     async def aclose(self) -> None:
-        return None
+        await self.providers.aclose()
 
 
 def get_container(request: Request) -> Container:
@@ -65,4 +74,11 @@ def get_container(request: Request) -> Container:
 
 
 def build_container(settings: Settings) -> Container:
-    return Container(settings=settings, clock=SystemClock())
+    clock = SystemClock()
+    return Container(
+        settings=settings,
+        clock=clock,
+        api_keys=InMemoryApiKeyRepository(),
+        models=InMemoryModelRepository(),
+        providers=build_providers(settings, clock=clock),
+    )
