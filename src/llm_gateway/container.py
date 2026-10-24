@@ -65,9 +65,11 @@ class Container:
         )
 
     async def aclose(self) -> None:
-        await self.providers.aclose()
-        if self.database is not None:
-            await self.database.aclose()
+        try:
+            await self.providers.aclose()
+        finally:
+            if self.database is not None:
+                await self.database.aclose()
 
 
 def get_container(request: Request) -> Container:

@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 
 import httpx
 
+from llm_gateway.app import create_app
 from llm_gateway.auth.keys import hash_api_key
 from llm_gateway.config import Settings
 from llm_gateway.container import Container
@@ -109,6 +110,15 @@ async def test_create_api_key_returns_plaintext_once_and_stores_only_hash(
     listed = listing.json()
     assert secret not in listing.text
     assert all("key" not in item for item in listed["items"])
+    assert set(listed["items"][0]) == {
+        "id",
+        "name",
+        "key_prefix",
+        "created_at",
+        "expires_at",
+        "revoked_at",
+        "last_used_at",
+    }
 
     record = await container.api_keys.get_key(UUID(body["id"]))
     assert record is not None
@@ -421,3 +431,32 @@ async def test_error_responses_keep_openai_envelope_and_request_id(
         assert isinstance(error["request_id"], str)
         assert error["request_id"]
         assert response.headers["x-request-id"] == error["request_id"]
+
+
+async def test_every_admin_route_rejects_missing_and_inference_credentials(
+    make_container: Callable[..., Container],
+    settings: Settings,
+) -> None:
+    container = make_container(settings)
+    app = create_app(settings=settings, container=container)
+    inference_key = await seed_api_key(container)
+
+    targets: list[tuple[str, str]] = []
+    for path, operations in app.openapi()["paths"].items():
+        if not path.startswith("/api/v1/"):
+            continue
+        concrete = path.replace("{key_id}", str(uuid4())).replace("{model_id}", "missing-model")
+        targets.extend((method.upper(), concrete) for method in operations)
+
+    assert targets, "expected the management routes to be mounted"
+
+    transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        for method, path in targets:
+            anonymous = await client.request(method, path, json={})
+            inference = await client.request(method, path, json={}, headers=_auth(inference_key))
+
+            assert anonymous.status_code == 401, f"{method} {path} must require the master key"
+            assert _error(anonymous)["code"] == "master_key_required"
+            assert inference.status_code == 401, f"{method} {path} must reject inference keys"
+            assert _error(inference)["code"] == "invalid_api_key"

@@ -137,7 +137,9 @@ class SqlAlchemyApiKeyRepository:
             async with self._session_factory() as session, session.begin():
                 session.add(row)
         except IntegrityError as exc:
-            raise DuplicateApiKeyError() from exc
+            if _is_unique_violation(exc):
+                raise DuplicateApiKeyError() from exc
+            raise
         return record
 
     async def get_key_by_hash(self, key_hash: str) -> ApiKeyRecord | None:
