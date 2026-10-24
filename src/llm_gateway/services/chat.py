@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 
+import anyio
+
 from llm_gateway.errors import ApiError, ApiErrorCode
 from llm_gateway.logging import get_logger
 from llm_gateway.providers.base import (
@@ -106,7 +108,7 @@ def map_provider_error(exc: ProviderError) -> ApiError:
         return _error(
             status_code=400,
             code=ApiErrorCode.UPSTREAM_REJECTED,
-            message="Upstream provider rejected the request",
+            message=exc.message,
             error_type="invalid_request_error",
         )
 
@@ -126,10 +128,15 @@ def _log_provider_error(exc: ProviderError, *, provider: str, model_id: str) -> 
             "model_id": model_id,
             "provider_error": type(exc).__name__,
             "status_code": getattr(exc, "status_code", None),
-            # `message` is reserved by logging.LogRecord.
-            "provider_message": exc.message,
         },
     )
+
+
+async def _close_upstream(upstream: AsyncGenerator[ChatCompletionChunk, None]) -> None:
+    # Cancellation during prefetch must not skip the release of the upstream
+    # generator.
+    with anyio.CancelScope(shield=True):
+        await upstream.aclose()
 
 
 class ChatStream:
@@ -228,7 +235,7 @@ class ChatService:
         try:
             first_chunk = await anext(upstream)
         except StopAsyncIteration:
-            await upstream.aclose()
+            await _close_upstream(upstream)
             raise _error(
                 status_code=502,
                 code=ApiErrorCode.UPSTREAM_INVALID_RESPONSE,
@@ -236,7 +243,7 @@ class ChatService:
                 error_type="server_error",
             ) from None
         except ProviderError as exc:
-            await upstream.aclose()
+            await _close_upstream(upstream)
             _log_provider_error(
                 exc,
                 provider=resolved.config.provider.value,
@@ -244,7 +251,7 @@ class ChatService:
             )
             raise map_provider_error(exc) from exc
         except BaseException:
-            await upstream.aclose()
+            await _close_upstream(upstream)
             raise
 
         return ChatStream(

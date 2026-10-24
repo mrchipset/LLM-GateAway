@@ -195,7 +195,7 @@ async def collect(stream: ChatStream) -> list[ChatCompletionChunk]:
             400,
             ApiErrorCode.UPSTREAM_REJECTED,
             "invalid_request_error",
-            "Upstream provider rejected the request",
+            "teapot",
         ),
         (
             ProviderError("plain failure"),

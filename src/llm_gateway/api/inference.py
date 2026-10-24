@@ -53,7 +53,6 @@ async def _stream_sse(stream: ChatStream) -> AsyncGenerator[bytes, None]:
                 "request_id": request_id,
                 "provider_error": type(exc).__name__,
                 "status_code": getattr(exc, "status_code", None),
-                "provider_message": exc.message,
             },
         )
         yield _sse_frame(json.dumps(error_payload(request_id, error)))

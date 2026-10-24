@@ -429,8 +429,7 @@ async def test_mid_stream_error_returns_sse_error_frame_and_closes_upstream(
 
     error_frame = json.loads(frames[1])
     assert error_frame["error"]["code"] == "upstream_rejected"
-    assert error_frame["error"]["message"] == "Upstream provider rejected the request"
-    assert "upstream rejected" not in response.text
+    assert error_frame["error"]["message"] == "upstream rejected"
     assert provider.closed == 1
 
 

@@ -176,10 +176,17 @@ class OpenAIProvider:
             try:
                 response = await self._send_stream(payload)
                 if not 200 <= response.status_code < 300:
-                    await response.aread()
-                    error = self._upstream_error(response)
-                    await response.aclose()
-                    raise error
+                    try:
+                        await response.aread()
+                    except httpx.TimeoutException as exc:
+                        raise ProviderTimeoutError() from exc
+                    except httpx.TransportError as exc:
+                        raise ProviderConnectionError() from exc
+                    except httpx.HTTPError as exc:
+                        raise ProviderResponseError() from exc
+                    finally:
+                        await response.aclose()
+                    raise self._upstream_error(response)
                 break
             except ProviderError as exc:
                 if not exc.retryable or attempt >= self._retry_policy.max_attempts:
