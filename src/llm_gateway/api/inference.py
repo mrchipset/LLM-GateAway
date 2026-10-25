@@ -21,6 +21,7 @@ from llm_gateway.schemas.chat import (
     ModelSummary,
 )
 from llm_gateway.services.chat import ChatService, ChatStream, map_provider_error
+from llm_gateway.services.limits import enforce_inference_limits
 from llm_gateway.services.usage import (
     USAGE_WRITE_TIMEOUT_SECONDS,
     UsageContext,
@@ -91,7 +92,7 @@ async def _stream_sse(
 @router.post("/v1/chat/completions", response_model=ChatCompletionResponse)
 async def create_chat_completion(
     payload: ChatCompletionRequest,
-    api_key: Annotated[AuthenticatedKey, Depends(require_api_key)],
+    api_key: Annotated[AuthenticatedKey, Depends(enforce_inference_limits)],
     service: Annotated[ChatService, Depends(get_chat_service)],
     recorder: Annotated[UsageRecorder, Depends(get_usage_recorder)],
 ) -> ChatCompletionResponse | StreamingResponse:

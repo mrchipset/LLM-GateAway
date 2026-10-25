@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from llm_gateway.config import Settings
+from llm_gateway.storage.rate_limits import RateLimiter, SqlAlchemyRateLimiter
 from llm_gateway.storage.repositories import (
     ApiKeyRepository,
     ModelRepository,
@@ -46,6 +47,7 @@ class Database:
         self._models = SqlAlchemyModelRepository(session_factory=self._session_factory)
         self._tenants = SqlAlchemyTenantRepository(session_factory=self._session_factory)
         self._usage = SqlAlchemyUsageRepository(session_factory=self._session_factory)
+        self._rate_limiter = SqlAlchemyRateLimiter(session_factory=self._session_factory)
 
     @classmethod
     def from_settings(cls, settings: Settings) -> Database:
@@ -77,6 +79,10 @@ class Database:
     @property
     def usage(self) -> UsageRepository:
         return self._usage
+
+    @property
+    def rate_limiter(self) -> RateLimiter:
+        return self._rate_limiter
 
     async def ping(self) -> bool:
         try:

@@ -67,12 +67,12 @@ supports listing, validation, and joins for usage. Chosen.
 - **Breaking API change**: key creation without `tenant_id` now returns 400.
   This is documented in the README; there is no compatibility window because the
   project has no external consumers yet.
-- There is no tenant update, delete, suspend, or rename API. Names are immutable
-  for now.
-- Tenants provide attribution, not isolation: any valid key can call any enabled
-  model. Model allow-lists per tenant are a separate feature.
-- No quotas or rate limits per tenant; usage accounting is observability, not
-  enforcement.
+- There is no tenant delete, suspend, or rename API. Names are immutable for
+  now. Monthly token quotas and per-minute request limits can be changed with
+  `PATCH /api/v1/tenants/{id}`; see `notes/quotas-and-rate-limits.md`.
+- Tenants are attribution and limit boundaries, not authentication domains:
+  there is no tenant-scoped admin credential, shared tenant login, or per-model
+  allow-list. Quotas and rate limits are enforced per tenant before inference.
 - Migration downgrade drops tenant attribution (the column cannot be
   reconstructed). That is an accepted cost of downgrading.
 - The default tenant is a migration artifact. Operators may rename tenants only

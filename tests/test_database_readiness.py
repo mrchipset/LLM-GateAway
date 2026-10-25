@@ -9,6 +9,7 @@ from llm_gateway.config import Environment, Settings, StorageBackend
 from llm_gateway.container import Container, ReadinessCheck
 from llm_gateway.providers.registry import ProviderRegistry
 from llm_gateway.storage.db import Database
+from llm_gateway.storage.rate_limits import InMemoryRateLimiter
 
 
 def _unreachable_database(settings: Settings) -> Database:
@@ -65,6 +66,7 @@ async def test_readyz_returns_503_when_database_is_unreachable(
         models=database.models,
         tenants=database.tenants,
         usage=database.usage,
+        rate_limiter=InMemoryRateLimiter(),
         providers=ProviderRegistry({}),
         readiness_checks=(ReadinessCheck(name="database", check=database.ping),),
         database=database,

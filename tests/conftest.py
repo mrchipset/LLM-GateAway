@@ -17,6 +17,7 @@ from llm_gateway.storage.memory import (
     InMemoryTenantRepository,
     InMemoryUsageRepository,
 )
+from llm_gateway.storage.rate_limits import InMemoryRateLimiter, RateLimiter
 from llm_gateway.storage.repositories import UsageRepository
 
 TEST_MASTER_KEY = "test-master-key-0123456789abcdef"
@@ -40,6 +41,7 @@ def make_container(
     providers: ProviderRegistry | None = None,
     clock: Clock | None = None,
     usage: UsageRepository | None = None,
+    rate_limiter: RateLimiter | None = None,
 ) -> Container:
     return Container(
         settings=settings,
@@ -48,6 +50,7 @@ def make_container(
         models=InMemoryModelRepository(),
         tenants=InMemoryTenantRepository(),
         usage=usage if usage is not None else InMemoryUsageRepository(),
+        rate_limiter=rate_limiter if rate_limiter is not None else InMemoryRateLimiter(),
         providers=providers if providers is not None else ProviderRegistry({}),
         readiness_checks=readiness_checks,
     )

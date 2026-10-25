@@ -25,6 +25,7 @@ class ApiErrorCode(StrEnum):
     METHOD_NOT_ALLOWED = "method_not_allowed"
     PERMISSION_DENIED = "permission_denied"
     RATE_LIMITED = "rate_limited"
+    TENANT_QUOTA_EXCEEDED = "tenant_quota_exceeded"
     MODEL_NOT_FOUND = "model_not_found"
     MODEL_DISABLED = "model_disabled"
     DUPLICATE_MODEL = "duplicate_model"

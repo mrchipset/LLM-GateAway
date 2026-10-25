@@ -49,11 +49,15 @@ async def seed_tenant(
     name: str = TEST_TENANT_NAME,
     tenant_id: UUID | None = None,
     created_at: datetime | None = None,
+    monthly_token_quota: int | None = None,
+    requests_per_minute: int | None = None,
 ) -> Tenant:
     tenant = Tenant(
         id=tenant_id if tenant_id is not None else uuid4(),
         name=name,
         created_at=created_at if created_at is not None else container.clock.now(),
+        monthly_token_quota=monthly_token_quota,
+        requests_per_minute=requests_per_minute,
     )
     return await container.tenants.create_tenant(tenant)
 
@@ -112,6 +116,7 @@ async def seed_usage(
     created_at: datetime | None = None,
     prompt_tokens: int = 10,
     completion_tokens: int = 5,
+    total_tokens: int | None = None,
     cached_tokens: int = 0,
     request_id: str = "req-usage",
 ) -> UsageRecord:
@@ -124,7 +129,9 @@ async def seed_usage(
         provider=provider,
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
-        total_tokens=prompt_tokens + completion_tokens,
+        total_tokens=(
+            total_tokens if total_tokens is not None else prompt_tokens + completion_tokens
+        ),
         cached_tokens=cached_tokens,
         created_at=created_at if created_at is not None else container.clock.now(),
     )

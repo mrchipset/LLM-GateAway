@@ -17,6 +17,7 @@ from llm_gateway.storage.memory import (
     InMemoryTenantRepository,
     InMemoryUsageRepository,
 )
+from llm_gateway.storage.rate_limits import InMemoryRateLimiter
 
 ClientFactory = Callable[..., AbstractAsyncContextManager[httpx.AsyncClient]]
 
@@ -30,6 +31,7 @@ class _TrackingContainer(Container):
             models=InMemoryModelRepository(),
             tenants=InMemoryTenantRepository(),
             usage=InMemoryUsageRepository(),
+            rate_limiter=InMemoryRateLimiter(),
             providers=ProviderRegistry({}),
         )
         self.closed = False

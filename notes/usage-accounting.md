@@ -14,8 +14,9 @@ inference request, and must keep memory-backend tests dependency-free.
 
 ## Assumptions
 
-- Usage is observability, not enforcement. No quotas, cost conversion, or
-  billing. Rates and currency are deliberately absent.
+- Usage is recorded for observability and as the baseline for tenant quotas. Cost
+  conversion and billing are still out of scope; quota enforcement itself is
+  described in `notes/quotas-and-rate-limits.md`.
 - Only requests that produce usage are recorded. Transport failures and streams
   that never report usage have no token counts to store.
 - `cached_tokens` is a subset of `prompt_tokens`, never an additional bucket.

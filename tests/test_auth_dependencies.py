@@ -27,6 +27,7 @@ from llm_gateway.storage.memory import (
     InMemoryTenantRepository,
     InMemoryUsageRepository,
 )
+from llm_gateway.storage.rate_limits import InMemoryRateLimiter
 from llm_gateway.storage.repositories import ApiKeyRecord
 
 NOW = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
@@ -58,6 +59,7 @@ def _container(
         models=InMemoryModelRepository(),
         tenants=InMemoryTenantRepository(),
         usage=InMemoryUsageRepository(),
+        rate_limiter=InMemoryRateLimiter(),
         providers=ProviderRegistry({}),
     )
 

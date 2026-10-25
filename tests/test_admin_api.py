@@ -569,7 +569,13 @@ async def test_create_tenant_returns_detail_and_rejects_duplicates(
 
     assert created.status_code == 201
     body = created.json()
-    assert set(body) == {"id", "name", "created_at"}
+    assert set(body) == {
+        "id",
+        "name",
+        "created_at",
+        "monthly_token_quota",
+        "requests_per_minute",
+    }
     assert body["name"] == "acme"
     assert UUID(body["id"])
     assert body["created_at"]
@@ -770,3 +776,125 @@ async def test_tenant_key_authenticates_inference_and_health_is_unaffected(
 
     assert completion.status_code == 200
     assert readyz.status_code == 200
+
+
+async def test_create_tenant_persists_limits_and_lists_them(
+    make_container: Callable[..., Container],
+    make_client: Callable[..., Any],
+    settings: Settings,
+) -> None:
+    container = make_container(settings, clock=SteppingClock())
+    master = _auth(_master(settings))
+
+    async with make_client(settings, container) as client:
+        created = await client.post(
+            "/api/v1/tenants",
+            json={
+                "name": "limited",
+                "monthly_token_quota": 1000,
+                "requests_per_minute": 5,
+            },
+            headers=master,
+        )
+        listing = await client.get("/api/v1/tenants", headers=master)
+
+    assert created.status_code == 201
+    body = created.json()
+    assert body["monthly_token_quota"] == 1000
+    assert body["requests_per_minute"] == 5
+
+    item = listing.json()["items"][0]
+    assert item["monthly_token_quota"] == 1000
+    assert item["requests_per_minute"] == 5
+
+
+async def test_patch_tenant_limits_replaces_clears_and_keeps_omitted_fields(
+    make_container: Callable[..., Container],
+    make_client: Callable[..., Any],
+    settings: Settings,
+) -> None:
+    container = make_container(settings, clock=SteppingClock())
+    master = _auth(_master(settings))
+
+    async with make_client(settings, container) as client:
+        created = await client.post(
+            "/api/v1/tenants",
+            json={"name": "patch-me"},
+            headers=master,
+        )
+        tenant_id = created.json()["id"]
+
+        both = await client.patch(
+            f"/api/v1/tenants/{tenant_id}",
+            json={"monthly_token_quota": 100, "requests_per_minute": 3},
+            headers=master,
+        )
+        one = await client.patch(
+            f"/api/v1/tenants/{tenant_id}",
+            json={"monthly_token_quota": 200},
+            headers=master,
+        )
+        cleared = await client.patch(
+            f"/api/v1/tenants/{tenant_id}",
+            json={"monthly_token_quota": None},
+            headers=master,
+        )
+        noop = await client.patch(
+            f"/api/v1/tenants/{tenant_id}",
+            json={},
+            headers=master,
+        )
+
+    assert both.status_code == 200
+    assert both.json()["monthly_token_quota"] == 100
+    assert both.json()["requests_per_minute"] == 3
+
+    assert one.json()["monthly_token_quota"] == 200
+    assert one.json()["requests_per_minute"] == 3
+
+    assert cleared.json()["monthly_token_quota"] is None
+    assert cleared.json()["requests_per_minute"] == 3
+
+    assert noop.status_code == 200
+    assert noop.json()["monthly_token_quota"] is None
+    assert noop.json()["requests_per_minute"] == 3
+
+
+async def test_patch_tenant_limits_validates_target_and_values(
+    make_container: Callable[..., Container],
+    make_client: Callable[..., Any],
+    settings: Settings,
+) -> None:
+    container = make_container(settings, clock=FrozenClock())
+    master = _auth(_master(settings))
+
+    async with make_client(settings, container) as client:
+        unknown = await client.patch(
+            f"/api/v1/tenants/{uuid4()}",
+            json={"requests_per_minute": 1},
+            headers=master,
+        )
+        created = await client.post(
+            "/api/v1/tenants",
+            json={"name": "zero-limits"},
+            headers=master,
+        )
+        tenant_id = created.json()["id"]
+        zero = await client.patch(
+            f"/api/v1/tenants/{tenant_id}",
+            json={"monthly_token_quota": 0},
+            headers=master,
+        )
+        negative = await client.patch(
+            f"/api/v1/tenants/{tenant_id}",
+            json={"requests_per_minute": -1},
+            headers=master,
+        )
+
+    assert unknown.status_code == 404
+    assert _error(unknown)["code"] == "tenant_not_found"
+    assert _error(unknown)["param"] == "tenant_id"
+
+    for response in (zero, negative):
+        assert response.status_code == 400
+        assert _error(response)["code"] == "invalid_request_body"

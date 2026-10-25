@@ -14,6 +14,7 @@ from llm_gateway.storage.repositories import (
     ModelConfig,
     ModelUsage,
     Tenant,
+    TenantLimitPatch,
     UsageRecord,
 )
 
@@ -94,6 +95,27 @@ class InMemoryTenantRepository:
         )
         return ordered[offset : offset + limit], len(ordered)
 
+    async def set_tenant_limits(
+        self,
+        tenant_id: UUID,
+        *,
+        patch: TenantLimitPatch,
+    ) -> Tenant | None:
+        async with self._lock:
+            tenant = self._tenants.get(tenant_id)
+            if tenant is None:
+                return None
+            changes: dict[str, object] = {}
+            if patch.set_monthly_token_quota:
+                changes["monthly_token_quota"] = patch.monthly_token_quota
+            if patch.set_requests_per_minute:
+                changes["requests_per_minute"] = patch.requests_per_minute
+            if not changes:
+                return tenant
+            updated = replace(tenant, **changes)  # pyright: ignore[reportArgumentType]
+            self._tenants[tenant_id] = updated
+            return updated
+
 
 class InMemoryApiKeyRepository:
     """Process-local API key store with the same caveats as the model store."""
@@ -150,6 +172,14 @@ class InMemoryApiKeyRepository:
             self._keys[key_id] = replace(record, last_used_at=used_at)
 
 
+def _validate_token_window(*, since: datetime, until: datetime) -> None:
+    for field, value in (("since", since), ("until", until)):
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError(f"{field} must be timezone-aware")
+    if since >= until:
+        raise ValueError("since must be before until")
+
+
 def _usage_matches(
     record: UsageRecord,
     *,
@@ -177,6 +207,16 @@ class InMemoryUsageRepository:
     async def record(self, record: UsageRecord) -> None:
         async with self._lock:
             self._records.append(record)
+
+    async def token_total(self, *, tenant_id: UUID, since: datetime, until: datetime) -> int:
+        _validate_token_window(since=since, until=until)
+        return sum(
+            record.total_tokens
+            for record in self._records
+            if record.tenant_id == tenant_id
+            and record.created_at >= since
+            and record.created_at < until
+        )
 
     def _select(
         self,

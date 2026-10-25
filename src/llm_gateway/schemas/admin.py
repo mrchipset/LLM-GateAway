@@ -77,6 +77,8 @@ class CreateTenantRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     name: str = Field(min_length=1, max_length=100)
+    monthly_token_quota: int | None = Field(default=None, ge=1)
+    requests_per_minute: int | None = Field(default=None, ge=1)
 
     @field_validator("name", mode="before")
     @classmethod
@@ -86,12 +88,26 @@ class CreateTenantRequest(BaseModel):
         return value
 
 
+class UpdateTenantLimitsRequest(BaseModel):
+    """Body for `PATCH /api/v1/tenants/{tenant_id}`.
+
+    Omitted fields mean "unchanged"; an explicit null clears the limit.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    monthly_token_quota: int | None = Field(default=None, ge=1)
+    requests_per_minute: int | None = Field(default=None, ge=1)
+
+
 class TenantDetail(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     id: UUID
     name: str
     created_at: datetime
+    monthly_token_quota: int | None = None
+    requests_per_minute: int | None = None
 
 
 class TenantListResponse(BaseModel):

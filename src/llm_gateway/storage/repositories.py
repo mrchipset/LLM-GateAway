@@ -33,6 +33,13 @@ def _require_uuid(value: object, field: str) -> None:
         raise ValueError(f"{field} must be a UUID")
 
 
+def _require_optional_positive_int(value: object, field: str) -> None:
+    if value is None:
+        return
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+        raise ValueError(f"{field} must be a positive integer or None")
+
+
 @dataclass(frozen=True, slots=True)
 class Tenant:
     """An organizational label that owns API keys."""
@@ -40,11 +47,15 @@ class Tenant:
     id: UUID
     name: str
     created_at: datetime
+    monthly_token_quota: int | None = None
+    requests_per_minute: int | None = None
 
     def __post_init__(self) -> None:
         _require_uuid(self.id, "id")
         _require_non_blank(self.name, "name")
         _require_aware(self.created_at, "created_at")
+        _require_optional_positive_int(self.monthly_token_quota, "monthly_token_quota")
+        _require_optional_positive_int(self.requests_per_minute, "requests_per_minute")
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,6 +206,16 @@ class DuplicateApiKeyError(Exception):
         super().__init__("an API key with the same hash already exists")
 
 
+@dataclass(frozen=True, slots=True)
+class TenantLimitPatch:
+    """Partial limit update; only fields with a true ``set_*`` flag are written."""
+
+    monthly_token_quota: int | None = None
+    requests_per_minute: int | None = None
+    set_monthly_token_quota: bool = False
+    set_requests_per_minute: bool = False
+
+
 class TenantRepository(Protocol):
     async def create_tenant(self, tenant: Tenant) -> Tenant: ...
 
@@ -202,9 +223,18 @@ class TenantRepository(Protocol):
 
     async def list_tenants(self, *, limit: int, offset: int) -> tuple[Sequence[Tenant], int]: ...
 
+    async def set_tenant_limits(
+        self,
+        tenant_id: UUID,
+        *,
+        patch: TenantLimitPatch,
+    ) -> Tenant | None: ...
+
 
 class UsageRepository(Protocol):
     async def record(self, record: UsageRecord) -> None: ...
+
+    async def token_total(self, *, tenant_id: UUID, since: datetime, until: datetime) -> int: ...
 
     async def summary_by_model(
         self,

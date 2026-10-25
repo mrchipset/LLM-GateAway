@@ -17,6 +17,7 @@ from llm_gateway.storage.memory import (
     InMemoryTenantRepository,
     InMemoryUsageRepository,
 )
+from llm_gateway.storage.rate_limits import InMemoryRateLimiter, RateLimiter
 from llm_gateway.storage.repositories import (
     ApiKeyRepository,
     ModelRepository,
@@ -47,6 +48,7 @@ class Container:
     models: ModelRepository
     tenants: TenantRepository
     usage: UsageRepository
+    rate_limiter: RateLimiter
     providers: ProviderRegistry
     readiness_checks: tuple[ReadinessCheck, ...] = ()
     database: Database | None = None
@@ -104,6 +106,7 @@ def build_container(settings: Settings) -> Container:
             models=database.models,
             tenants=database.tenants,
             usage=database.usage,
+            rate_limiter=database.rate_limiter,
             providers=providers,
             readiness_checks=(ReadinessCheck(name="database", check=database.ping),),
             database=database,
@@ -116,5 +119,6 @@ def build_container(settings: Settings) -> Container:
         models=InMemoryModelRepository(),
         tenants=InMemoryTenantRepository(),
         usage=InMemoryUsageRepository(),
+        rate_limiter=InMemoryRateLimiter(),
         providers=providers,
     )

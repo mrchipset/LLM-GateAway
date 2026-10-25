@@ -20,6 +20,7 @@ from llm_gateway.storage.repositories import (
     ModelConfig,
     ModelUsage,
     Tenant,
+    TenantLimitPatch,
     UnknownTenantError,
     UsageRecord,
 )
@@ -94,7 +95,21 @@ def _to_model(row: ModelRow) -> ModelConfig:
 
 
 def _to_tenant(row: TenantRow) -> Tenant:
-    return Tenant(id=row.id, name=row.name, created_at=row.created_at)
+    return Tenant(
+        id=row.id,
+        name=row.name,
+        created_at=row.created_at,
+        monthly_token_quota=row.monthly_token_quota,
+        requests_per_minute=row.requests_per_minute,
+    )
+
+
+def _validate_token_window(*, since: datetime, until: datetime) -> None:
+    for field, value in (("since", since), ("until", until)):
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError(f"{field} must be timezone-aware")
+    if since >= until:
+        raise ValueError("since must be before until")
 
 
 def _to_key(row: ApiKeyRow) -> ApiKeyRecord:
@@ -170,7 +185,13 @@ class SqlAlchemyTenantRepository:
         self._session_factory = session_factory
 
     async def create_tenant(self, tenant: Tenant) -> Tenant:
-        row = TenantRow(id=tenant.id, name=tenant.name, created_at=tenant.created_at)
+        row = TenantRow(
+            id=tenant.id,
+            name=tenant.name,
+            created_at=tenant.created_at,
+            monthly_token_quota=tenant.monthly_token_quota,
+            requests_per_minute=tenant.requests_per_minute,
+        )
         try:
             async with self._session_factory() as session, session.begin():
                 session.add(row)
@@ -199,6 +220,30 @@ class SqlAlchemyTenantRepository:
             total = await session.scalar(select(func.count()).select_from(TenantRow))
             tenants = [_to_tenant(row) for row in rows]
         return tenants, total or 0
+
+    async def set_tenant_limits(
+        self,
+        tenant_id: UUID,
+        *,
+        patch: TenantLimitPatch,
+    ) -> Tenant | None:
+        values: dict[str, int | None] = {}
+        if patch.set_monthly_token_quota:
+            values["monthly_token_quota"] = patch.monthly_token_quota
+        if patch.set_requests_per_minute:
+            values["requests_per_minute"] = patch.requests_per_minute
+        async with self._session_factory() as session, session.begin():
+            if not values:
+                row = await session.get(TenantRow, tenant_id)
+            else:
+                statement = (
+                    update(TenantRow)
+                    .where(TenantRow.id == tenant_id)
+                    .values(**values)
+                    .returning(TenantRow)
+                )
+                row = await session.scalar(statement)
+            return _to_tenant(row) if row is not None else None
 
 
 class SqlAlchemyApiKeyRepository:
@@ -308,6 +353,17 @@ class SqlAlchemyUsageRepository:
             if _is_foreign_key_violation(exc) and _is_tenant_foreign_key_violation(exc):
                 raise UnknownTenantError(record.tenant_id) from exc
             raise
+
+    async def token_total(self, *, tenant_id: UUID, since: datetime, until: datetime) -> int:
+        _validate_token_window(since=since, until=until)
+        statement = select(func.coalesce(func.sum(UsageRow.total_tokens), 0)).where(
+            UsageRow.tenant_id == tenant_id,
+            UsageRow.created_at >= since,
+            UsageRow.created_at < until,
+        )
+        async with self._session_factory() as session, session.begin():
+            total = await session.scalar(statement)
+        return int(total or 0)
 
     async def summary_by_model(
         self,

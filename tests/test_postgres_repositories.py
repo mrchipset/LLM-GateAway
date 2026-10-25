@@ -26,6 +26,7 @@ from llm_gateway.storage.repositories import (
     DuplicateTenantError,
     ModelConfig,
     Tenant,
+    TenantLimitPatch,
     UnknownTenantError,
     UsageRecord,
 )
@@ -127,7 +128,10 @@ async def _truncate() -> None:
     try:
         async with engine.begin() as connection:
             await connection.execute(
-                text("TRUNCATE api_keys, models, tenants, usage_records RESTART IDENTITY CASCADE")
+                text(
+                    "TRUNCATE api_keys, models, tenants, usage_records, tenant_rate_limits "
+                    "RESTART IDENTITY CASCADE"
+                )
             )
     finally:
         await engine.dispose()
@@ -355,6 +359,193 @@ async def test_api_key_list_rejects_invalid_pagination(database: Database) -> No
         await database.api_keys.list_keys(limit=0, offset=0)
 
 
+async def test_tenant_set_limits_round_trip_and_clear(database: Database) -> None:
+    tenant = await database.tenants.create_tenant(_tenant(1))
+
+    updated = await database.tenants.set_tenant_limits(
+        tenant.id,
+        patch=TenantLimitPatch(
+            monthly_token_quota=1000,
+            requests_per_minute=5,
+            set_monthly_token_quota=True,
+            set_requests_per_minute=True,
+        ),
+    )
+
+    assert updated is not None
+    assert updated.monthly_token_quota == 1000
+    assert updated.requests_per_minute == 5
+    assert await database.tenants.get_tenant(tenant.id) == updated
+
+    cleared = await database.tenants.set_tenant_limits(
+        tenant.id,
+        patch=TenantLimitPatch(
+            set_monthly_token_quota=True,
+            set_requests_per_minute=True,
+        ),
+    )
+    assert cleared is not None
+    assert cleared.monthly_token_quota is None
+    assert cleared.requests_per_minute is None
+
+    missing = await database.tenants.set_tenant_limits(
+        uuid4(),
+        patch=TenantLimitPatch(
+            monthly_token_quota=1,
+            requests_per_minute=1,
+            set_monthly_token_quota=True,
+            set_requests_per_minute=True,
+        ),
+    )
+    assert missing is None
+
+
+async def test_usage_token_total_filters_and_is_half_open(database: Database) -> None:
+    tenant_a = await database.tenants.create_tenant(_tenant(1))
+    tenant_b = await database.tenants.create_tenant(_tenant(2))
+    key_a = _key(1, tenant_id=tenant_a.id)
+    key_b = _key(2, tenant_id=tenant_b.id)
+    await database.api_keys.create_key(key_a)
+    await database.api_keys.create_key(key_b)
+    await database.usage.record(
+        _usage(
+            1,
+            tenant_id=tenant_a.id,
+            api_key_id=key_a.id,
+            created_at=BASE,
+            prompt_tokens=10,
+            completion_tokens=0,
+        )
+    )
+    await database.usage.record(
+        _usage(
+            2,
+            tenant_id=tenant_a.id,
+            api_key_id=key_a.id,
+            created_at=BASE + timedelta(minutes=1),
+            prompt_tokens=20,
+            completion_tokens=0,
+        )
+    )
+    await database.usage.record(
+        _usage(
+            3,
+            tenant_id=tenant_b.id,
+            api_key_id=key_b.id,
+            created_at=BASE,
+            prompt_tokens=100,
+            completion_tokens=0,
+        )
+    )
+
+    assert (
+        await database.usage.token_total(
+            tenant_id=tenant_a.id,
+            since=BASE,
+            until=BASE + timedelta(minutes=2),
+        )
+        == 30
+    )
+    assert (
+        await database.usage.token_total(
+            tenant_id=tenant_a.id,
+            since=BASE,
+            until=BASE + timedelta(minutes=1),
+        )
+        == 10
+    )
+    assert (
+        await database.usage.token_total(
+            tenant_id=tenant_a.id,
+            since=BASE + timedelta(minutes=1),
+            until=BASE + timedelta(minutes=2),
+        )
+        == 20
+    )
+
+    with pytest.raises(ValueError, match="since must be before until"):
+        await database.usage.token_total(
+            tenant_id=tenant_a.id,
+            since=BASE,
+            until=BASE,
+        )
+
+
+async def test_rate_limiter_is_atomic_across_concurrent_hits(database: Database) -> None:
+    tenant = await database.tenants.create_tenant(_tenant(1))
+
+    results = await asyncio.gather(
+        *(database.rate_limiter.hit(tenant_id=tenant.id, limit=10, now=BASE) for _ in range(20))
+    )
+
+    assert sum(result.allowed for result in results) == 10
+    engine = create_async_engine(_test_url())
+    try:
+        async with engine.connect() as connection:
+            count = await connection.scalar(
+                text("SELECT count FROM tenant_rate_limits WHERE tenant_id = :id"),
+                {"id": tenant.id},
+            )
+        assert count == 20
+
+        rolled = await database.rate_limiter.hit(
+            tenant_id=tenant.id,
+            limit=10,
+            now=BASE + timedelta(seconds=61),
+        )
+        assert rolled.allowed is True
+        async with engine.connect() as connection:
+            rolled_count = await connection.scalar(
+                text("SELECT count FROM tenant_rate_limits WHERE tenant_id = :id"),
+                {"id": tenant.id},
+            )
+        assert rolled_count == 1
+    finally:
+        await engine.dispose()
+
+
+async def test_rate_limiter_rejects_unknown_tenant(database: Database) -> None:
+    with pytest.raises(UnknownTenantError):
+        await database.rate_limiter.hit(tenant_id=uuid4(), limit=1, now=BASE)
+
+
+async def test_rate_limiter_ignores_stale_clock_window(database: Database) -> None:
+    tenant = await database.tenants.create_tenant(_tenant(1))
+
+    first = await database.rate_limiter.hit(tenant_id=tenant.id, limit=1, now=BASE)
+    newer = await database.rate_limiter.hit(
+        tenant_id=tenant.id, limit=1, now=BASE + timedelta(seconds=61)
+    )
+    stale = await database.rate_limiter.hit(
+        tenant_id=tenant.id, limit=1, now=BASE + timedelta(seconds=30)
+    )
+    still_stored = await database.rate_limiter.hit(
+        tenant_id=tenant.id, limit=1, now=BASE + timedelta(seconds=62)
+    )
+
+    assert first.allowed is True
+    assert newer.allowed is True
+    assert stale.allowed is False
+    assert still_stored.allowed is False
+    assert 0 <= stale.retry_after_seconds <= 60
+
+    engine = create_async_engine(_test_url())
+    try:
+        async with engine.connect() as connection:
+            row = (
+                await connection.execute(
+                    text(
+                        "SELECT count, window_start FROM tenant_rate_limits WHERE tenant_id = :id"
+                    ),
+                    {"id": tenant.id},
+                )
+            ).one()
+        assert row[0] == 3
+        assert row[1] == BASE + timedelta(minutes=1)
+    finally:
+        await engine.dispose()
+
+
 async def test_ping_returns_true_and_aclose_allows_new_database(
     postgres_settings: Settings,
 ) -> None:
@@ -429,6 +620,33 @@ async def test_migration_creates_usage_records_table(migrated_schema: None) -> N
             )
         assert table_name == "usage_records"
         assert nullable == "NO"
+    finally:
+        await engine.dispose()
+
+
+async def test_migration_adds_tenant_limits_and_rate_limit_table(
+    migrated_schema: None,
+) -> None:
+    engine = create_async_engine(_test_url())
+    try:
+        async with engine.connect() as connection:
+            limit_columns = (
+                await connection.scalars(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_name = 'tenants' "
+                        "AND column_name IN ('monthly_token_quota', 'requests_per_minute')"
+                    )
+                )
+            ).all()
+            rate_table = await connection.scalar(
+                text(
+                    "SELECT table_name FROM information_schema.tables "
+                    "WHERE table_name = 'tenant_rate_limits'"
+                )
+            )
+        assert set(limit_columns) == {"monthly_token_quota", "requests_per_minute"}
+        assert rate_table == "tenant_rate_limits"
     finally:
         await engine.dispose()
 
