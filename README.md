@@ -13,7 +13,7 @@
 - 管理 API：`/api/v1/keys`、`/api/v1/models`、`/api/v1/tenants`、`/api/v1/usage/summary`，由 master key 保护
 - PostgreSQL 持久化（SQLAlchemy 2 async + Alembic），默认也可用内存模式本地开发
 - 结构化 JSON 日志、request id、`/healthz` 与 `/readyz`
-- React + Vite + TypeScript 管理台骨架：健康状态与模型列表
+- React + Vite + TypeScript 管理台：健康状态、模型列表与用量面板
 
 不在本次范围：预算与计费、guardrail、MCP/Agent、租户级权限模型与 SSO/JWT/OAuth、Redis 限流/缓存、高级路由与 fallback、完整 Dashboard。
 
@@ -366,7 +366,16 @@ $env:VITE_PROXY_TARGET = "http://127.0.0.1:4000"
 npm run dev
 ```
 
-在页面中填入 master key 后即可查看后端健康状态与模型列表。master key 只保存在当前页面的内存中，不会写入 localStorage、sessionStorage、cookie 或 URL。
+在页面中填入 master key 后即可查看后端健康状态、模型列表与用量面板。用量面板支持：
+
+- `Models / Usage` 标签切换
+- 租户筛选（含“全部租户”），选中租户时只读显示其配额与限流
+- 7 / 30 / 90 天滚动范围
+- 请求数、输入/输出/缓存/总 token 汇总（缓存是输入的子集）
+- 按 UTC 日对齐、补零的每日总量柱状图
+- 按 key 的用量明细（最多 100 个 key）
+
+master key 只保存在当前页面的内存中，不会写入 localStorage、sessionStorage、cookie 或 URL；断开连接会清除所有查询缓存。
 
 前端检查：
 
@@ -431,7 +440,7 @@ design.md            LLM-GateAway 设计建议
 - 模型配置只有创建、列出、删除，没有更新接口；修改需删除后重建。
 - `/v1/models` 最多返回 1000 条；管理 API 使用 offset 分页。
 - 每个已认证推理请求都会写一次 `last_used_at`，高并发下需要改为采样或批处理。
-- 管理台为只读骨架，不提供 key 管理与模型注册表单。
+- 管理台不提供 key 管理、模型注册或限额编辑；用量面板只读、固定日粒度，按 key 最多展示 100 个。
 - 迁移需要手动执行，未提供服务启动时自动迁移。
 
 ## 相关文档
