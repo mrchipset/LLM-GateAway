@@ -1,6 +1,6 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { connectWithKey } from './connectWithKey';
 import { installFetchMock, jsonResponse, toUrl, type Routes } from './fetchMock';
@@ -132,7 +132,12 @@ async function openUsage(user: ReturnType<typeof userEvent.setup>) {
 
 describe('usage panel', () => {
   beforeEach(() => {
-    vi.spyOn(Date, 'now').mockReturnValue(FIXED_NOW.getTime());
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(FIXED_NOW);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('does not request usage or tenants until a master key is connected', async () => {
@@ -153,6 +158,45 @@ describe('usage panel', () => {
     }
   });
 
+  it('moves tab focus and selection with ArrowRight, Home, and End', async () => {
+    installFetchMock();
+    const user = userEvent.setup();
+    renderApp();
+
+    const modelsTab = screen.getByRole('tab', { name: 'Models' });
+    const usageTab = screen.getByRole('tab', { name: 'Usage' });
+    const modelsPanel = document.getElementById('models-panel');
+    const usagePanel = document.getElementById('usage-panel');
+
+    expect(modelsPanel).not.toBeNull();
+    expect(usagePanel).not.toBeNull();
+    expect(modelsTab).toHaveAttribute('aria-selected', 'true');
+    expect(usageTab).toHaveAttribute('aria-selected', 'false');
+    expect(modelsPanel).not.toHaveAttribute('hidden');
+    expect(usagePanel).toHaveAttribute('hidden');
+
+    modelsTab.focus();
+    await user.keyboard('{ArrowRight}');
+
+    expect(document.activeElement).toBe(usageTab);
+    expect(usageTab).toHaveAttribute('aria-selected', 'true');
+    expect(modelsTab).toHaveAttribute('aria-selected', 'false');
+    expect(usagePanel).not.toHaveAttribute('hidden');
+    expect(modelsPanel).toHaveAttribute('hidden');
+
+    await user.keyboard('{Home}');
+    expect(document.activeElement).toBe(modelsTab);
+    expect(modelsTab).toHaveAttribute('aria-selected', 'true');
+    expect(modelsPanel).not.toHaveAttribute('hidden');
+    expect(usagePanel).toHaveAttribute('hidden');
+
+    await user.keyboard('{End}');
+    expect(document.activeElement).toBe(usageTab);
+    expect(usageTab).toHaveAttribute('aria-selected', 'true');
+    expect(usagePanel).not.toHaveAttribute('hidden');
+    expect(modelsPanel).toHaveAttribute('hidden');
+  });
+
   it('renders compact totals with exact values and cached as a subset of input', async () => {
     installUsageMock();
     const user = userEvent.setup();
@@ -168,6 +212,45 @@ describe('usage panel', () => {
     expect(within(totals).getByText('42')).toBeInTheDocument();
     expect(within(totals).getByText('Cached tokens')).toBeInTheDocument();
     expect(within(totals).getByText('subset of input')).toBeInTheDocument();
+  });
+
+  it('renders usage when cached tokens exceed prompt tokens', async () => {
+    const oddSummary = {
+      ...SUMMARY,
+      prompt_tokens: 50_000,
+      cached_tokens: 80_000,
+    };
+    const oddSeries = {
+      bucket: 'day',
+      points: SERIES.points.map((point) => ({
+        ...point,
+        prompt_tokens: point.prompt_tokens,
+        cached_tokens: point.prompt_tokens + 1_000,
+      })),
+    };
+    const oddKeys = KEYS.map((key) => ({
+      ...key,
+      cached_tokens: key.prompt_tokens + 1_000,
+    }));
+    installUsageMock({
+      '/api/v1/usage/summary': () => jsonResponse(oddSummary),
+      '/api/v1/usage/series': () => jsonResponse(oddSeries),
+      '/api/v1/usage/by-key': () => jsonResponse({ limit: 100, items: oddKeys }),
+    });
+    const user = userEvent.setup();
+    renderApp();
+
+    await openUsage(user);
+
+    const totals = await screen.findByRole('region', { name: 'Window totals' });
+    expect(within(totals).getByText('1.5M')).toBeInTheDocument();
+    expect(
+      await screen.findByRole('list', { name: /Daily total tokens from Oct 1, 2026/ }),
+    ).toBeInTheDocument();
+    expect(await screen.findByRole('table', { name: 'Usage by API key' })).toBeInTheDocument();
+    expect(screen.queryByText('Could not load usage totals')).not.toBeInTheDocument();
+    expect(screen.queryByText('Could not load the usage chart')).not.toBeInTheDocument();
+    expect(screen.queryByText('Could not load usage by key')).not.toBeInTheDocument();
   });
 
   it('renders one accessible bar per daily point, including zero-token days', async () => {
@@ -186,6 +269,7 @@ describe('usage panel', () => {
     expect(bars[0]).toHaveAccessibleName('Oct 1, 2026 UTC: 100 total tokens across 2 requests');
     expect(bars[1]).toHaveAccessibleName('Oct 2, 2026 UTC: 0 total tokens across 0 requests');
     expect(bars[2]).toHaveAccessibleName('Oct 3, 2026 UTC: 50 total tokens across 1 request');
+    expect(screen.getByText('Last bar covers today so far (UTC).')).toBeInTheDocument();
   });
 
   it('keeps every zero-token day as a labeled bar and notes the empty range', async () => {
@@ -226,6 +310,21 @@ describe('usage panel', () => {
       name: 'Daily total tokens from Oct 1, 2026 to Oct 1, 2026, UTC',
     });
     expect(within(chart).getAllByRole('listitem')).toHaveLength(1);
+  });
+
+  it('floors the since window to UTC midnight and explains the partial final bucket', async () => {
+    const fetchMock = installUsageMock();
+    const user = userEvent.setup();
+    renderApp();
+
+    await openUsage(user);
+
+    await waitFor(() => {
+      expect(lastParams(fetchMock, '/api/v1/usage/summary')?.get('since')).toBe(
+        '2026-09-25T00:00:00.000Z',
+      );
+    });
+    expect(await screen.findByText('Last bar covers today so far (UTC).')).toBeInTheDocument();
   });
 
   it('renders by-key rows with name, prefix, and short-id fallbacks', async () => {
@@ -339,13 +438,49 @@ describe('usage panel', () => {
       });
     };
 
-    await assertWindow('2026-09-25T12:00:00.000Z');
+    await assertWindow('2026-09-25T00:00:00.000Z');
 
     await user.click(screen.getByRole('button', { name: '7 days' }));
-    await assertWindow('2026-10-18T12:00:00.000Z');
+    await assertWindow('2026-10-18T00:00:00.000Z');
 
     await user.click(screen.getByRole('button', { name: '90 days' }));
-    await assertWindow('2026-07-27T12:00:00.000Z');
+    await assertWindow('2026-07-27T00:00:00.000Z');
+  });
+
+  it('recomputes the since window from a fresh anchor on refresh', async () => {
+    const fetchMock = installUsageMock();
+    const user = userEvent.setup();
+    renderApp();
+
+    await openUsage(user);
+    await screen.findByRole('table', { name: 'Usage by API key' });
+    await screen.findByRole('list', { name: /Daily total tokens/ });
+    const firstSince = lastParams(fetchMock, '/api/v1/usage/summary')?.get('since');
+    expect(firstSince).toBe('2026-09-25T00:00:00.000Z');
+
+    vi.setSystemTime(new Date('2026-11-04T09:15:00.000Z'));
+    await user.click(screen.getByRole('button', { name: 'Refresh usage' }));
+
+    await waitFor(() => {
+      for (const path of USAGE_PATHS) {
+        const nextSince = lastParams(fetchMock, path)?.get('since');
+        expect(nextSince, `${path} should use the refreshed window`).toBe(
+          '2026-10-05T00:00:00.000Z',
+        );
+      }
+    });
+
+    for (const path of USAGE_PATHS) {
+      expect(callsTo(fetchMock, path)).toHaveLength(2);
+    }
+
+    const afterSince = lastParams(fetchMock, '/api/v1/usage/summary')?.get('since');
+    expect(new Date(afterSince ?? '').getTime()).toBeGreaterThan(
+      new Date(firstSince ?? '').getTime(),
+    );
+
+    const usageRegion = screen.getByRole('region', { name: 'Usage' });
+    expect(await within(usageRegion).findByText('09:15:00 UTC')).toBeInTheDocument();
   });
 
   it('shows the selected tenant limits as read-only facts', async () => {
@@ -388,6 +523,44 @@ describe('usage panel', () => {
         expect(callsTo(fetchMock, path).length).toBeGreaterThan(before[index] ?? 0);
       });
     });
+  });
+
+  it('announces usage updates and refreshes the announcement after the data reloads', async () => {
+    installUsageMock();
+    const user = userEvent.setup();
+    renderApp();
+
+    await openUsage(user);
+
+    const firstAnnouncement = await screen.findByText(
+      'Usage updated at 12:00:00 UTC for the last 30 days.',
+    );
+    expect(firstAnnouncement).toHaveAttribute('role', 'status');
+
+    vi.setSystemTime(new Date('2026-10-26T08:30:15.000Z'));
+    await user.click(screen.getByRole('button', { name: 'Refresh usage' }));
+
+    expect(
+      await screen.findByText('Usage updated at 08:30:15 UTC for the last 30 days.'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText('Usage updated at 12:00:00 UTC for the last 30 days.'),
+    ).not.toBeInTheDocument();
+
+    const usageRegion = screen.getByRole('region', { name: 'Usage' });
+    expect(await within(usageRegion).findByText('08:30:15 UTC')).toBeInTheDocument();
+  });
+
+  it('notes when the tenant list is truncated', async () => {
+    installUsageMock({
+      '/api/v1/tenants': () => jsonResponse({ items: TENANTS, total: 150, limit: 100, offset: 0 }),
+    });
+    const user = userEvent.setup();
+    renderApp();
+
+    await openUsage(user);
+
+    expect(await screen.findByText('Showing 2 of 150 tenants')).toBeInTheDocument();
   });
 
   it('removes usage data on disconnect, returns to the connect prompt, and keeps storage empty', async () => {

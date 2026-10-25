@@ -154,8 +154,7 @@ function isUsageCounts(value: unknown): value is UsageCounts {
     isCount(completion_tokens) &&
     isCount(cached_tokens) &&
     isCount(total_tokens) &&
-    isCount(requests) &&
-    cached_tokens <= prompt_tokens
+    isCount(requests)
   );
 }
 

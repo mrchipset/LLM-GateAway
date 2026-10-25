@@ -19,6 +19,7 @@ interface UsagePanelProps {
   rangeDays: UsageRangeDays;
   onTenantChange: (tenantId: string) => void;
   onRangeChange: (days: UsageRangeDays) => void;
+  onRefresh: () => void;
   tenantsQuery: TenantsQuery;
   summaryQuery: UsageSummaryQuery;
   seriesQuery: UsageSeriesQuery;
@@ -31,6 +32,7 @@ export function UsagePanel({
   rangeDays,
   onTenantChange,
   onRangeChange,
+  onRefresh,
   tenantsQuery,
   summaryQuery,
   seriesQuery,
@@ -42,22 +44,13 @@ export function UsagePanel({
     seriesQuery.isFetching ||
     byKeyQuery.isFetching;
 
-  const handleRefresh = () => {
-    void Promise.all([
-      tenantsQuery.refetch(),
-      summaryQuery.refetch(),
-      seriesQuery.refetch(),
-      byKeyQuery.refetch(),
-    ]);
-  };
-
   return (
     <Panel labelledBy="usage-heading">
       <PanelHeader id="usage-heading" eyebrow="Telemetry" title="Usage">
         {masterKey !== null && (
           <Button
             variant="ghost"
-            onClick={handleRefresh}
+            onClick={onRefresh}
             disabled={isRefreshing}
             aria-label="Refresh usage"
           >
@@ -88,7 +81,7 @@ export function UsagePanel({
   );
 }
 
-type UsageContentProps = Omit<UsagePanelProps, 'masterKey'>;
+type UsageContentProps = Omit<UsagePanelProps, 'masterKey' | 'onRefresh'>;
 
 function UsageContent({
   tenantId,
@@ -236,6 +229,15 @@ function UsageControls({
   tenantSelectId,
   rangeLabelId,
 }: UsageControlsProps) {
+  const tenantNoteId = useId();
+  const tenantsData = tenantsQuery.data;
+  const tenantCountNote =
+    tenantsData !== undefined && tenantsData.total > tenantsData.items.length
+      ? `Showing ${formatExactNumber(tenantsData.items.length)} of ${formatExactNumber(
+          tenantsData.total,
+        )} tenants`
+      : null;
+
   return (
     <div className="border-b border-line pb-4">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
@@ -252,6 +254,7 @@ function UsageControls({
               value={tenantId}
               onChange={(event) => onTenantChange(event.target.value)}
               disabled={tenantsQuery.isPending}
+              aria-describedby={tenantCountNote !== null ? tenantNoteId : undefined}
               className="mt-1 block w-full min-w-0 rounded-md border border-line-strong bg-white px-2.5 py-1.5 text-[12.5px] text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/15 disabled:cursor-not-allowed disabled:bg-surface-sunken disabled:text-ink-muted"
             >
               <option value="">All tenants</option>
@@ -261,6 +264,14 @@ function UsageControls({
                 </option>
               ))}
             </select>
+            {tenantCountNote !== null && (
+              <p
+                id={tenantNoteId}
+                className="mt-1 font-mono text-[10px] tabular-nums text-ink-muted"
+              >
+                {tenantCountNote}
+              </p>
+            )}
           </div>
 
           <div>

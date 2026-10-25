@@ -101,6 +101,9 @@ export function UsageChart({ points }: UsageChartProps) {
           {points.length > 1 ? formatUsageAxis(lastPoint.bucket_start) : ''}
         </span>
       </div>
+      <p className="mt-1.5 font-mono text-[10px] leading-4 text-ink-muted">
+        Last bar covers today so far (UTC).
+      </p>
       {allZero && (
         <p className="mt-2 text-[11px] text-ink-muted">No tokens recorded in this range.</p>
       )}

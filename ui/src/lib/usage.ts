@@ -11,6 +11,11 @@ export const USAGE_BY_KEY_LIMIT = 100;
 
 const MS_PER_DAY = 86_400_000;
 
-export function usageRangeSinceIso(days: UsageRangeDays, nowMs: number = Date.now()): string {
-  return new Date(nowMs - days * MS_PER_DAY).toISOString();
+export function usageRangeSinceIso(days: UsageRangeDays, anchor: Date = new Date()): string {
+  const anchorMidnight = Date.UTC(
+    anchor.getUTCFullYear(),
+    anchor.getUTCMonth(),
+    anchor.getUTCDate(),
+  );
+  return new Date(anchorMidnight - days * MS_PER_DAY).toISOString();
 }

@@ -3,6 +3,7 @@ import { useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import type { ModelsQuery } from '../hooks/useModels';
 import { useTenants } from '../hooks/useTenants';
 import { useUsageByKey, useUsageSeries, useUsageSummary } from '../hooks/useUsage';
+import { formatUpdatedAt } from '../lib/format';
 import { DEFAULT_USAGE_RANGE_DAYS, usageRangeSinceIso, type UsageRangeDays } from '../lib/usage';
 import { ModelsIcon, UsageIcon } from './Icons';
 import { ModelsPanel } from './ModelsPanel';
@@ -24,9 +25,10 @@ export function Workspace({ masterKey, modelsQuery }: WorkspaceProps) {
   const [tab, setTab] = useState<WorkspaceTab>('models');
   const [tenantId, setTenantId] = useState('');
   const [rangeDays, setRangeDays] = useState<UsageRangeDays>(DEFAULT_USAGE_RANGE_DAYS);
+  const [anchor, setAnchor] = useState(() => new Date());
   const tabRefs = useRef<Partial<Record<WorkspaceTab, HTMLButtonElement | null>>>({});
 
-  const since = useMemo(() => usageRangeSinceIso(rangeDays), [rangeDays]);
+  const since = useMemo(() => usageRangeSinceIso(rangeDays, anchor), [rangeDays, anchor]);
   const usageWindow = useMemo(
     () => ({ tenantId: tenantId === '' ? null : tenantId, since }),
     [tenantId, since],
@@ -36,6 +38,48 @@ export function Workspace({ masterKey, modelsQuery }: WorkspaceProps) {
   const summaryQuery = useUsageSummary(masterKey, usageWindow);
   const seriesQuery = useUsageSeries(masterKey, usageWindow);
   const byKeyQuery = useUsageByKey(masterKey, usageWindow);
+
+  const usageUpdatedAt = Math.max(
+    summaryQuery.dataUpdatedAt,
+    seriesQuery.dataUpdatedAt,
+    byKeyQuery.dataUpdatedAt,
+  );
+  const usageHasError = summaryQuery.isError || seriesQuery.isError || byKeyQuery.isError;
+  const usageSettled =
+    summaryQuery.status === 'success' &&
+    seriesQuery.status === 'success' &&
+    byKeyQuery.status === 'success' &&
+    !summaryQuery.isFetching &&
+    !seriesQuery.isFetching &&
+    !byKeyQuery.isFetching;
+
+  const announcement =
+    masterKey !== null && !usageHasError && usageSettled && usageUpdatedAt > 0
+      ? `Usage updated at ${formatUpdatedAt(usageUpdatedAt)} for the last ${rangeDays} days.`
+      : '';
+
+  const handleRangeChange = (days: UsageRangeDays) => {
+    setRangeDays(days);
+    setAnchor(new Date());
+  };
+
+  const handleRefresh = () => {
+    const nextAnchor = new Date();
+    const nextSince = usageRangeSinceIso(rangeDays, nextAnchor);
+    setAnchor(nextAnchor);
+
+    if (nextSince === since) {
+      void Promise.all([
+        summaryQuery.refetch(),
+        seriesQuery.refetch(),
+        byKeyQuery.refetch(),
+        tenantsQuery.refetch(),
+      ]);
+      return;
+    }
+
+    void tenantsQuery.refetch();
+  };
 
   const handleTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
     const currentIndex = TABS.findIndex((item) => item.id === tab);
@@ -95,6 +139,12 @@ export function Workspace({ masterKey, modelsQuery }: WorkspaceProps) {
         </div>
       </div>
 
+      {announcement !== '' && (
+        <p role="status" className="sr-only">
+          {announcement}
+        </p>
+      )}
+
       <div
         role="tabpanel"
         id="models-panel"
@@ -117,7 +167,8 @@ export function Workspace({ masterKey, modelsQuery }: WorkspaceProps) {
           tenantId={tenantId}
           rangeDays={rangeDays}
           onTenantChange={setTenantId}
-          onRangeChange={setRangeDays}
+          onRangeChange={handleRangeChange}
+          onRefresh={handleRefresh}
           tenantsQuery={tenantsQuery}
           summaryQuery={summaryQuery}
           seriesQuery={seriesQuery}
