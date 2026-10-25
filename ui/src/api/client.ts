@@ -1,3 +1,5 @@
+import { withTimeout } from '../lib/timeout';
+
 export interface HealthResponse {
   status: 'ok';
   version: string;
@@ -67,14 +69,15 @@ function isModelSummary(value: unknown): value is ModelSummary {
 }
 
 async function send(path: string, init: RequestInit = {}): Promise<Response> {
-  const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
-  const signal = init.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
+  const callerSignal = init.signal ?? undefined;
+  let signal: AbortSignal | undefined;
 
   try {
+    signal = withTimeout(callerSignal, REQUEST_TIMEOUT_MS);
     return await fetch(path, { ...init, signal });
   } catch (error) {
-    if (init.signal?.aborted) throw error;
-    if (timeout.aborted) {
+    if (callerSignal?.aborted) throw error;
+    if (signal?.aborted) {
       throw new ApiRequestError({
         status: 0,
         message: 'The request timed out after 10 seconds.',

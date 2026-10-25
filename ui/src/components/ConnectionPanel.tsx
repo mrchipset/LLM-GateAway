@@ -1,20 +1,39 @@
-import { useId, useState, type FormEvent } from 'react';
+import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 
 import { Button } from './Button';
 import { Panel, PanelHeader } from './Panel';
 
 const MEMORY_NOTE = 'Kept in memory for this browser session; it is not written to storage.';
+const REJECTED_NOTE = 'Disconnect, then connect with another master key.';
 
 interface ConnectionPanelProps {
   connected: boolean;
+  rejected: boolean;
   onConnect: (masterKey: string) => void;
   onDisconnect: () => void;
 }
 
-export function ConnectionPanel({ connected, onConnect, onDisconnect }: ConnectionPanelProps) {
+export function ConnectionPanel({
+  connected,
+  rejected,
+  onConnect,
+  onDisconnect,
+}: ConnectionPanelProps) {
   const [draft, setDraft] = useState('');
   const inputId = useId();
   const noteId = useId();
+  const inputRef = useRef<HTMLInputElement>(null);
+  const statusRef = useRef<HTMLDivElement>(null);
+  const wasConnectedRef = useRef(connected);
+
+  useEffect(() => {
+    if (connected) {
+      statusRef.current?.focus();
+    } else if (wasConnectedRef.current) {
+      inputRef.current?.focus();
+    }
+    wasConnectedRef.current = connected;
+  }, [connected]);
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -30,11 +49,24 @@ export function ConnectionPanel({ connected, onConnect, onDisconnect }: Connecti
       <div className="p-5">
         {connected ? (
           <div>
-            <div className="flex items-center gap-2">
-              <span className="size-2 rounded-full bg-ok" aria-hidden="true" />
-              <p className="text-[13px] font-medium text-ink">Master key loaded</p>
+            <div
+              ref={statusRef}
+              role="group"
+              tabIndex={-1}
+              aria-label={rejected ? 'Master key rejected' : 'Master key loaded'}
+              className="flex w-fit items-center gap-2 rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+            >
+              <span
+                className={`size-2 rounded-full ${rejected ? 'bg-danger' : 'bg-ok'}`}
+                aria-hidden="true"
+              />
+              <p className={`text-[13px] font-medium ${rejected ? 'text-danger' : 'text-ink'}`}>
+                {rejected ? 'Master key rejected' : 'Master key loaded'}
+              </p>
             </div>
-            <p className="mt-2 text-xs leading-5 text-ink-muted">{MEMORY_NOTE}</p>
+            <p className="mt-2 text-xs leading-5 text-ink-muted">
+              {rejected ? REJECTED_NOTE : MEMORY_NOTE}
+            </p>
             <Button variant="secondary" className="mt-4 w-full" onClick={onDisconnect}>
               Disconnect
             </Button>
@@ -45,6 +77,7 @@ export function ConnectionPanel({ connected, onConnect, onDisconnect }: Connecti
               Master key
             </label>
             <input
+              ref={inputRef}
               id={inputId}
               type="password"
               value={draft}

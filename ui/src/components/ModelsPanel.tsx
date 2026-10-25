@@ -1,7 +1,7 @@
 import { useState } from 'react';
 
 import { ApiRequestError, type ModelSummary } from '../api/client';
-import { useModels } from '../hooks/useModels';
+import type { ModelsQuery } from '../hooks/useModels';
 import { formatCreatedAt, formatUpdatedAt } from '../lib/format';
 import { Button } from './Button';
 import { KeyIcon, RefreshIcon } from './Icons';
@@ -12,12 +12,18 @@ const CURL_COMMAND =
 
 interface ModelsPanelProps {
   masterKey: string | null;
+  query: ModelsQuery;
 }
 
-export function ModelsPanel({ masterKey }: ModelsPanelProps) {
-  const query = useModels(masterKey);
-  const total = query.status === 'success' ? query.data.total : undefined;
-  const count = total === undefined ? null : `${total} ${total === 1 ? 'model' : 'models'}`;
+export function ModelsPanel({ masterKey, query }: ModelsPanelProps) {
+  const count =
+    query.status === 'success'
+      ? query.data.items.length < query.data.total
+        ? `Showing ${query.data.items.length} of ${query.data.total}`
+        : query.data.total === 1
+          ? '1 model'
+          : `${query.data.total} models`
+      : null;
 
   return (
     <Panel labelledBy="models-heading">
@@ -52,7 +58,7 @@ export function ModelsPanel({ masterKey }: ModelsPanelProps) {
 
 interface ModelsContentProps {
   masterKey: string | null;
-  query: ReturnType<typeof useModels>;
+  query: ModelsQuery;
 }
 
 function ModelsContent({ masterKey, query }: ModelsContentProps) {

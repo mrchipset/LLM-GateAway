@@ -31,6 +31,30 @@ describe('backend health', () => {
     expect(status).not.toHaveTextContent('Healthy');
   });
 
+  it('shows degraded readiness without reporting healthy liveness as offline', async () => {
+    installFetchMock({
+      '/readyz': () =>
+        jsonResponse(
+          {
+            error: {
+              message: 'Internal server error',
+              type: 'server_error',
+              param: null,
+              code: 'internal_error',
+              request_id: 'req_ready_500',
+            },
+          },
+          500,
+        ),
+    });
+    renderApp();
+
+    expect(await screen.findByText('Readiness degraded')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('The readiness check did not respond.');
+    expect(screen.queryByText('Backend unreachable')).not.toBeInTheDocument();
+    expect(screen.getByText('v0.1.0')).toBeInTheDocument();
+  });
+
   it('shows the backend as unreachable and recovers after a retry', async () => {
     installFetchMock({
       '/healthz': () => {

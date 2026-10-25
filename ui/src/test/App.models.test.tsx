@@ -50,6 +50,17 @@ describe('model registry', () => {
     expect(within(table).getByText('Disabled')).toBeInTheDocument();
   });
 
+  it('shows how many models are rendered when the registry exceeds one page', async () => {
+    installFetchMock({ '/api/v1/models': () => jsonResponse(payload(MODELS, 150)) });
+    const user = userEvent.setup();
+    renderApp();
+
+    await connectWithKey(user);
+
+    expect(await screen.findByText('Showing 2 of 150')).toBeInTheDocument();
+    expect(screen.queryByText('150 models')).not.toBeInTheDocument();
+  });
+
   it('shows the registration hint with a curl command when the registry is empty', async () => {
     installFetchMock();
     const user = userEvent.setup();
@@ -96,6 +107,30 @@ describe('model registry', () => {
     await waitFor(() => {
       expect(modelCalls(fetchMock)).toHaveLength(2);
     });
+  });
+
+  it('renders one compact card per model with id, upstream model, and created time', async () => {
+    const expectedCards = [
+      { id: 'gpt-4o-mini', upstream: 'gpt-4o-mini-2024-07-18', created: 'Oct 24, 2026, 17:24 UTC' },
+      { id: 'legacy-chat', upstream: 'gpt-3.5-turbo', created: 'Oct 23, 2026, 09:05 UTC' },
+    ];
+    installFetchMock({ '/api/v1/models': () => jsonResponse(payload(MODELS)) });
+    const user = userEvent.setup();
+    renderApp();
+
+    await connectWithKey(user);
+    await screen.findByRole('table', { name: 'Registered models' });
+
+    const list = screen.getByRole('list');
+    expect(within(list).getAllByRole('listitem')).toHaveLength(expectedCards.length);
+
+    for (const expected of expectedCards) {
+      const item = within(list).getByText(expected.id).closest('li');
+      expect(item).not.toBeNull();
+      if (item === null) continue;
+      expect(within(item).getByText(expected.upstream)).toBeInTheDocument();
+      expect(within(item).getByText(expected.created)).toBeInTheDocument();
+    }
   });
 
   it('renders created_at in UTC so timestamps do not depend on the machine timezone', async () => {

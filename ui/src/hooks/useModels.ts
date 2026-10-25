@@ -15,3 +15,5 @@ export function useModels(masterKey: string | null) {
     retry: false,
   });
 }
+
+export type ModelsQuery = ReturnType<typeof useModels>;

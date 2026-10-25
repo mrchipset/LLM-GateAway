@@ -1,15 +1,24 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 
+import { ApiRequestError } from './api/client';
 import { ConnectionPanel } from './components/ConnectionPanel';
 import { Header } from './components/Header';
 import { ModelsPanel } from './components/ModelsPanel';
 import { useBackendStatus } from './hooks/useBackendStatus';
+import { useModels } from './hooks/useModels';
 
 export default function App() {
   const [masterKey, setMasterKey] = useState<string | null>(null);
   const queryClient = useQueryClient();
   const status = useBackendStatus();
+  const modelsQuery = useModels(masterKey);
+
+  const keyRejected =
+    masterKey !== null &&
+    modelsQuery.isError &&
+    modelsQuery.error instanceof ApiRequestError &&
+    modelsQuery.error.status === 401;
 
   const handleDisconnect = () => {
     setMasterKey(null);
@@ -27,13 +36,14 @@ export default function App() {
             <div className="lg:sticky lg:top-6">
               <ConnectionPanel
                 connected={masterKey !== null}
+                rejected={keyRejected}
                 onConnect={setMasterKey}
                 onDisconnect={handleDisconnect}
               />
             </div>
           </div>
           <div className="min-w-0 animate-rise [animation-delay:160ms]">
-            <ModelsPanel masterKey={masterKey} />
+            <ModelsPanel masterKey={masterKey} query={modelsQuery} />
           </div>
         </main>
       </div>
