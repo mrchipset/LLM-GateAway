@@ -12,6 +12,7 @@ import respx
 
 from llm_gateway.providers.base import (
     ProviderConnectionError,
+    ProviderName,
     ProviderResponseError,
     ProviderTimeoutError,
     ProviderUpstreamError,
@@ -26,6 +27,8 @@ from llm_gateway.schemas.chat import (
 API_KEY = "sk-test-secret-value"
 BASE_URL = "https://upstream.test/v1"
 CHAT_URL = f"{BASE_URL}/chat/completions"
+DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+DEEPSEEK_CHAT_URL = f"{DEEPSEEK_BASE_URL}/chat/completions"
 
 
 class MaxUniformRandom(Random):
@@ -96,6 +99,23 @@ def make_provider(
     )
 
 
+def make_deepseek_provider(
+    *,
+    client: httpx.AsyncClient | None = None,
+    max_attempts: int = 1,
+) -> OpenAIProvider:
+    return OpenAIProvider(
+        name=ProviderName.DEEPSEEK,
+        api_key=API_KEY,
+        base_url=DEEPSEEK_BASE_URL,
+        timeout=httpx.Timeout(5.0),
+        retry_policy=RetryPolicy(max_attempts=max_attempts),
+        client=client,
+        sleeper=RecordingSleeper(),
+        rng=MaxUniformRandom(0),
+    )
+
+
 def make_request() -> ChatCompletionRequest:
     return ChatCompletionRequest.model_validate(
         {
@@ -129,12 +149,15 @@ def chunk_payload(
     *,
     role: str | None = None,
     finish_reason: str | None = None,
+    reasoning: str | None = None,
 ) -> dict[str, object]:
     delta: dict[str, object] = {}
     if role is not None:
         delta["role"] = role
     if content is not None:
         delta["content"] = content
+    if reasoning is not None:
+        delta["reasoning_content"] = reasoning
     return {
         "id": "chatcmpl-up",
         "object": "chat.completion.chunk",
@@ -604,4 +627,70 @@ async def test_stream_handles_crlf_separator_split_across_chunks() -> None:
 
     assert [chunk.choices[0].delta.content for chunk in chunks] == ["", "hi"]
     assert chunks[-1].choices[0].finish_reason == "stop"
+    assert stream.closed
+
+
+async def test_deepseek_provider_targets_its_own_endpoint_and_reports_name() -> None:
+    with respx.mock(assert_all_called=False) as router:
+        route = router.post(DEEPSEEK_CHAT_URL).mock(
+            return_value=httpx.Response(200, json=completion_body())
+        )
+        provider = make_deepseek_provider()
+
+        response = await provider.complete(upstream_model="deepseek-flash", request=make_request())
+
+        assert len(route.calls) == 1
+        assert route.calls[-1].request.url == DEEPSEEK_CHAT_URL
+        assert route.calls[-1].request.headers["Authorization"] == f"Bearer {API_KEY}"
+
+    assert response.id == "chatcmpl-upstream"
+    assert provider.name is ProviderName.DEEPSEEK
+
+
+async def test_complete_preserves_reasoning_content() -> None:
+    body = {
+        "id": "chatcmpl-upstream",
+        "object": "chat.completion",
+        "created": 100,
+        "model": "deepseek-flash",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "The answer is 4.",
+                    "reasoning_content": "Let me add two and two.",
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 2, "completion_tokens": 2, "total_tokens": 4},
+    }
+
+    with respx.mock(assert_all_called=False) as router:
+        router.post(DEEPSEEK_CHAT_URL).mock(return_value=httpx.Response(200, json=body))
+        provider = make_deepseek_provider()
+
+        response = await provider.complete(upstream_model="deepseek-flash", request=make_request())
+
+    message = response.model_dump()["choices"][0]["message"]
+    assert message["content"] == "The answer is 4."
+    assert message["reasoning_content"] == "Let me add two and two."
+
+
+async def test_stream_preserves_reasoning_content_delta() -> None:
+    first = chunk_payload("", role="assistant", reasoning="Thinking step by step.")
+    second = chunk_payload("4", finish_reason="stop")
+    raw = (sse_event(first) + sse_event(second) + "data: [DONE]\n\n").encode()
+    stream = RecordingByteStream([raw])
+
+    with respx.mock(assert_all_called=False) as router:
+        router.post(DEEPSEEK_CHAT_URL).mock(return_value=httpx.Response(200, stream=stream))
+        provider = make_deepseek_provider()
+
+        chunks = await collect_chunks(provider, make_request())
+
+    first_delta = chunks[0].model_dump()["choices"][0]["delta"]
+    assert first_delta["reasoning_content"] == "Thinking step by step."
+    assert chunks[1].choices[0].delta.content == "4"
     assert stream.closed

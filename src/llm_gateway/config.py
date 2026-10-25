@@ -36,6 +36,8 @@ class Settings(BaseSettings):
     redis_url: str | None = None
     openai_api_key: SecretStr | None = None
     openai_base_url: str = "https://api.openai.com/v1"
+    deepseek_api_key: SecretStr | None = None
+    deepseek_base_url: str = "https://api.deepseek.com"
     fake_provider_enabled: bool = False
     request_timeout_seconds: float = Field(default=60.0, gt=0)
     connect_timeout_seconds: float = Field(default=10.0, gt=0)

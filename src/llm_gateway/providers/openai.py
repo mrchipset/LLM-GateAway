@@ -64,6 +64,12 @@ def _parse_sse_line(line: str) -> str | None:
 
 
 class OpenAIProvider:
+    """Serves OpenAI and other OpenAI-compatible providers.
+
+    DeepSeek and similar upstreams share the same wire protocol, so a different
+    ``name`` and ``base_url`` are enough to target them without a new adapter.
+    """
+
     name = ProviderName.OPENAI
 
     def __init__(
@@ -73,10 +79,12 @@ class OpenAIProvider:
         base_url: str,
         timeout: httpx.Timeout,
         retry_policy: RetryPolicy,
+        name: ProviderName = ProviderName.OPENAI,
         client: httpx.AsyncClient | None = None,
         sleeper: Sleeper = asyncio_sleep,
         rng: Random | None = None,
     ) -> None:
+        self.name = name
         self._api_key = api_key
         self._endpoint = f"{base_url.rstrip('/')}/chat/completions"
         self._retry_policy = retry_policy

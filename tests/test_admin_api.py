@@ -13,7 +13,9 @@ from llm_gateway.config import Settings
 from llm_gateway.container import Container
 from llm_gateway.providers.base import ProviderName
 from llm_gateway.providers.fake import FakeProvider
+from llm_gateway.providers.openai import OpenAIProvider
 from llm_gateway.providers.registry import ProviderRegistry
+from llm_gateway.providers.retry import RetryPolicy
 from support import FROZEN_NOW, FrozenClock, seed_api_key, seed_model
 
 FAKE_MODEL = "fake-model"
@@ -49,6 +51,20 @@ def _auth(secret: str) -> dict[str, str]:
 
 def _registry(clock: Any) -> ProviderRegistry:
     return ProviderRegistry({ProviderName.FAKE: FakeProvider(clock=clock)})
+
+
+def _deepseek_registry() -> ProviderRegistry:
+    return ProviderRegistry(
+        {
+            ProviderName.DEEPSEEK: OpenAIProvider(
+                name=ProviderName.DEEPSEEK,
+                api_key="sk-deepseek-test",
+                base_url="https://api.deepseek.com",
+                timeout=httpx.Timeout(5.0),
+                retry_policy=RetryPolicy(max_attempts=1),
+            )
+        }
+    )
 
 
 def _error(response: httpx.Response) -> dict[str, Any]:
@@ -328,6 +344,57 @@ async def test_create_model_returns_detail_and_rejects_conflicts(
     for invalid in (slash_id, space_id):
         assert invalid.status_code == 400
         assert _error(invalid)["code"] == "invalid_request_body"
+
+
+async def test_create_model_accepts_registered_deepseek_provider(
+    make_container: Callable[..., Container],
+    make_client: Callable[..., Any],
+    settings: Settings,
+) -> None:
+    container = make_container(settings, providers=_deepseek_registry(), clock=FrozenClock())
+
+    async with make_client(settings, container) as client:
+        created = await client.post(
+            "/api/v1/models",
+            json={
+                "id": "deepseek-flash",
+                "provider": "deepseek",
+                "upstream_model": "deepseek-flash",
+            },
+            headers=_auth(_master(settings)),
+        )
+
+    assert created.status_code == 201
+    body = created.json()
+    assert body["id"] == "deepseek-flash"
+    assert body["provider"] == "deepseek"
+    assert body["upstream_model"] == "deepseek-flash"
+
+
+async def test_create_model_rejects_unregistered_deepseek_provider(
+    make_container: Callable[..., Container],
+    make_client: Callable[..., Any],
+    settings: Settings,
+) -> None:
+    clock = FrozenClock()
+    container = make_container(settings, providers=_registry(clock), clock=clock)
+
+    async with make_client(settings, container) as client:
+        response = await client.post(
+            "/api/v1/models",
+            json={
+                "id": "deepseek-flash",
+                "provider": "deepseek",
+                "upstream_model": "deepseek-flash",
+            },
+            headers=_auth(_master(settings)),
+        )
+
+    assert response.status_code == 400
+    error = _error(response)
+    assert error["code"] == "provider_not_configured"
+    assert error["param"] == "provider"
+    assert "deepseek" in error["message"]
 
 
 async def test_list_models_includes_disabled_models_and_paginates(

@@ -121,6 +121,8 @@ def test_valid_development_settings_load() -> None:
     assert settings.connect_timeout_seconds > 0
     assert 0 <= settings.max_retries <= 5
     assert settings.openai_base_url
+    assert settings.deepseek_api_key is None
+    assert settings.deepseek_base_url == "https://api.deepseek.com"
     assert settings.fake_provider_enabled is False
 
 
@@ -134,6 +136,21 @@ def test_settings_load_from_gateway_env_prefix(
 
     assert settings.environment is Environment.DEVELOPMENT
     assert settings.master_key.get_secret_value() == MASTER_KEY
+
+
+def test_deepseek_settings_load_from_gateway_env_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GATEWAY_ENVIRONMENT", "development")
+    monkeypatch.setenv("GATEWAY_MASTER_KEY", MASTER_KEY)
+    monkeypatch.setenv("GATEWAY_DEEPSEEK_API_KEY", "sk-deepseek-test")
+    monkeypatch.setenv("GATEWAY_DEEPSEEK_BASE_URL", "https://deepseek.test")
+
+    settings = _load_settings_without_env_file()
+
+    assert settings.deepseek_api_key is not None
+    assert settings.deepseek_api_key.get_secret_value() == "sk-deepseek-test"
+    assert settings.deepseek_base_url == "https://deepseek.test"
 
 
 def test_log_level_is_normalized_to_upper_case() -> None:

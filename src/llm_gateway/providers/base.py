@@ -13,6 +13,7 @@ from llm_gateway.schemas.chat import (
 
 class ProviderName(StrEnum):
     OPENAI = "openai"
+    DEEPSEEK = "deepseek"
     FAKE = "fake"
 
 

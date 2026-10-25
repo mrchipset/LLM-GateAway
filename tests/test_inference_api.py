@@ -6,6 +6,7 @@ from typing import Any, Literal
 
 import httpx
 import pytest
+import respx
 
 from llm_gateway.api.inference import _stream_sse
 from llm_gateway.config import Environment, Settings, StorageBackend
@@ -18,7 +19,9 @@ from llm_gateway.providers.base import (
     ProviderUpstreamError,
 )
 from llm_gateway.providers.fake import FakeProvider
+from llm_gateway.providers.openai import OpenAIProvider
 from llm_gateway.providers.registry import ProviderRegistry
+from llm_gateway.providers.retry import RetryPolicy
 from llm_gateway.schemas.chat import (
     ChatCompletionChunk,
     ChatCompletionChunkChoice,
@@ -81,6 +84,40 @@ async def _fake_setup(
         provider=ProviderName.FAKE,
         upstream_model=UPSTREAM_MODEL,
         enabled=enabled,
+    )
+    secret = await seed_api_key(container)
+    return container, secret
+
+
+DEEPSEEK_PUBLIC_MODEL = "deepseek-public"
+DEEPSEEK_UPSTREAM_MODEL = "deepseek-flash"
+DEEPSEEK_CHAT_URL = "https://api.deepseek.com/chat/completions"
+
+
+def _deepseek_provider() -> OpenAIProvider:
+    return OpenAIProvider(
+        name=ProviderName.DEEPSEEK,
+        api_key="sk-deepseek-test",
+        base_url="https://api.deepseek.com",
+        timeout=httpx.Timeout(5.0),
+        retry_policy=RetryPolicy(max_attempts=1),
+    )
+
+
+async def _deepseek_setup(
+    make_container: Callable[..., Container],
+    settings: Settings,
+) -> tuple[Container, str]:
+    container = make_container(
+        settings,
+        providers=_registry(_deepseek_provider()),
+        clock=FrozenClock(),
+    )
+    await seed_model(
+        container,
+        model_id=DEEPSEEK_PUBLIC_MODEL,
+        provider=ProviderName.DEEPSEEK,
+        upstream_model=DEEPSEEK_UPSTREAM_MODEL,
     )
     secret = await seed_api_key(container)
     return container, secret
@@ -535,3 +572,123 @@ def test_build_container_uses_memory_backend_without_readiness_checks(
 
     assert container.database is None
     assert container.readiness_checks == ()
+
+
+async def test_deepseek_completion_rewrites_model_and_preserves_reasoning_content(
+    make_container: Callable[..., Container],
+    make_client: Callable[..., Any],
+    settings: Settings,
+) -> None:
+    container, secret = await _deepseek_setup(make_container, settings)
+    upstream_body = {
+        "id": "chatcmpl-deepseek",
+        "object": "chat.completion",
+        "created": 100,
+        "model": DEEPSEEK_UPSTREAM_MODEL,
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "The answer is 4.",
+                    "reasoning_content": "Adding two and two.",
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 3, "completion_tokens": 4, "total_tokens": 7},
+    }
+
+    with respx.mock(assert_all_called=False) as router:
+        route = router.post(DEEPSEEK_CHAT_URL).mock(
+            return_value=httpx.Response(200, json=upstream_body)
+        )
+
+        async with make_client(settings, container) as client:
+            response = await client.post(
+                "/v1/chat/completions",
+                json={"model": DEEPSEEK_PUBLIC_MODEL, "messages": [USER_MESSAGE]},
+                headers=_auth(secret),
+            )
+
+        assert len(route.calls) == 1
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["model"] == DEEPSEEK_PUBLIC_MODEL
+    message = body["choices"][0]["message"]
+    assert message["content"] == "The answer is 4."
+    assert message["reasoning_content"] == "Adding two and two."
+
+
+async def test_deepseek_stream_forwards_usage_on_last_chunk_without_separate_usage_chunk(
+    make_container: Callable[..., Container],
+    make_client: Callable[..., Any],
+    settings: Settings,
+) -> None:
+    container, secret = await _deepseek_setup(make_container, settings)
+    first_chunk = {
+        "id": "chunk-1",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": DEEPSEEK_UPSTREAM_MODEL,
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "role": "assistant",
+                    "content": "",
+                    "reasoning_content": "Thinking.",
+                },
+                "finish_reason": None,
+            }
+        ],
+    }
+    last_chunk = {
+        "id": "chunk-1",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": DEEPSEEK_UPSTREAM_MODEL,
+        "choices": [
+            {
+                "index": 0,
+                "delta": {"content": "final answer"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+    }
+    raw = (
+        f"data: {json.dumps(first_chunk)}\n\ndata: {json.dumps(last_chunk)}\n\ndata: [DONE]\n\n"
+    ).encode()
+
+    with respx.mock(assert_all_called=False) as router:
+        route = router.post(DEEPSEEK_CHAT_URL).mock(return_value=httpx.Response(200, content=raw))
+
+        async with make_client(settings, container) as client:
+            response = await client.post(
+                "/v1/chat/completions",
+                json={
+                    "model": DEEPSEEK_PUBLIC_MODEL,
+                    "messages": [USER_MESSAGE],
+                    "stream": True,
+                    "stream_options": {"include_usage": True},
+                },
+                headers=_auth(secret),
+            )
+
+        assert len(route.calls) == 1
+        sent = json.loads(route.calls[-1].request.content)
+        assert sent["stream"] is True
+        assert sent["stream_options"] == {"include_usage": True}
+
+    assert response.status_code == 200
+    frames = parse_sse(response.text)
+    assert frames[-1] == "[DONE]"
+
+    chunks = [json.loads(frame) for frame in frames[:-1]]
+    assert len(chunks) == 2
+    assert all(chunk["model"] == DEEPSEEK_PUBLIC_MODEL for chunk in chunks)
+    assert chunks[0]["choices"][0]["delta"]["reasoning_content"] == "Thinking."
+    assert chunks[-1]["choices"][0]["delta"]["content"] == "final answer"
+    assert chunks[-1]["usage"]["total_tokens"] == 5
