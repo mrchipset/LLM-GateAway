@@ -6,7 +6,7 @@
 
 - OpenAI 兼容的 `POST /v1/chat/completions`，支持 `stream=true` 与 `stream=false`
 - `GET /v1/models` 返回已启用的模型
-- Provider 抽象：OpenAI adapter 与确定性 Fake provider
+- Provider 抽象：OpenAI、DeepSeek（OpenAI 兼容）adapter 与确定性 Fake provider
 - API key 认证：只存 SHA-256 哈希，支持过期与吊销
 - 管理 API：`/api/v1/keys`、`/api/v1/models`，由 master key 保护
 - PostgreSQL 持久化（SQLAlchemy 2 async + Alembic），默认也可用内存模式本地开发
@@ -158,6 +158,32 @@ Invoke-RestMethod -Method Post `
 
 客户端只使用网关返回的 `gpt-4o-mini`，上游模型名变化时无需改客户端。
 
+## 接入 DeepSeek
+
+DeepSeek 的 Chat Completions 接口与 OpenAI 兼容，复用同一个 adapter，只需要单独的 key 与 base URL：
+
+```dotenv
+GATEWAY_DEEPSEEK_API_KEY=sk-...
+GATEWAY_DEEPSEEK_BASE_URL=https://api.deepseek.com
+```
+
+重启服务后注册模型。模型 id 以 DeepSeek 当前文档为准；旧的 `deepseek-chat` / `deepseek-reasoner` 已停用：
+
+```powershell
+Invoke-RestMethod -Method Post `
+  -Uri http://127.0.0.1:4000/api/v1/models `
+  -Headers @{ Authorization = "Bearer $master" } `
+  -ContentType "application/json" `
+  -Body '{"id":"deepseek-flash","provider":"deepseek","upstream_model":"deepseek-flash"}'
+```
+
+注意事项：
+
+- 思考模式的 `reasoning_content` 会原样透传给客户端（流式 delta 同样保留）。
+- 带 `tools` 的多轮对话中，历史 assistant 消息里的 `reasoning_content` 必须回传，否则 DeepSeek 返回 400。
+- DeepSeek 在 `stream_options.include_usage=true` 时把 usage 附在最后一个内容 chunk 上，没有独立的 usage-only chunk；网关按原样转发。
+- 推理模型首 token 可能较慢，必要时提高 `GATEWAY_REQUEST_TIMEOUT_SECONDS`。
+
 ## 配置项
 
 | 变量 | 说明 |
@@ -170,6 +196,8 @@ Invoke-RestMethod -Method Post `
 | `GATEWAY_REDIS_URL` | 预留，当前未使用 |
 | `GATEWAY_OPENAI_API_KEY` | 为空时不注册 OpenAI provider |
 | `GATEWAY_OPENAI_BASE_URL` | 默认 `https://api.openai.com/v1` |
+| `GATEWAY_DEEPSEEK_API_KEY` | 为空时不注册 DeepSeek provider |
+| `GATEWAY_DEEPSEEK_BASE_URL` | 默认 `https://api.deepseek.com` |
 | `GATEWAY_FAKE_PROVIDER_ENABLED` | 仅开发/测试使用，production 禁止开启 |
 | `GATEWAY_REQUEST_TIMEOUT_SECONDS` | 上游请求总超时，默认 60 |
 | `GATEWAY_CONNECT_TIMEOUT_SECONDS` | 连接超时，默认 10 |
@@ -298,7 +326,7 @@ design.md            LLM-GateAway 设计建议
 
 ## 已知限制
 
-- 仅实现 OpenAI provider 与 fake provider；其他厂商适配器尚未加入。
+- 仅实现 OpenAI、DeepSeek（OpenAI 兼容）与 fake provider；Anthropic、Bedrock、Vertex 等非 OpenAI 协议尚未加入。
 - 每个模型对应一个上游模型，不支持多 deployment、权重、fallback 或 cooldown。
 - 没有预算、计费、限流、guardrail、缓存、审计日志与多租户。
 - 模型配置只有创建、列出、删除，没有更新接口；修改需删除后重建。
