@@ -236,7 +236,28 @@ Invoke-RestMethod `
 - `total_tokens` 使用上游上报值，不做重新计算。
 - `by_model` 按 `(model_id, provider)` 分组；同一个模型名如果换过 provider，会出现两行。
 - 用量写入失败不会影响推理响应，只记录 `usage_record_failed` 告警；客户端在 usage 到达前断开时可能没有记录。
-- 目前没有按 key 的汇总端点，也没有用量 UI。
+
+按 key 汇总：
+
+```powershell
+Invoke-RestMethod `
+  -Uri "http://127.0.0.1:4000/api/v1/usage/by-key?tenant_id=$($tenant.id)&limit=100" `
+  -Headers @{ Authorization = "Bearer $master" }
+```
+
+返回按总 token 降序的 `items`（key 名称、前缀、输入/输出/缓存/总 token、请求数）。`limit` 默认 100、最大 500；无法解析的 key 显示 `null`。
+
+时间序列：
+
+```powershell
+Invoke-RestMethod `
+  -Uri "http://127.0.0.1:4000/api/v1/usage/series?tenant_id=$($tenant.id)&bucket=day&since=2026-10-01T00:00:00Z" `
+  -Headers @{ Authorization = "Bearer $master" }
+```
+
+- `since` / `until` 缺省为最近 30 天；只传 `since` 时 `until` 默认为当前时间。
+- `bucket` 支持 `hour` 与 `day`，返回按 UTC 对齐且**补零**的 `points`（最多 1000 个桶），适合直接画图。
+- 管理台暂不展示用量；没有成本换算。
 
 ## 租户配额与限流
 

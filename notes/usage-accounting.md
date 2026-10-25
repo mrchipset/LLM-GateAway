@@ -95,9 +95,21 @@ come from one transaction.
   row; a provider that reports inconsistent totals is stored verbatim.
 - Cached-token semantics differ (OpenAI cache reads vs DeepSeek cache hits);
   the normalized column means "prompt tokens served from a provider cache".
-- The summary is offset/aggregate only: no time-bucketed series, no per-key
-  endpoint, and no cost. Those are follow-ups, not silent gaps.
-- The admin UI does not display usage yet.
+## Reporting endpoints
+
+- `GET /api/v1/usage/summary` returns totals plus a per-model breakdown
+  (grouped by `(model_id, provider)`).
+- `GET /api/v1/usage/by-key` returns per-key totals with names resolved in one
+  bulk lookup; keys that cannot be resolved show `null`. The endpoint is bounded
+  by `limit` (default 100, max 500) and ordered by total tokens desc.
+- `GET /api/v1/usage/series` returns UTC hour/day buckets. Buckets are aligned
+  and zero-filled so a chart never has to infer gaps from array positions; the
+  first bucket may start before the requested `since` because it is aligned.
+  The default window is the last 30 days and the endpoint caps at 1000 buckets.
+- All filters are half-open `[since, until)`, share naive/inverted-window
+  validation, and return 404 for an unknown tenant.
+- Cost conversion and per-key quotas remain out of scope. The console usage
+  panel is delivered separately.
 
 ## References
 
