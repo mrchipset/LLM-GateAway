@@ -1,0 +1,67 @@
+@import 'tailwindcss';
+
+@theme {
+  --font-sans: 'IBM Plex Sans Variable', 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --color-canvas: #f3f2ee;
+  --color-surface: #fcfcfa;
+  --color-surface-sunken: #efeee8;
+  --color-ink: #16181a;
+  --color-ink-muted: #5b625f;
+  --color-line: #dedcd4;
+  --color-line-strong: #c6c3b9;
+  --color-accent: #1f4ed8;
+  --color-accent-strong: #183ea9;
+  --color-ok: #157347;
+  --color-ok-soft: #e7f2eb;
+  --color-warn: #8a5200;
+  --color-warn-soft: #f9efdc;
+  --color-danger: #b3261e;
+  --color-danger-soft: #faeceb;
+
+  --animate-rise: rise 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+:root {
+  color-scheme: light;
+}
+
+body {
+  margin: 0;
+  background-color: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: #cdd7fa;
+  color: var(--color-ink);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-delay: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
