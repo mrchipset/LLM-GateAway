@@ -21,6 +21,12 @@ from llm_gateway.schemas.chat import (
     ModelSummary,
 )
 from llm_gateway.services.chat import ChatService, ChatStream, map_provider_error
+from llm_gateway.services.usage import (
+    USAGE_WRITE_TIMEOUT_SECONDS,
+    UsageContext,
+    UsageRecorder,
+    record_usage_safely,
+)
 
 logger = get_logger(__name__)
 
@@ -34,11 +40,23 @@ def get_chat_service(container: Annotated[Container, Depends(get_container)]) ->
     return ChatService(models=container.models, providers=container.providers)
 
 
+def get_usage_recorder(
+    container: Annotated[Container, Depends(get_container)],
+) -> UsageRecorder:
+    return UsageRecorder(repository=container.usage, clock=container.clock)
+
+
 def _sse_frame(payload: str) -> bytes:
     return f"data: {payload}\n\n".encode()
 
 
-async def _stream_sse(stream: ChatStream) -> AsyncGenerator[bytes, None]:
+async def _stream_sse(
+    stream: ChatStream,
+    *,
+    recorder: UsageRecorder,
+    context: UsageContext,
+    timeout_seconds: float = USAGE_WRITE_TIMEOUT_SECONDS,
+) -> AsyncGenerator[bytes, None]:
     try:
         async for chunk in stream.chunks():
             yield _sse_frame(chunk.model_dump_json(exclude_none=True))
@@ -58,24 +76,54 @@ async def _stream_sse(stream: ChatStream) -> AsyncGenerator[bytes, None]:
         yield _sse_frame(json.dumps(error_payload(request_id, error)))
         yield _sse_frame("[DONE]")
     finally:
-        # Client disconnects cancel this generator; shield the release so the
-        # upstream connection is always closed.
+        # Client disconnects cancel this generator; shield both the release and
+        # the usage write so an upstream-billed request is still accounted for.
         with anyio.CancelScope(shield=True):
             await stream.aclose()
+            await record_usage_safely(
+                recorder=recorder,
+                context=context,
+                usage=stream.usage,
+                timeout_seconds=timeout_seconds,
+            )
 
 
 @router.post("/v1/chat/completions", response_model=ChatCompletionResponse)
 async def create_chat_completion(
     payload: ChatCompletionRequest,
-    _: Annotated[AuthenticatedKey, Depends(require_api_key)],
+    api_key: Annotated[AuthenticatedKey, Depends(require_api_key)],
     service: Annotated[ChatService, Depends(get_chat_service)],
+    recorder: Annotated[UsageRecorder, Depends(get_usage_recorder)],
 ) -> ChatCompletionResponse | StreamingResponse:
+    request_id = get_request_id() or ""
     if not payload.stream:
-        return await service.complete(payload)
+        result = await service.complete(payload)
+        await record_usage_safely(
+            recorder=recorder,
+            context=UsageContext(
+                request_id=request_id,
+                tenant_id=api_key.record.tenant_id,
+                api_key_id=api_key.record.id,
+                model_id=result.model.id,
+                provider=result.model.provider,
+            ),
+            usage=result.response.usage,
+        )
+        return result.response
 
     stream = await service.open_stream(payload)
     return StreamingResponse(
-        _stream_sse(stream),
+        _stream_sse(
+            stream,
+            recorder=recorder,
+            context=UsageContext(
+                request_id=request_id,
+                tenant_id=api_key.record.tenant_id,
+                api_key_id=api_key.record.id,
+                model_id=stream.model_id,
+                provider=stream.provider,
+            ),
+        ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

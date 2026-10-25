@@ -12,7 +12,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 REQUEST_ID_HEADER = "x-request-id"
 
-_REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+_REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,64}$")
 
 _request_id_context: ContextVar[str | None] = ContextVar("request_id", default=None)
 

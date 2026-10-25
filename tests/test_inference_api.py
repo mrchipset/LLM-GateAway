@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 from collections.abc import AsyncGenerator, Callable
+from time import perf_counter
 from typing import Any, Literal
+from uuid import uuid4
 
 import httpx
 import pytest
 import respx
 
 from llm_gateway.api.inference import _stream_sse
+from llm_gateway.auth.keys import hash_api_key
 from llm_gateway.config import Environment, Settings, StorageBackend
 from llm_gateway.container import Container, build_container
 from llm_gateway.providers.base import (
@@ -28,9 +33,19 @@ from llm_gateway.schemas.chat import (
     ChatCompletionRequest,
     ChatCompletionResponse,
     ChatDelta,
+    Usage,
 )
 from llm_gateway.services.chat import ChatStream
-from support import FrozenClock, seed_api_key, seed_model
+from llm_gateway.services.usage import UsageContext, UsageRecorder
+from llm_gateway.storage.memory import InMemoryUsageRepository
+from llm_gateway.storage.repositories import UsageRecord, UsageRepository
+from support import (
+    CapturingUsageRepository,
+    FailingUsageRepository,
+    FrozenClock,
+    seed_api_key,
+    seed_model,
+)
 
 FAKE_MODEL = "fake-model"
 UPSTREAM_MODEL = "upstream-fake-model"
@@ -42,6 +57,18 @@ Role = Literal["system", "developer", "user", "assistant", "tool"]
 
 def _fake_provider() -> FakeProvider:
     return FakeProvider(clock=FrozenClock())
+
+
+class RequestCapturingFakeProvider(FakeProvider):
+    def __init__(self) -> None:
+        super().__init__(clock=FrozenClock())
+        self.requests: list[ChatCompletionRequest] = []
+
+    def stream(
+        self, *, upstream_model: str, request: ChatCompletionRequest
+    ) -> AsyncGenerator[ChatCompletionChunk, None]:
+        self.requests.append(request)
+        return super().stream(upstream_model=upstream_model, request=request)
 
 
 def _registry(provider: ChatProvider) -> ProviderRegistry:
@@ -71,12 +98,15 @@ async def _fake_setup(
     *,
     model_id: str = FAKE_MODEL,
     enabled: bool = True,
+    provider: ChatProvider | None = None,
+    usage: UsageRepository | None = None,
 ) -> tuple[Container, str]:
-    provider = _fake_provider()
+    resolved_provider = provider if provider is not None else _fake_provider()
     container = make_container(
         settings,
-        providers=_registry(provider),
+        providers=_registry(resolved_provider),
         clock=FrozenClock(),
+        usage=usage,
     )
     await seed_model(
         container,
@@ -107,11 +137,14 @@ def _deepseek_provider() -> OpenAIProvider:
 async def _deepseek_setup(
     make_container: Callable[..., Container],
     settings: Settings,
+    *,
+    usage: UsageRepository | None = None,
 ) -> tuple[Container, str]:
     container = make_container(
         settings,
         providers=_registry(_deepseek_provider()),
         clock=FrozenClock(),
+        usage=usage,
     )
     await seed_model(
         container,
@@ -131,6 +164,51 @@ def _upstream_chunk(content: str, *, role: Role | None = None) -> ChatCompletion
         model="upstream-model",
         choices=[ChatCompletionChunkChoice(index=0, delta=delta)],
     )
+
+
+class SlowUsageRepository(InMemoryUsageRepository):
+    async def record(self, record: UsageRecord) -> None:
+        await asyncio.sleep(1)
+
+
+class UsageThenErrorProvider:
+    """Yields one content chunk carrying usage, then fails mid-stream."""
+
+    name = ProviderName.FAKE
+
+    def __init__(self) -> None:
+        self.closed = 0
+
+    async def complete(
+        self, *, upstream_model: str, request: ChatCompletionRequest
+    ) -> ChatCompletionResponse:
+        raise NotImplementedError
+
+    def stream(
+        self, *, upstream_model: str, request: ChatCompletionRequest
+    ) -> AsyncGenerator[ChatCompletionChunk, None]:
+        return self._stream()
+
+    async def _stream(self) -> AsyncGenerator[ChatCompletionChunk, None]:
+        try:
+            yield ChatCompletionChunk(
+                id="chunk-1",
+                created=1,
+                model="upstream-model",
+                choices=[
+                    ChatCompletionChunkChoice(
+                        index=0,
+                        delta=ChatDelta(content="hi"),
+                    )
+                ],
+                usage=Usage(prompt_tokens=4, completion_tokens=2, total_tokens=6),
+            )
+            raise ProviderUpstreamError(status_code=400, message="upstream rejected")
+        finally:
+            self.closed += 1
+
+    async def aclose(self) -> None:
+        return None
 
 
 class FailingProvider:
@@ -531,9 +609,22 @@ async def test_stream_sse_aclose_releases_upstream_exactly_once() -> None:
     stream = ChatStream(
         first_chunk=first_chunk,
         model_id=FAKE_MODEL,
+        provider=ProviderName.FAKE,
+        client_wants_usage=False,
+        usage=None,
         upstream=iterator,
     )
-    generator = _stream_sse(stream)
+    generator = _stream_sse(
+        stream,
+        recorder=UsageRecorder(repository=InMemoryUsageRepository(), clock=FrozenClock()),
+        context=UsageContext(
+            request_id="test-request",
+            tenant_id=uuid4(),
+            api_key_id=uuid4(),
+            model_id=FAKE_MODEL,
+            provider=ProviderName.FAKE,
+        ),
+    )
 
     frame = await anext(generator)
     assert frame.startswith(b"data: ")
@@ -626,7 +717,8 @@ async def test_deepseek_stream_forwards_usage_on_last_chunk_without_separate_usa
     make_client: Callable[..., Any],
     settings: Settings,
 ) -> None:
-    container, secret = await _deepseek_setup(make_container, settings)
+    capture = CapturingUsageRepository()
+    container, secret = await _deepseek_setup(make_container, settings, usage=capture)
     first_chunk = {
         "id": "chunk-1",
         "object": "chat.completion.chunk",
@@ -692,3 +784,315 @@ async def test_deepseek_stream_forwards_usage_on_last_chunk_without_separate_usa
     assert chunks[0]["choices"][0]["delta"]["reasoning_content"] == "Thinking."
     assert chunks[-1]["choices"][0]["delta"]["content"] == "final answer"
     assert chunks[-1]["usage"]["total_tokens"] == 5
+
+    assert len(capture.records) == 1
+    assert capture.records[0].model_id == DEEPSEEK_PUBLIC_MODEL
+    assert capture.records[0].provider is ProviderName.DEEPSEEK
+    assert capture.records[0].total_tokens == 5
+
+
+async def test_non_stream_request_records_usage_with_tenant_and_key(
+    make_container: Callable[..., Container],
+    make_client: Callable[..., Any],
+    settings: Settings,
+) -> None:
+    capture = CapturingUsageRepository()
+    container, secret = await _fake_setup(make_container, settings, usage=capture)
+
+    async with make_client(settings, container) as client:
+        response = await client.post(
+            "/v1/chat/completions",
+            json={"model": FAKE_MODEL, "messages": [USER_MESSAGE]},
+            headers=_auth(secret),
+        )
+
+    assert response.status_code == 200
+    assert len(capture.records) == 1
+
+    record = capture.records[0]
+    key = await container.api_keys.get_key_by_hash(hash_api_key(secret))
+    assert key is not None
+    body = response.json()
+    assert record.request_id == response.headers["x-request-id"]
+    assert record.tenant_id == key.tenant_id
+    assert record.api_key_id == key.id
+    assert record.model_id == FAKE_MODEL
+    assert record.provider is ProviderName.FAKE
+    assert record.prompt_tokens == body["usage"]["prompt_tokens"]
+    assert record.completion_tokens == body["usage"]["completion_tokens"]
+    assert record.total_tokens == body["usage"]["total_tokens"]
+    assert record.cached_tokens == 0
+
+
+async def test_stream_always_requests_upstream_usage_but_suppresses_it_when_not_requested(
+    make_container: Callable[..., Container],
+    make_client: Callable[..., Any],
+    settings: Settings,
+) -> None:
+    provider = RequestCapturingFakeProvider()
+    capture = CapturingUsageRepository()
+    container, secret = await _fake_setup(
+        make_container,
+        settings,
+        provider=provider,
+        usage=capture,
+    )
+
+    async with make_client(settings, container) as client:
+        response = await client.post(
+            "/v1/chat/completions",
+            json={"model": FAKE_MODEL, "messages": [USER_MESSAGE], "stream": True},
+            headers=_auth(secret),
+        )
+
+    assert response.status_code == 200
+    assert len(provider.requests) == 1
+    assert provider.requests[0].stream_options == {"include_usage": True}
+
+    frames = parse_sse(response.text)
+    chunks = [json.loads(frame) for frame in frames[:-1]]
+    assert not any(chunk["choices"] == [] and chunk.get("usage") is not None for chunk in chunks)
+    assert len(capture.records) == 1
+    assert capture.records[0].model_id == FAKE_MODEL
+    assert capture.records[0].total_tokens > 0
+
+
+async def test_stream_forwards_usage_chunk_when_client_requests_it_and_records_once(
+    make_container: Callable[..., Container],
+    make_client: Callable[..., Any],
+    settings: Settings,
+) -> None:
+    capture = CapturingUsageRepository()
+    container, secret = await _fake_setup(make_container, settings, usage=capture)
+
+    async with make_client(settings, container) as client:
+        response = await client.post(
+            "/v1/chat/completions",
+            json={
+                "model": FAKE_MODEL,
+                "messages": [USER_MESSAGE],
+                "stream": True,
+                "stream_options": {"include_usage": True},
+            },
+            headers=_auth(secret),
+        )
+
+    frames = parse_sse(response.text)
+    usage_chunk = json.loads(frames[-2])
+    assert usage_chunk["choices"] == []
+    assert usage_chunk["usage"]["total_tokens"] > 0
+    assert len(capture.records) == 1
+    assert capture.records[0].total_tokens == usage_chunk["usage"]["total_tokens"]
+
+
+async def test_usage_repository_failure_does_not_break_inference_and_logs_once(
+    make_container: Callable[..., Container],
+    make_client: Callable[..., Any],
+    settings: Settings,
+    caplog: Any,
+) -> None:
+    caplog.set_level(logging.WARNING, logger="llm_gateway.services.usage")
+    container, secret = await _fake_setup(
+        make_container,
+        settings,
+        usage=FailingUsageRepository(),
+    )
+
+    async with make_client(settings, container) as client:
+        response = await client.post(
+            "/v1/chat/completions",
+            json={"model": FAKE_MODEL, "messages": [USER_MESSAGE]},
+            headers=_auth(secret),
+        )
+
+    assert response.status_code == 200
+    records = [
+        record
+        for record in caplog.records
+        if record.name == "llm_gateway.services.usage"
+        and record.getMessage() == "usage_record_failed"
+    ]
+    assert len(records) == 1
+    assert records[0].__dict__["error"] == "RuntimeError"
+    assert records[0].__dict__["model_id"] == FAKE_MODEL
+
+
+async def test_client_disconnect_before_usage_arrives_writes_no_record() -> None:
+    capture = CapturingUsageRepository()
+    closed = 0
+
+    async def upstream() -> AsyncGenerator[ChatCompletionChunk, None]:
+        nonlocal closed
+        try:
+            yield _upstream_chunk("one")
+            yield ChatCompletionChunk(
+                id="usage-chunk",
+                created=1,
+                model="upstream-model",
+                choices=[],
+                usage=Usage(prompt_tokens=3, completion_tokens=2, total_tokens=5),
+            )
+        finally:
+            closed += 1
+
+    iterator = upstream()
+    first_chunk = await anext(iterator)
+    stream = ChatStream(
+        first_chunk=first_chunk,
+        model_id=FAKE_MODEL,
+        provider=ProviderName.FAKE,
+        client_wants_usage=False,
+        usage=None,
+        upstream=iterator,
+    )
+    generator = _stream_sse(
+        stream,
+        recorder=UsageRecorder(repository=capture, clock=FrozenClock()),
+        context=UsageContext(
+            request_id="disconnect-request",
+            tenant_id=uuid4(),
+            api_key_id=uuid4(),
+            model_id=FAKE_MODEL,
+            provider=ProviderName.FAKE,
+        ),
+    )
+
+    frame = await anext(generator)
+    assert frame.startswith(b"data: ")
+    await generator.aclose()
+
+    assert stream.usage is None
+    assert capture.records == []
+    assert closed == 1
+
+
+async def test_stream_records_usage_after_early_client_close() -> None:
+    capture = CapturingUsageRepository()
+    closed = 0
+
+    async def upstream() -> AsyncGenerator[ChatCompletionChunk, None]:
+        nonlocal closed
+        try:
+            yield ChatCompletionChunk(
+                id="usage-chunk",
+                created=1,
+                model="upstream-model",
+                choices=[],
+                usage=Usage(prompt_tokens=3, completion_tokens=2, total_tokens=5),
+            )
+        finally:
+            closed += 1
+
+    iterator = upstream()
+    stream = ChatStream(
+        first_chunk=_upstream_chunk("one"),
+        model_id=FAKE_MODEL,
+        provider=ProviderName.FAKE,
+        client_wants_usage=True,
+        usage=None,
+        upstream=iterator,
+    )
+    generator = _stream_sse(
+        stream,
+        recorder=UsageRecorder(repository=capture, clock=FrozenClock()),
+        context=UsageContext(
+            request_id="early-close",
+            tenant_id=uuid4(),
+            api_key_id=uuid4(),
+            model_id=FAKE_MODEL,
+            provider=ProviderName.FAKE,
+        ),
+    )
+
+    assert (await anext(generator)).startswith(b"data: ")
+    usage_frame = await anext(generator)
+    assert b'"usage"' in usage_frame
+    await generator.aclose()
+
+    assert closed == 1
+    assert len(capture.records) == 1
+    assert capture.records[0].total_tokens == 5
+
+
+async def test_usage_write_timeout_does_not_break_stream(
+    caplog: Any,
+) -> None:
+    caplog.set_level(logging.WARNING, logger="llm_gateway.services.usage")
+
+    async def empty() -> AsyncGenerator[ChatCompletionChunk, None]:
+        for chunk in ():
+            yield chunk
+
+    stream = ChatStream(
+        first_chunk=_upstream_chunk("one"),
+        model_id=FAKE_MODEL,
+        provider=ProviderName.FAKE,
+        client_wants_usage=False,
+        usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        upstream=empty(),
+    )
+    generator = _stream_sse(
+        stream,
+        recorder=UsageRecorder(repository=SlowUsageRepository(), clock=FrozenClock()),
+        context=UsageContext(
+            request_id="slow-write",
+            tenant_id=uuid4(),
+            api_key_id=uuid4(),
+            model_id=FAKE_MODEL,
+            provider=ProviderName.FAKE,
+        ),
+        timeout_seconds=0.01,
+    )
+
+    start = perf_counter()
+    frames = [frame async for frame in generator]
+    elapsed = perf_counter() - start
+
+    assert frames[-1] == b"data: [DONE]\n\n"
+    assert elapsed < 0.2
+    records = [
+        record
+        for record in caplog.records
+        if record.name == "llm_gateway.services.usage"
+        and record.getMessage() == "usage_record_failed"
+    ]
+    assert len(records) == 1
+    assert records[0].__dict__["error"] == "TimeoutError"
+
+
+async def test_mid_stream_error_records_usage_already_seen(
+    make_container: Callable[..., Container],
+    make_client: Callable[..., Any],
+    settings: Settings,
+) -> None:
+    provider = UsageThenErrorProvider()
+    capture = CapturingUsageRepository()
+    container, secret = await _fake_setup(
+        make_container,
+        settings,
+        provider=provider,
+        usage=capture,
+    )
+
+    async with make_client(settings, container) as client:
+        response = await client.post(
+            "/v1/chat/completions",
+            json={
+                "model": FAKE_MODEL,
+                "messages": [USER_MESSAGE],
+                "stream": True,
+                "stream_options": {"include_usage": True},
+            },
+            headers=_auth(secret),
+        )
+
+    assert response.status_code == 200
+    frames = parse_sse(response.text)
+    assert frames[-1] == "[DONE]"
+    first = json.loads(frames[0])
+    assert first["choices"][0]["delta"]["content"] == "hi"
+    error_frame = json.loads(frames[1])
+    assert error_frame["error"]["code"] == "upstream_rejected"
+    assert provider.closed == 1
+    assert len(capture.records) == 1
+    assert capture.records[0].total_tokens == 6

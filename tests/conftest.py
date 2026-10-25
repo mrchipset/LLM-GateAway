@@ -15,7 +15,9 @@ from llm_gateway.storage.memory import (
     InMemoryApiKeyRepository,
     InMemoryModelRepository,
     InMemoryTenantRepository,
+    InMemoryUsageRepository,
 )
+from llm_gateway.storage.repositories import UsageRepository
 
 TEST_MASTER_KEY = "test-master-key-0123456789abcdef"
 
@@ -37,6 +39,7 @@ def make_container(
     readiness_checks: tuple[ReadinessCheck, ...] = (),
     providers: ProviderRegistry | None = None,
     clock: Clock | None = None,
+    usage: UsageRepository | None = None,
 ) -> Container:
     return Container(
         settings=settings,
@@ -44,6 +47,7 @@ def make_container(
         api_keys=InMemoryApiKeyRepository(),
         models=InMemoryModelRepository(),
         tenants=InMemoryTenantRepository(),
+        usage=usage if usage is not None else InMemoryUsageRepository(),
         providers=providers if providers is not None else ProviderRegistry({}),
         readiness_checks=readiness_checks,
     )

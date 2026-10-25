@@ -16,11 +16,13 @@ from llm_gateway.storage.repositories import (
     ApiKeyRepository,
     ModelRepository,
     TenantRepository,
+    UsageRepository,
 )
 from llm_gateway.storage.sql import (
     SqlAlchemyApiKeyRepository,
     SqlAlchemyModelRepository,
     SqlAlchemyTenantRepository,
+    SqlAlchemyUsageRepository,
 )
 
 logger = logging.getLogger(__name__)
@@ -43,6 +45,7 @@ class Database:
         self._api_keys = SqlAlchemyApiKeyRepository(session_factory=self._session_factory)
         self._models = SqlAlchemyModelRepository(session_factory=self._session_factory)
         self._tenants = SqlAlchemyTenantRepository(session_factory=self._session_factory)
+        self._usage = SqlAlchemyUsageRepository(session_factory=self._session_factory)
 
     @classmethod
     def from_settings(cls, settings: Settings) -> Database:
@@ -70,6 +73,10 @@ class Database:
     @property
     def tenants(self) -> TenantRepository:
         return self._tenants
+
+    @property
+    def usage(self) -> UsageRepository:
+        return self._usage
 
     async def ping(self) -> bool:
         try:

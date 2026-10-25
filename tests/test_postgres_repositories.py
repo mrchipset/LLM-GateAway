@@ -12,6 +12,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from llm_gateway.config import Environment, Settings, StorageBackend
@@ -26,6 +27,7 @@ from llm_gateway.storage.repositories import (
     ModelConfig,
     Tenant,
     UnknownTenantError,
+    UsageRecord,
 )
 
 _TEST_DATABASE_URL = os.environ.get("GATEWAY_TEST_DATABASE_URL")
@@ -81,6 +83,33 @@ def _key(index: int, *, tenant_id: UUID, key_hash: str | None = None) -> ApiKeyR
     )
 
 
+def _usage(
+    index: int,
+    *,
+    tenant_id: UUID,
+    api_key_id: UUID,
+    model_id: str = "model-1",
+    provider: ProviderName = ProviderName.FAKE,
+    created_at: datetime | None = None,
+    prompt_tokens: int = 10,
+    completion_tokens: int = 5,
+    cached_tokens: int = 0,
+) -> UsageRecord:
+    return UsageRecord(
+        id=uuid4(),
+        request_id=f"req-{index}",
+        tenant_id=tenant_id,
+        api_key_id=api_key_id,
+        model_id=model_id,
+        provider=provider,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+        cached_tokens=cached_tokens,
+        created_at=created_at if created_at is not None else BASE + timedelta(seconds=index),
+    )
+
+
 def _build_settings() -> Settings:
     return Settings(
         **{
@@ -98,7 +127,7 @@ async def _truncate() -> None:
     try:
         async with engine.begin() as connection:
             await connection.execute(
-                text("TRUNCATE api_keys, models, tenants RESTART IDENTITY CASCADE")
+                text("TRUNCATE api_keys, models, tenants, usage_records RESTART IDENTITY CASCADE")
             )
     finally:
         await engine.dispose()
@@ -382,6 +411,28 @@ async def test_migration_creates_default_tenant_and_not_null_column(
         await engine.dispose()
 
 
+async def test_migration_creates_usage_records_table(migrated_schema: None) -> None:
+    engine = create_async_engine(_test_url())
+    try:
+        async with engine.connect() as connection:
+            table_name = await connection.scalar(
+                text(
+                    "SELECT table_name FROM information_schema.tables "
+                    "WHERE table_name = 'usage_records'"
+                )
+            )
+            nullable = await connection.scalar(
+                text(
+                    "SELECT is_nullable FROM information_schema.columns "
+                    "WHERE table_name = 'usage_records' AND column_name = 'tenant_id'"
+                )
+            )
+        assert table_name == "usage_records"
+        assert nullable == "NO"
+    finally:
+        await engine.dispose()
+
+
 async def test_migration_backfills_existing_keys_with_default_tenant(
     migrated_schema: None,
 ) -> None:
@@ -417,3 +468,114 @@ async def test_migration_backfills_existing_keys_with_default_tenant(
         async with engine.begin() as connection:
             await connection.execute(text("DELETE FROM api_keys WHERE id = :id"), {"id": key_id})
         await engine.dispose()
+
+
+async def test_usage_record_round_trip_and_summary(database: Database) -> None:
+    tenant = await database.tenants.create_tenant(_tenant(1))
+    key = _key(1, tenant_id=tenant.id)
+    await database.api_keys.create_key(key)
+    record = _usage(1, tenant_id=tenant.id, api_key_id=key.id)
+
+    await database.usage.record(record)
+
+    by_model = await database.usage.summary_by_model(
+        tenant_id=None, model_id=None, since=None, until=None
+    )
+    assert len(by_model) == 1
+    assert by_model[0].model_id == "model-1"
+    assert by_model[0].provider is ProviderName.FAKE
+    assert by_model[0].prompt_tokens == 10
+    assert by_model[0].completion_tokens == 5
+    assert by_model[0].cached_tokens == 0
+    assert by_model[0].total_tokens == 15
+    assert by_model[0].requests == 1
+
+
+async def test_usage_summary_filters_and_by_model_ordering(database: Database) -> None:
+    tenant_a = await database.tenants.create_tenant(_tenant(1))
+    tenant_b = await database.tenants.create_tenant(_tenant(2))
+    key_a = _key(1, tenant_id=tenant_a.id)
+    key_b = _key(2, tenant_id=tenant_b.id)
+    await database.api_keys.create_key(key_a)
+    await database.api_keys.create_key(key_b)
+    await database.usage.record(
+        _usage(
+            1,
+            tenant_id=tenant_a.id,
+            api_key_id=key_a.id,
+            model_id="model-a",
+            created_at=BASE + timedelta(hours=1),
+            prompt_tokens=10,
+            completion_tokens=5,
+            cached_tokens=2,
+        )
+    )
+    await database.usage.record(
+        _usage(
+            2,
+            tenant_id=tenant_a.id,
+            api_key_id=key_a.id,
+            model_id="model-b",
+            created_at=BASE + timedelta(hours=2),
+            prompt_tokens=20,
+            completion_tokens=10,
+        )
+    )
+    await database.usage.record(
+        _usage(
+            3,
+            tenant_id=tenant_b.id,
+            api_key_id=key_b.id,
+            model_id="model-a",
+            created_at=BASE + timedelta(hours=3),
+            prompt_tokens=7,
+            completion_tokens=3,
+            cached_tokens=1,
+        )
+    )
+
+    tenant_models = await database.usage.summary_by_model(
+        tenant_id=tenant_a.id, model_id=None, since=None, until=None
+    )
+    assert sum(item.total_tokens for item in tenant_models) == 45
+    assert sum(item.requests for item in tenant_models) == 2
+
+    by_model = await database.usage.summary_by_model(
+        tenant_id=None, model_id=None, since=None, until=None
+    )
+    assert [item.model_id for item in by_model] == ["model-b", "model-a"]
+    assert [item.total_tokens for item in by_model] == [30, 25]
+
+    since_models = await database.usage.summary_by_model(
+        tenant_id=None,
+        model_id=None,
+        since=BASE + timedelta(hours=2),
+        until=None,
+    )
+    assert sum(item.requests for item in since_models) == 2
+    assert sum(item.total_tokens for item in since_models) == 40
+
+    until_models = await database.usage.summary_by_model(
+        tenant_id=None,
+        model_id=None,
+        since=None,
+        until=BASE + timedelta(hours=2),
+    )
+    assert sum(item.requests for item in until_models) == 1
+    assert sum(item.total_tokens for item in until_models) == 15
+
+
+async def test_usage_record_rejects_unknown_tenant(database: Database) -> None:
+    tenant = await database.tenants.create_tenant(_tenant(1))
+    key = _key(1, tenant_id=tenant.id)
+    await database.api_keys.create_key(key)
+
+    with pytest.raises(UnknownTenantError):
+        await database.usage.record(_usage(1, tenant_id=uuid4(), api_key_id=key.id))
+
+
+async def test_usage_record_rejects_unknown_api_key(database: Database) -> None:
+    tenant = await database.tenants.create_tenant(_tenant(1))
+
+    with pytest.raises(IntegrityError):
+        await database.usage.record(_usage(1, tenant_id=tenant.id, api_key_id=uuid4()))

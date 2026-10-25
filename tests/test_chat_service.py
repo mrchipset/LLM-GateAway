@@ -299,10 +299,11 @@ async def test_complete_rewrites_public_model_and_forwards_upstream_model() -> N
     provider = RecordingProvider()
     service = await make_service(provider)
 
-    response = await service.complete(make_request())
+    result = await service.complete(make_request())
 
     assert provider.upstream_models == [UPSTREAM_MODEL]
-    assert response.model == PUBLIC_MODEL
+    assert result.response.model == PUBLIC_MODEL
+    assert result.model.id == PUBLIC_MODEL
 
 
 async def test_open_stream_exposes_first_chunk_immediately() -> None:
@@ -412,6 +413,9 @@ async def test_aclose_logs_upstream_close_failure(
     stream = ChatStream(
         first_chunk=make_chunk("first"),
         model_id=PUBLIC_MODEL,
+        provider=ProviderName.FAKE,
+        client_wants_usage=False,
+        usage=None,
         upstream=cast(AsyncGenerator[ChatCompletionChunk, None], RuntimeErrorUpstream()),
     )
 

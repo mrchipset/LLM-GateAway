@@ -30,6 +30,24 @@ async def test_valid_incoming_request_id_is_echoed(client: httpx.AsyncClient) ->
     assert response.headers[REQUEST_ID_HEADER] == incoming
 
 
+async def test_request_id_of_max_length_is_echoed(client: httpx.AsyncClient) -> None:
+    incoming = "a" * 64
+
+    response = await client.get("/healthz", headers={REQUEST_ID_HEADER: incoming})
+
+    assert response.headers[REQUEST_ID_HEADER] == incoming
+
+
+async def test_request_id_over_max_length_is_replaced(client: httpx.AsyncClient) -> None:
+    incoming = "a" * 65
+
+    response = await client.get("/healthz", headers={REQUEST_ID_HEADER: incoming})
+
+    request_id = response.headers[REQUEST_ID_HEADER]
+    assert request_id != incoming
+    assert GENERATED_ID_PATTERN.fullmatch(request_id) is not None
+
+
 @pytest.mark.parametrize("incoming", ["a" * 300, "contains spaces"])
 async def test_invalid_incoming_request_id_is_replaced(
     client: httpx.AsyncClient,

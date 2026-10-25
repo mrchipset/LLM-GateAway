@@ -9,6 +9,7 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.sql.elements import ColumnElement
 
 from llm_gateway.providers.base import ProviderName
 from llm_gateway.storage.repositories import (
@@ -17,10 +18,12 @@ from llm_gateway.storage.repositories import (
     DuplicateModelError,
     DuplicateTenantError,
     ModelConfig,
+    ModelUsage,
     Tenant,
     UnknownTenantError,
+    UsageRecord,
 )
-from llm_gateway.storage.tables import ApiKeyRow, ModelRow, TenantRow
+from llm_gateway.storage.tables import ApiKeyRow, ModelRow, TenantRow, UsageRow
 
 _UNIQUE_VIOLATION_SQLSTATE = "23505"
 _FOREIGN_KEY_VIOLATION_SQLSTATE = "23503"
@@ -47,6 +50,33 @@ def _is_foreign_key_violation(error: IntegrityError) -> bool:
         getattr(original, "sqlstate", None) == _FOREIGN_KEY_VIOLATION_SQLSTATE
         or getattr(original, "pgcode", None) == _FOREIGN_KEY_VIOLATION_SQLSTATE
     )
+
+
+def _is_tenant_foreign_key_violation(error: IntegrityError) -> bool:
+    original = error.orig
+    constraint = getattr(original, "constraint_name", None)
+    if constraint is not None:
+        return constraint == "fk_usage_records_tenant_id"
+    return "fk_usage_records_tenant_id" in str(original)
+
+
+def _usage_filters(
+    *,
+    tenant_id: UUID | None,
+    model_id: str | None,
+    since: datetime | None,
+    until: datetime | None,
+) -> tuple[ColumnElement[bool], ...]:
+    filters: list[ColumnElement[bool]] = []
+    if tenant_id is not None:
+        filters.append(UsageRow.tenant_id == tenant_id)
+    if model_id is not None:
+        filters.append(UsageRow.model_id == model_id)
+    if since is not None:
+        filters.append(UsageRow.created_at >= since)
+    if until is not None:
+        filters.append(UsageRow.created_at < until)
+    return tuple(filters)
 
 
 def _to_model(row: ModelRow) -> ModelConfig:
@@ -251,3 +281,76 @@ class SqlAlchemyApiKeyRepository:
             )
             if result.rowcount == 0:
                 raise KeyError(f"api key {key_id} not found")
+
+
+class SqlAlchemyUsageRepository:
+    def __init__(self, *, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        self._session_factory = session_factory
+
+    async def record(self, record: UsageRecord) -> None:
+        row = UsageRow(
+            id=record.id,
+            request_id=record.request_id,
+            tenant_id=record.tenant_id,
+            api_key_id=record.api_key_id,
+            model_id=record.model_id,
+            provider=record.provider.value,
+            prompt_tokens=record.prompt_tokens,
+            completion_tokens=record.completion_tokens,
+            total_tokens=record.total_tokens,
+            cached_tokens=record.cached_tokens,
+            created_at=record.created_at,
+        )
+        try:
+            async with self._session_factory() as session, session.begin():
+                session.add(row)
+        except IntegrityError as exc:
+            if _is_foreign_key_violation(exc) and _is_tenant_foreign_key_violation(exc):
+                raise UnknownTenantError(record.tenant_id) from exc
+            raise
+
+    async def summary_by_model(
+        self,
+        *,
+        tenant_id: UUID | None,
+        model_id: str | None,
+        since: datetime | None,
+        until: datetime | None,
+    ) -> Sequence[ModelUsage]:
+        filters = _usage_filters(tenant_id=tenant_id, model_id=model_id, since=since, until=until)
+        total_tokens = func.sum(UsageRow.total_tokens)
+        statement = (
+            select(
+                UsageRow.model_id,
+                UsageRow.provider,
+                func.coalesce(func.sum(UsageRow.prompt_tokens), 0),
+                func.coalesce(func.sum(UsageRow.completion_tokens), 0),
+                func.coalesce(func.sum(UsageRow.cached_tokens), 0),
+                func.coalesce(total_tokens, 0),
+                func.count(),
+            )
+            .where(*filters)
+            .group_by(UsageRow.model_id, UsageRow.provider)
+            .order_by(total_tokens.desc(), UsageRow.model_id.asc())
+        )
+        async with self._session_factory() as session, session.begin():
+            rows = (await session.execute(statement)).all()
+        return [
+            ModelUsage(
+                model_id=row[0],
+                provider=_parse_provider(row[1]),
+                prompt_tokens=int(row[2]),
+                completion_tokens=int(row[3]),
+                cached_tokens=int(row[4]),
+                total_tokens=int(row[5]),
+                requests=int(row[6]),
+            )
+            for row in rows
+        ]
+
+
+def _parse_provider(value: str) -> ProviderName:
+    try:
+        return ProviderName(value)
+    except ValueError as exc:
+        raise ValueError(f"stored usage record has unknown provider {value!r}") from exc

@@ -11,6 +11,7 @@ from llm_gateway.providers.base import (
     ChatProvider,
     ProviderConnectionError,
     ProviderError,
+    ProviderName,
     ProviderNotConfiguredError,
     ProviderResponseError,
     ProviderTimeoutError,
@@ -21,6 +22,7 @@ from llm_gateway.schemas.chat import (
     ChatCompletionChunk,
     ChatCompletionRequest,
     ChatCompletionResponse,
+    Usage,
 )
 from llm_gateway.storage.repositories import ModelConfig, ModelRepository
 
@@ -31,6 +33,12 @@ logger = get_logger(__name__)
 class ResolvedModel:
     config: ModelConfig
     provider: ChatProvider
+
+
+@dataclass(frozen=True, slots=True)
+class ChatCompletionResult:
+    response: ChatCompletionResponse
+    model: ModelConfig
 
 
 def _error(
@@ -147,10 +155,16 @@ class ChatStream:
         *,
         first_chunk: ChatCompletionChunk,
         model_id: str,
+        provider: ProviderName,
+        client_wants_usage: bool,
+        usage: Usage | None,
         upstream: AsyncGenerator[ChatCompletionChunk, None],
     ) -> None:
         self.first_chunk = first_chunk
         self.model_id = model_id
+        self.provider = provider
+        self.client_wants_usage = client_wants_usage
+        self.usage = usage
         self._upstream = upstream
         self._closed = False
 
@@ -158,6 +172,10 @@ class ChatStream:
         try:
             yield self.first_chunk
             async for chunk in self._upstream:
+                if chunk.usage is not None:
+                    self.usage = chunk.usage
+                if not self.client_wants_usage and not chunk.choices:
+                    continue
                 yield chunk.model_copy(update={"model": self.model_id})
         finally:
             await self.aclose()
@@ -210,7 +228,7 @@ class ChatService:
             ) from exc
         return ResolvedModel(config=config, provider=provider)
 
-    async def complete(self, request: ChatCompletionRequest) -> ChatCompletionResponse:
+    async def complete(self, request: ChatCompletionRequest) -> ChatCompletionResult:
         resolved = await self.resolve_model(request.model)
         try:
             response = await resolved.provider.complete(
@@ -224,16 +242,33 @@ class ChatService:
                 model_id=resolved.config.id,
             )
             raise map_provider_error(exc) from exc
-        return response.model_copy(update={"model": resolved.config.id})
+        return ChatCompletionResult(
+            response=response.model_copy(update={"model": resolved.config.id}),
+            model=resolved.config,
+        )
 
     async def open_stream(self, request: ChatCompletionRequest) -> ChatStream:
         resolved = await self.resolve_model(request.model)
+        stream_options = request.stream_options or {}
+        client_wants_usage = bool(stream_options.get("include_usage"))
+        upstream_request = request.model_copy(
+            update={
+                "stream_options": {**stream_options, "include_usage": True},
+            }
+        )
         upstream = resolved.provider.stream(
             upstream_model=resolved.config.upstream_model,
-            request=request,
+            request=upstream_request,
         )
         try:
-            first_chunk = await anext(upstream)
+            first_chunk: ChatCompletionChunk | None = None
+            seen_usage: Usage | None = None
+            while first_chunk is None:
+                chunk = await anext(upstream)
+                if chunk.usage is not None:
+                    seen_usage = chunk.usage
+                if chunk.choices:
+                    first_chunk = chunk
         except StopAsyncIteration:
             await _close_upstream(upstream)
             raise _error(
@@ -257,5 +292,8 @@ class ChatService:
         return ChatStream(
             first_chunk=first_chunk.model_copy(update={"model": resolved.config.id}),
             model_id=resolved.config.id,
+            provider=resolved.config.provider,
+            client_wants_usage=client_wants_usage,
+            usage=seen_usage,
             upstream=upstream,
         )

@@ -88,6 +88,88 @@ class ApiKeyRecord:
                 _require_aware(value, field)
 
 
+def _require_non_negative_int(value: int, field: str) -> None:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ValueError(f"{field} must be a non-negative integer")
+
+
+def _require_provider(value: object, field: str) -> None:
+    if not isinstance(value, ProviderName):
+        raise ValueError(f"{field} must be a ProviderName")
+
+
+@dataclass(frozen=True, slots=True)
+class UsageRecord:
+    """One successfully served inference request and its token counts."""
+
+    id: UUID
+    request_id: str
+    tenant_id: UUID
+    api_key_id: UUID
+    model_id: str
+    provider: ProviderName
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    cached_tokens: int
+    created_at: datetime
+
+    def __post_init__(self) -> None:
+        _require_uuid(self.id, "id")
+        _require_non_blank(self.request_id, "request_id")
+        _require_uuid(self.tenant_id, "tenant_id")
+        _require_uuid(self.api_key_id, "api_key_id")
+        _require_non_blank(self.model_id, "model_id")
+        _require_provider(self.provider, "provider")
+        _require_non_negative_int(self.prompt_tokens, "prompt_tokens")
+        _require_non_negative_int(self.completion_tokens, "completion_tokens")
+        _require_non_negative_int(self.total_tokens, "total_tokens")
+        _require_non_negative_int(self.cached_tokens, "cached_tokens")
+        _require_aware(self.created_at, "created_at")
+
+
+@dataclass(frozen=True, slots=True)
+class UsageTotals:
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cached_tokens: int = 0
+    total_tokens: int = 0
+    requests: int = 0
+
+    def __post_init__(self) -> None:
+        for field in (
+            "prompt_tokens",
+            "completion_tokens",
+            "cached_tokens",
+            "total_tokens",
+            "requests",
+        ):
+            _require_non_negative_int(getattr(self, field), field)
+
+
+@dataclass(frozen=True, slots=True)
+class ModelUsage:
+    model_id: str
+    provider: ProviderName
+    prompt_tokens: int
+    completion_tokens: int
+    cached_tokens: int
+    total_tokens: int
+    requests: int
+
+    def __post_init__(self) -> None:
+        _require_non_blank(self.model_id, "model_id")
+        _require_provider(self.provider, "provider")
+        for field in (
+            "prompt_tokens",
+            "completion_tokens",
+            "cached_tokens",
+            "total_tokens",
+            "requests",
+        ):
+            _require_non_negative_int(getattr(self, field), field)
+
+
 class DuplicateModelError(Exception):
     def __init__(self, model_id: str) -> None:
         super().__init__(f"model '{model_id}' already exists")
@@ -119,6 +201,19 @@ class TenantRepository(Protocol):
     async def get_tenant(self, tenant_id: UUID) -> Tenant | None: ...
 
     async def list_tenants(self, *, limit: int, offset: int) -> tuple[Sequence[Tenant], int]: ...
+
+
+class UsageRepository(Protocol):
+    async def record(self, record: UsageRecord) -> None: ...
+
+    async def summary_by_model(
+        self,
+        *,
+        tenant_id: UUID | None,
+        model_id: str | None,
+        since: datetime | None,
+        until: datetime | None,
+    ) -> Sequence[ModelUsage]: ...
 
 
 class ModelRepository(Protocol):

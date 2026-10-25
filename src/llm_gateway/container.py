@@ -15,11 +15,13 @@ from llm_gateway.storage.memory import (
     InMemoryApiKeyRepository,
     InMemoryModelRepository,
     InMemoryTenantRepository,
+    InMemoryUsageRepository,
 )
 from llm_gateway.storage.repositories import (
     ApiKeyRepository,
     ModelRepository,
     TenantRepository,
+    UsageRepository,
 )
 
 
@@ -44,6 +46,7 @@ class Container:
     api_keys: ApiKeyRepository
     models: ModelRepository
     tenants: TenantRepository
+    usage: UsageRepository
     providers: ProviderRegistry
     readiness_checks: tuple[ReadinessCheck, ...] = ()
     database: Database | None = None
@@ -100,6 +103,7 @@ def build_container(settings: Settings) -> Container:
             api_keys=database.api_keys,
             models=database.models,
             tenants=database.tenants,
+            usage=database.usage,
             providers=providers,
             readiness_checks=(ReadinessCheck(name="database", check=database.ping),),
             database=database,
@@ -111,5 +115,6 @@ def build_container(settings: Settings) -> Container:
         api_keys=InMemoryApiKeyRepository(),
         models=InMemoryModelRepository(),
         tenants=InMemoryTenantRepository(),
+        usage=InMemoryUsageRepository(),
         providers=providers,
     )

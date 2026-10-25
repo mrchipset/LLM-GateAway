@@ -25,6 +25,7 @@ from llm_gateway.storage.memory import (
     InMemoryApiKeyRepository,
     InMemoryModelRepository,
     InMemoryTenantRepository,
+    InMemoryUsageRepository,
 )
 from llm_gateway.storage.repositories import ApiKeyRecord
 
@@ -56,6 +57,7 @@ def _container(
         api_keys=api_keys if api_keys is not None else InMemoryApiKeyRepository(),
         models=InMemoryModelRepository(),
         tenants=InMemoryTenantRepository(),
+        usage=InMemoryUsageRepository(),
         providers=ProviderRegistry({}),
     )
 

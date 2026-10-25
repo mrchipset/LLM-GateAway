@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, Uuid, true
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Uuid, true
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -41,6 +41,46 @@ class ApiKeyRow(Base):
     __table_args__ = (
         Index("ix_api_keys_key_hash", "key_hash", unique=True),
         Index("ix_api_keys_tenant_id", "tenant_id"),
+    )
+
+
+class UsageRow(Base):
+    __tablename__ = "usage_records"
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    request_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey(
+            "tenants.id",
+            name="fk_usage_records_tenant_id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    api_key_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey(
+            "api_keys.id",
+            name="fk_usage_records_api_key_id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    model_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    prompt_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
+    completion_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
+    total_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
+    cached_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        Index("ix_usage_records_request_id", "request_id"),
+        Index("ix_usage_records_tenant_created", "tenant_id", "created_at"),
+        Index("ix_usage_records_api_key_id", "api_key_id"),
+        Index("ix_usage_records_model_created", "model_id", "created_at"),
+        Index("ix_usage_records_created_at", "created_at"),
     )
 
 

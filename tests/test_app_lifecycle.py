@@ -15,6 +15,7 @@ from llm_gateway.storage.memory import (
     InMemoryApiKeyRepository,
     InMemoryModelRepository,
     InMemoryTenantRepository,
+    InMemoryUsageRepository,
 )
 
 ClientFactory = Callable[..., AbstractAsyncContextManager[httpx.AsyncClient]]
@@ -28,6 +29,7 @@ class _TrackingContainer(Container):
             api_keys=InMemoryApiKeyRepository(),
             models=InMemoryModelRepository(),
             tenants=InMemoryTenantRepository(),
+            usage=InMemoryUsageRepository(),
             providers=ProviderRegistry({}),
         )
         self.closed = False

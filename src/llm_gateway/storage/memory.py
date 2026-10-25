@@ -12,7 +12,9 @@ from llm_gateway.storage.repositories import (
     DuplicateModelError,
     DuplicateTenantError,
     ModelConfig,
+    ModelUsage,
     Tenant,
+    UsageRecord,
 )
 
 
@@ -146,3 +148,90 @@ class InMemoryApiKeyRepository:
             if record is None:
                 raise KeyError(f"api key {key_id} not found")
             self._keys[key_id] = replace(record, last_used_at=used_at)
+
+
+def _usage_matches(
+    record: UsageRecord,
+    *,
+    tenant_id: UUID | None,
+    model_id: str | None,
+    since: datetime | None,
+    until: datetime | None,
+) -> bool:
+    if tenant_id is not None and record.tenant_id != tenant_id:
+        return False
+    if model_id is not None and record.model_id != model_id:
+        return False
+    if since is not None and record.created_at < since:
+        return False
+    return not (until is not None and record.created_at >= until)
+
+
+class InMemoryUsageRepository:
+    """Process-local usage ledger with the same caveats as the other stores."""
+
+    def __init__(self) -> None:
+        self._records: list[UsageRecord] = []
+        self._lock = asyncio.Lock()
+
+    async def record(self, record: UsageRecord) -> None:
+        async with self._lock:
+            self._records.append(record)
+
+    def _select(
+        self,
+        *,
+        tenant_id: UUID | None,
+        model_id: str | None,
+        since: datetime | None,
+        until: datetime | None,
+    ) -> list[UsageRecord]:
+        return [
+            record
+            for record in self._records
+            if _usage_matches(
+                record,
+                tenant_id=tenant_id,
+                model_id=model_id,
+                since=since,
+                until=until,
+            )
+        ]
+
+    async def summary_by_model(
+        self,
+        *,
+        tenant_id: UUID | None,
+        model_id: str | None,
+        since: datetime | None,
+        until: datetime | None,
+    ) -> Sequence[ModelUsage]:
+        records = self._select(tenant_id=tenant_id, model_id=model_id, since=since, until=until)
+        aggregated: dict[tuple[str, str], ModelUsage] = {}
+        for record in records:
+            key = (record.model_id, record.provider.value)
+            current = aggregated.get(key)
+            if current is None:
+                aggregated[key] = ModelUsage(
+                    model_id=record.model_id,
+                    provider=record.provider,
+                    prompt_tokens=record.prompt_tokens,
+                    completion_tokens=record.completion_tokens,
+                    cached_tokens=record.cached_tokens,
+                    total_tokens=record.total_tokens,
+                    requests=1,
+                )
+                continue
+            aggregated[key] = ModelUsage(
+                model_id=current.model_id,
+                provider=current.provider,
+                prompt_tokens=current.prompt_tokens + record.prompt_tokens,
+                completion_tokens=current.completion_tokens + record.completion_tokens,
+                cached_tokens=current.cached_tokens + record.cached_tokens,
+                total_tokens=current.total_tokens + record.total_tokens,
+                requests=current.requests + 1,
+            )
+        return sorted(
+            aggregated.values(),
+            key=lambda item: (-item.total_tokens, item.model_id),
+        )

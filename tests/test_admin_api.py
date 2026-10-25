@@ -530,6 +530,7 @@ async def test_every_admin_route_rejects_missing_and_inference_credentials(
         targets.extend((method.upper(), concrete) for method in operations)
 
     assert targets, "expected the management routes to be mounted"
+    assert ("GET", "/api/v1/usage/summary") in targets
     assert any(path == "/api/v1/tenants" for _, path in targets), (
         "tenant routes must be covered by the credential boundary test"
     )
