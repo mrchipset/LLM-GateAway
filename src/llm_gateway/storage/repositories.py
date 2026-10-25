@@ -11,7 +11,6 @@ from llm_gateway.providers.base import ProviderName
 _HEX_DIGITS = frozenset("0123456789abcdef")
 
 DEFAULT_TENANT_ID = UUID("00000000-0000-0000-0000-000000000001")
-DEFAULT_TENANT_NAME = "default"
 
 
 def _require_non_blank(value: str, field: str) -> None:
@@ -99,6 +98,14 @@ class DuplicateTenantError(Exception):
     def __init__(self, name: str) -> None:
         super().__init__(f"tenant '{name}' already exists")
         self.name = name
+
+
+class UnknownTenantError(Exception):
+    """Raised when a write references a tenant that no longer exists."""
+
+    def __init__(self, tenant_id: UUID) -> None:
+        super().__init__(f"tenant '{tenant_id}' does not exist")
+        self.tenant_id = tenant_id
 
 
 class DuplicateApiKeyError(Exception):

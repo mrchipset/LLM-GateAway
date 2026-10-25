@@ -530,6 +530,9 @@ async def test_every_admin_route_rejects_missing_and_inference_credentials(
         targets.extend((method.upper(), concrete) for method in operations)
 
     assert targets, "expected the management routes to be mounted"
+    assert any(path == "/api/v1/tenants" for _, path in targets), (
+        "tenant routes must be covered by the credential boundary test"
+    )
 
     transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -712,6 +715,7 @@ async def test_list_api_keys_filters_by_tenant_and_isolates_other_tenants(
 
     body_a = page_a.json()
     assert body_a["total"] == 1
+    assert body_a["tenant_id"] == str(tenant_a.id)
     assert [item["name"] for item in body_a["items"]] == ["a-key"]
     assert body_a["items"][0]["tenant_id"] == str(tenant_a.id)
 
@@ -719,9 +723,8 @@ async def test_list_api_keys_filters_by_tenant_and_isolates_other_tenants(
     assert body_b["total"] == 1
     assert [item["name"] for item in body_b["items"]] == ["b-key"]
 
-    assert page_unknown.status_code == 200
-    assert page_unknown.json()["total"] == 0
-    assert page_unknown.json()["items"] == []
+    assert page_unknown.status_code == 404
+    assert _error(page_unknown)["code"] == "tenant_not_found"
 
 
 async def test_tenant_key_authenticates_inference_and_health_is_unaffected(

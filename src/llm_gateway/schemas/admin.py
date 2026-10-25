@@ -68,6 +68,7 @@ class ApiKeyListResponse(BaseModel):
     total: int
     limit: int
     offset: int
+    tenant_id: UUID | None = None
 
 
 class CreateTenantRequest(BaseModel):

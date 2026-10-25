@@ -12,7 +12,6 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import text
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from llm_gateway.config import Environment, Settings, StorageBackend
@@ -26,6 +25,7 @@ from llm_gateway.storage.repositories import (
     DuplicateTenantError,
     ModelConfig,
     Tenant,
+    UnknownTenantError,
 )
 
 _TEST_DATABASE_URL = os.environ.get("GATEWAY_TEST_DATABASE_URL")
@@ -286,7 +286,7 @@ async def test_api_key_touch_last_used_raises_for_missing_key(database: Database
 
 
 async def test_api_key_fk_rejects_unknown_tenant(database: Database) -> None:
-    with pytest.raises(IntegrityError):
+    with pytest.raises(UnknownTenantError):
         await database.api_keys.create_key(_key(1, tenant_id=uuid4()))
 
 

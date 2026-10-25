@@ -42,14 +42,19 @@ the list safe to show in a UI.
 
 ## Chosen approach
 
-- `/api/v1/keys` and `/api/v1/models` require `require_master_key` at the router
-  level; inference keys and the master key cannot cross endpoints in either
-  direction.
-- Key creation validates a future `expires_at`, generates the secret with
+- `/api/v1/keys`, `/api/v1/models`, and `/api/v1/tenants` require
+  `require_master_key` at the router level; inference keys and the master key
+  cannot cross endpoints in either direction.
+- Tenants are created and listed through `/api/v1/tenants`; names are unique and
+  case-sensitive. There is no update or delete endpoint.
+- Key creation requires an existing `tenant_id` (404 `tenant_not_found`),
+  validates a future `expires_at`, generates the secret with
   `secrets.token_urlsafe`, persists only the SHA-256 hash and display prefix,
   and returns the secret once.
 - Lists use `limit` (1..100, default 50) and `offset`, with `total` from the
-  repository. Ordering is delegated to the repository so memory and SQL share
+  repository. `GET /keys` filters by `tenant_id`, echoes the filter, and returns
+  404 when the tenant does not exist. Ordering is delegated to the repository so
+  memory and SQL share
   one behavior.
 - Model creation validates the provider against the configured registry (400
   `provider_not_configured`), returns 409 `duplicate_model` on conflict, and
@@ -61,6 +66,9 @@ the list safe to show in a UI.
 
 - No audit log of administrative actions yet; this is required before multi-user
   operation and is recorded as a follow-up.
+- Tenancy is attribution-only: there is no tenant-scoped admin credential,
+  shared tenant login, quota, or model allow-list. Those belong to an identity
+  phase, not to key management.
 - A single static master key means no per-operator attribution or rotation.
 - There is no model update endpoint; changing `upstream_model` requires delete
   and recreate, which briefly makes the model unavailable.

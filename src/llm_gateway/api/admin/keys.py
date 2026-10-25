@@ -15,11 +15,22 @@ from llm_gateway.schemas.admin import (
     CreateApiKeyRequest,
     CreatedApiKeyResponse,
 )
+from llm_gateway.storage.repositories import UnknownTenantError
 
 router = APIRouter(dependencies=[Depends(require_master_key)])
 
 PaginationLimit = Annotated[int, Query(ge=1, le=100)]
 PaginationOffset = Annotated[int, Query(ge=0)]
+
+
+def _tenant_not_found(tenant_id: UUID) -> ApiError:
+    return ApiError(
+        status_code=404,
+        code=ApiErrorCode.TENANT_NOT_FOUND,
+        message=f"Tenant '{tenant_id}' was not found",
+        error_type="invalid_request_error",
+        param="tenant_id",
+    )
 
 
 @router.post("/keys", response_model=CreatedApiKeyResponse, status_code=201)
@@ -36,13 +47,7 @@ async def create_api_key(
 
     tenant = await container.tenants.get_tenant(payload.tenant_id)
     if tenant is None:
-        raise ApiError(
-            status_code=404,
-            code=ApiErrorCode.TENANT_NOT_FOUND,
-            message=f"Tenant '{payload.tenant_id}' was not found",
-            error_type="invalid_request_error",
-            param="tenant_id",
-        )
+        raise _tenant_not_found(payload.tenant_id)
 
     secret, record = generate_api_key(
         key_id=uuid4(),
@@ -51,7 +56,11 @@ async def create_api_key(
         now=now,
         expires_at=payload.expires_at,
     )
-    await container.api_keys.create_key(record)
+    try:
+        await container.api_keys.create_key(record)
+    except UnknownTenantError as exc:
+        # The tenant can disappear between validation and the insert.
+        raise _tenant_not_found(payload.tenant_id) from exc
 
     # The plaintext secret is returned exactly once and never logged or stored.
     return CreatedApiKeyResponse(
@@ -72,6 +81,9 @@ async def list_api_keys(
     limit: PaginationLimit = 50,
     offset: PaginationOffset = 0,
 ) -> ApiKeyListResponse:
+    if tenant_id is not None and await container.tenants.get_tenant(tenant_id) is None:
+        raise _tenant_not_found(tenant_id)
+
     records, total = await container.api_keys.list_keys(
         limit=limit, offset=offset, tenant_id=tenant_id
     )
@@ -92,6 +104,7 @@ async def list_api_keys(
         total=total,
         limit=limit,
         offset=offset,
+        tenant_id=tenant_id,
     )
 
 

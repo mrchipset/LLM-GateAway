@@ -18,10 +18,12 @@ from llm_gateway.storage.repositories import (
     DuplicateTenantError,
     ModelConfig,
     Tenant,
+    UnknownTenantError,
 )
 from llm_gateway.storage.tables import ApiKeyRow, ModelRow, TenantRow
 
 _UNIQUE_VIOLATION_SQLSTATE = "23505"
+_FOREIGN_KEY_VIOLATION_SQLSTATE = "23503"
 
 
 def _validate_page(*, limit: int, offset: int) -> None:
@@ -36,6 +38,14 @@ def _is_unique_violation(error: IntegrityError) -> bool:
     return (
         getattr(original, "sqlstate", None) == _UNIQUE_VIOLATION_SQLSTATE
         or getattr(original, "pgcode", None) == _UNIQUE_VIOLATION_SQLSTATE
+    )
+
+
+def _is_foreign_key_violation(error: IntegrityError) -> bool:
+    original = error.orig
+    return (
+        getattr(original, "sqlstate", None) == _FOREIGN_KEY_VIOLATION_SQLSTATE
+        or getattr(original, "pgcode", None) == _FOREIGN_KEY_VIOLATION_SQLSTATE
     )
 
 
@@ -183,6 +193,8 @@ class SqlAlchemyApiKeyRepository:
         except IntegrityError as exc:
             if _is_unique_violation(exc):
                 raise DuplicateApiKeyError() from exc
+            if _is_foreign_key_violation(exc):
+                raise UnknownTenantError(record.tenant_id) from exc
             raise
         return record
 

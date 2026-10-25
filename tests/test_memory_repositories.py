@@ -269,6 +269,16 @@ async def test_tenant_duplicate_name_raises() -> None:
         await repository.create_tenant(duplicate)
 
 
+async def test_tenant_duplicate_id_raises() -> None:
+    repository = InMemoryTenantRepository()
+    existing = _tenant(1)
+    await repository.create_tenant(existing)
+
+    conflicting = Tenant(id=existing.id, name="other", created_at=BASE)
+    with pytest.raises(DuplicateTenantError, match="tenant 'other' already exists"):
+        await repository.create_tenant(conflicting)
+
+
 async def test_tenant_names_are_case_sensitive() -> None:
     repository = InMemoryTenantRepository()
     await repository.create_tenant(Tenant(id=uuid4(), name="Acme", created_at=BASE))

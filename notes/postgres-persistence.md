@@ -47,9 +47,12 @@ tests, so migration and ORM metadata are validated together.
 
 ## Chosen approach
 
-- `ApiKeyRow` / `ModelRow` map to the existing domain dataclasses. `key_hash` is
-  unique-indexed (`ix_api_keys_key_hash`); `provider` is stored as text and
-  parsed back into `ProviderName` with an explicit error on unknown values.
+- `ApiKeyRow` / `ModelRow` / `TenantRow` map to the existing domain dataclasses.
+  `key_hash` is unique-indexed (`ix_api_keys_key_hash`); `api_keys.tenant_id` is
+  a `NOT NULL` foreign key (`ON DELETE RESTRICT`) added by migration `0002`,
+  which also backfills existing keys to the fixed `default` tenant. `provider`
+  is stored as text and parsed back into `ProviderName` with an explicit error
+  on unknown values.
 - `SqlAlchemy*Repository` performs one transaction per operation, converts rows
   to domain objects before returning, maps unique violations to
   `DuplicateModelError` / `DuplicateApiKeyError`, implements revocation as a
@@ -63,9 +66,9 @@ tests, so migration and ORM metadata are validated together.
   branch wires the repositories, a `database` readiness check, and closes the
   engine in `Container.aclose()`.
 - Integration tests are marked `integration` and skipped unless
-  `GATEWAY_TEST_DATABASE_URL` is set. 16 tests cover CRUD, ordering,
-  pagination, `enabled_only`, duplicate detection, revocation transitions, and
-  `ping`/`aclose`.
+  `GATEWAY_TEST_DATABASE_URL` is set. 24 tests cover CRUD, ordering, pagination,
+  `enabled_only`, tenant scoping and the migration backfill, duplicate
+  detection, revocation transitions, and `ping`/`aclose`.
 
 ## Trade-offs and risks
 

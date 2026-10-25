@@ -7,13 +7,13 @@
 - OpenAI 兼容的 `POST /v1/chat/completions`，支持 `stream=true` 与 `stream=false`
 - `GET /v1/models` 返回已启用的模型
 - Provider 抽象：OpenAI、DeepSeek（OpenAI 兼容）adapter 与确定性 Fake provider
-- API key 认证：只存 SHA-256 哈希，支持过期与吊销
-- 管理 API：`/api/v1/keys`、`/api/v1/models`，由 master key 保护
+- API key 认证：只存 SHA-256 哈希，支持过期与吊销，并归属到一个租户
+- 管理 API：`/api/v1/keys`、`/api/v1/models`、`/api/v1/tenants`，由 master key 保护
 - PostgreSQL 持久化（SQLAlchemy 2 async + Alembic），默认也可用内存模式本地开发
 - 结构化 JSON 日志、request id、`/healthz` 与 `/readyz`
 - React + Vite + TypeScript 管理台骨架：健康状态与模型列表
 
-不在本次范围：预算与计费、guardrail、MCP/Agent、多租户与 SSO、Redis 限流/缓存、高级路由与 fallback、完整 Dashboard。
+不在本次范围：预算与计费、guardrail、MCP/Agent、租户级权限模型与 SSO/JWT/OAuth、Redis 限流/缓存、高级路由与 fallback、完整 Dashboard。
 
 ## 环境要求
 
@@ -76,12 +76,19 @@ Invoke-RestMethod http://127.0.0.1:4000/readyz
 ```powershell
 $master = "你的 master key"
 
+# 先创建租户；每个 API key 必须归属一个租户
+$tenant = Invoke-RestMethod -Method Post `
+  -Uri http://127.0.0.1:4000/api/v1/tenants `
+  -Headers @{ Authorization = "Bearer $master" } `
+  -ContentType "application/json" `
+  -Body '{"name":"local-dev"}'
+
 # 创建推理用 API key；明文只在这一次响应中返回
 $keyResponse = Invoke-RestMethod -Method Post `
   -Uri http://127.0.0.1:4000/api/v1/keys `
   -Headers @{ Authorization = "Bearer $master" } `
   -ContentType "application/json" `
-  -Body '{"name":"local-dev"}'
+  -Body (@{ name = "local-dev"; tenant_id = $tenant.id } | ConvertTo-Json)
 
 $key = $keyResponse.key
 $key
@@ -328,7 +335,8 @@ design.md            LLM-GateAway 设计建议
 
 - 仅实现 OpenAI、DeepSeek（OpenAI 兼容）与 fake provider；Anthropic、Bedrock、Vertex 等非 OpenAI 协议尚未加入。
 - 每个模型对应一个上游模型，不支持多 deployment、权重、fallback 或 cooldown。
-- 没有预算、计费、限流、guardrail、缓存、审计日志与多租户。
+- 没有配额、计费、限流、guardrail、缓存与审计日志；租户只是归属标签，没有租户级管理凭据或权限隔离。
+- 创建 key 必须指定 `tenant_id`（对旧调用方是破坏性变更）；没有租户更新或删除接口。
 - 模型配置只有创建、列出、删除，没有更新接口；修改需删除后重建。
 - `/v1/models` 最多返回 1000 条；管理 API 使用 offset 分页。
 - 每个已认证推理请求都会写一次 `last_used_at`，高并发下需要改为采样或批处理。

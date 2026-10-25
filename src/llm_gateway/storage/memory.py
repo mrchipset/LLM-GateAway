@@ -73,6 +73,8 @@ class InMemoryTenantRepository:
 
     async def create_tenant(self, tenant: Tenant) -> Tenant:
         async with self._lock:
+            if tenant.id in self._tenants:
+                raise DuplicateTenantError(tenant.name)
             if any(existing.name == tenant.name for existing in self._tenants.values()):
                 raise DuplicateTenantError(tenant.name)
             self._tenants[tenant.id] = tenant
