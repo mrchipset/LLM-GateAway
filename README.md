@@ -22,7 +22,7 @@
 - Node.js 20+（仅管理台需要）
 - Docker（可选，用于本地 PostgreSQL / Redis）
 
-所有命令均在 Windows PowerShell 与 bash 中可用。
+以下命令示例使用 PowerShell 7；bash 用户可将 `Invoke-RestMethod` 示例改写为等价的 `curl` 调用。
 
 ## 快速开始
 
@@ -38,14 +38,14 @@ uv sync
 Copy-Item .env.example .env
 ```
 
-编辑 `.env`，至少替换 `GATEWAY_MASTER_KEY`。示例里的占位值会被拒绝，请使用足够长的随机字符串：
+编辑 `.env`，替换 `GATEWAY_MASTER_KEY`。示例里的占位值会被拒绝，请使用足够长的随机字符串：
 
 ```powershell
 # 生成本地 master key
 uv run python -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
 
-内存模式（默认）适合本地试用，重启后 API key 与模型会丢失：
+内存模式（默认）适合本地试用，重启后 API key 与模型会丢失。下面的配置同时启用了 fake provider；如果只替换 master key 而保留 `.env.example` 中的 `GATEWAY_FAKE_PROVIDER_ENABLED=false`，第 4 步注册 fake 模型会返回 400 `provider_not_configured`。
 
 ```dotenv
 GATEWAY_ENVIRONMENT=development
