@@ -8,7 +8,8 @@
 - `GET /v1/models` 返回已启用的模型
 - Provider 抽象：OpenAI、DeepSeek（OpenAI 兼容）adapter 与确定性 Fake provider
 - API key 认证：只存 SHA-256 哈希，支持过期与吊销，并归属到一个租户
-- 管理 API：`/api/v1/keys`、`/api/v1/models`、`/api/v1/tenants`，由 master key 保护
+- Token 用量记录与汇总：输入、输出、缓存命中，按租户、key、模型归属
+- 管理 API：`/api/v1/keys`、`/api/v1/models`、`/api/v1/tenants`、`/api/v1/usage/summary`，由 master key 保护
 - PostgreSQL 持久化（SQLAlchemy 2 async + Alembic），默认也可用内存模式本地开发
 - 结构化 JSON 日志、request id、`/healthz` 与 `/readyz`
 - React + Vite + TypeScript 管理台骨架：健康状态与模型列表
@@ -191,6 +192,51 @@ Invoke-RestMethod -Method Post `
 - DeepSeek 在 `stream_options.include_usage=true` 时把 usage 附在最后一个内容 chunk 上，没有独立的 usage-only chunk；网关按原样转发。
 - 推理模型首 token 可能较慢，必要时提高 `GATEWAY_REQUEST_TIMEOUT_SECONDS`。
 
+## Token 用量统计
+
+每个成功请求都会记录一条用量（租户、API key、模型、provider），包含输入、输出、总 token 与缓存命中 token。流式请求同样会记录：网关会向上游请求 usage，但只有客户端显式设置 `stream_options.include_usage=true` 时，usage chunk 才会转发给客户端。
+
+查询汇总（master key）：
+
+```powershell
+Invoke-RestMethod `
+  -Uri "http://127.0.0.1:4000/api/v1/usage/summary?tenant_id=$($tenant.id)&since=2026-10-01T00:00:00Z" `
+  -Headers @{ Authorization = "Bearer $master" }
+```
+
+可选参数：`tenant_id`、`model_id`、`since`、`until`。时间必须是带时区的 RFC 3339 字符串，区间为左闭右开 `[since, until)`；未知租户返回 404。
+
+响应示例：
+
+```json
+{
+  "prompt_tokens": 1200,
+  "completion_tokens": 340,
+  "cached_tokens": 800,
+  "total_tokens": 1540,
+  "requests": 12,
+  "by_model": [
+    {
+      "model_id": "deepseek-flash",
+      "provider": "deepseek",
+      "prompt_tokens": 1200,
+      "completion_tokens": 340,
+      "cached_tokens": 800,
+      "total_tokens": 1540,
+      "requests": 12
+    }
+  ]
+}
+```
+
+语义说明：
+
+- `cached_tokens` 是 `prompt_tokens` 的子集，不是额外的一档。它来自 OpenAI 的 `prompt_tokens_details.cached_tokens` 或 DeepSeek 的 `prompt_cache_hit_tokens`；不要把它与 `prompt_tokens` 相加。
+- `total_tokens` 使用上游上报值，不做重新计算。
+- `by_model` 按 `(model_id, provider)` 分组；同一个模型名如果换过 provider，会出现两行。
+- 用量写入失败不会影响推理响应，只记录 `usage_record_failed` 告警；客户端在 usage 到达前断开时可能没有记录。
+- 目前没有按 key 的汇总端点，也没有用量 UI。
+
 ## 配置项
 
 | 变量 | 说明 |
@@ -337,6 +383,8 @@ design.md            LLM-GateAway 设计建议
 - 每个模型对应一个上游模型，不支持多 deployment、权重、fallback 或 cooldown。
 - 没有配额、计费、限流、guardrail、缓存与审计日志；租户只是归属标签，没有租户级管理凭据或权限隔离。
 - 创建 key 必须指定 `tenant_id`（对旧调用方是破坏性变更）；没有租户更新或删除接口。
+- `usage_records` 没有保留策略或归档任务，会随请求持续增长；没有成本换算、按 key 汇总或用量 UI。
+- 流式请求在 usage 到达前断开时不会留下用量记录；写入超时或失败也只记录告警。
 - 模型配置只有创建、列出、删除，没有更新接口；修改需删除后重建。
 - `/v1/models` 最多返回 1000 条；管理 API 使用 offset 分页。
 - 每个已认证推理请求都会写一次 `last_used_at`，高并发下需要改为采样或批处理。
