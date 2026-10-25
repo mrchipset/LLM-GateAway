@@ -67,3 +67,23 @@ export function KeyIcon({ className }: IconProps) {
     </svg>
   );
 }
+
+export function ModelsIcon({ className }: IconProps) {
+  return (
+    <svg {...iconProps} className={className}>
+      <path d="M2.2 4.1 8 1.5l5.8 2.6L8 6.7 2.2 4.1Z" />
+      <path d="M2.2 8 8 10.6 13.8 8" />
+      <path d="M2.2 11.9 8 14.5l5.8-2.6" />
+    </svg>
+  );
+}
+
+export function UsageIcon({ className }: IconProps) {
+  return (
+    <svg {...iconProps} className={className}>
+      <path d="M3 13V9" />
+      <path d="M8 13V4" />
+      <path d="M13 13V6.5" />
+    </svg>
+  );
+}

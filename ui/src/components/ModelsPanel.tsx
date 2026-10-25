@@ -1,11 +1,12 @@
 import { useState } from 'react';
 
-import { ApiRequestError, type ModelSummary } from '../api/client';
+import type { ModelSummary } from '../api/client';
 import type { ModelsQuery } from '../hooks/useModels';
 import { formatCreatedAt, formatUpdatedAt } from '../lib/format';
 import { Button } from './Button';
 import { KeyIcon, RefreshIcon } from './Icons';
 import { Panel, PanelHeader } from './Panel';
+import { RequestErrorPanel } from './RequestErrorPanel';
 
 const CURL_COMMAND =
   'curl -X POST http://127.0.0.1:4000/api/v1/models -H "Authorization: Bearer $GATEWAY_MASTER_KEY" -H "Content-Type: application/json" -d \'{"id":"gpt-4o-mini","provider":"openai","upstream_model":"gpt-4o-mini"}\'';
@@ -65,7 +66,14 @@ function ModelsContent({ masterKey, query }: ModelsContentProps) {
   if (masterKey === null) return <ConnectPrompt />;
   if (query.status === 'pending') return <ModelsSkeleton />;
   if (query.status === 'error') {
-    return <ModelsErrorState error={query.error} onRetry={() => void query.refetch()} />;
+    return (
+      <RequestErrorPanel
+        error={query.error}
+        title="Could not load models"
+        retryLabel="Retry loading models"
+        onRetry={() => void query.refetch()}
+      />
+    );
   }
 
   return (
@@ -159,55 +167,6 @@ function EmptyRegistry() {
           <p className="mt-1.5 text-xs text-danger">Could not copy. Select the command instead.</p>
         )}
       </div>
-    </div>
-  );
-}
-
-interface ModelsErrorStateProps {
-  error: Error;
-  onRetry: () => void;
-}
-
-function ModelsErrorState({ error, onRetry }: ModelsErrorStateProps) {
-  const requestError = error instanceof ApiRequestError ? error : null;
-  const statusLine =
-    requestError === null
-      ? 'Request failed'
-      : requestError.status === 0
-        ? 'Network error'
-        : `HTTP ${requestError.status}`;
-  const code = requestError?.code ?? null;
-  const requestId = requestError?.requestId ?? null;
-
-  return (
-    <div role="alert" className="rounded-md border border-danger/30 bg-danger-soft/60 p-4">
-      <h3 className="text-sm font-semibold text-danger">Could not load models</h3>
-      <p className="mt-1 font-mono text-[11.5px] text-ink">{statusLine}</p>
-      <p className="mt-2 text-[13px] text-ink">{requestError?.message ?? error.message}</p>
-      {(code !== null || requestId !== null) && (
-        <dl className="mt-3 grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 border-t border-danger/20 pt-3 font-mono text-[11px]">
-          {code !== null && (
-            <>
-              <dt className="text-ink-muted">Code</dt>
-              <dd className="break-all text-ink">{code}</dd>
-            </>
-          )}
-          {requestId !== null && (
-            <>
-              <dt className="text-ink-muted">Request ID</dt>
-              <dd className="select-all break-all text-ink">{requestId}</dd>
-            </>
-          )}
-        </dl>
-      )}
-      <Button
-        variant="secondary"
-        className="mt-4"
-        onClick={onRetry}
-        aria-label="Retry loading models"
-      >
-        Retry
-      </Button>
     </div>
   );
 }

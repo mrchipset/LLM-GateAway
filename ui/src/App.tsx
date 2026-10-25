@@ -4,9 +4,17 @@ import { useState } from 'react';
 import { ApiRequestError } from './api/client';
 import { ConnectionPanel } from './components/ConnectionPanel';
 import { Header } from './components/Header';
-import { ModelsPanel } from './components/ModelsPanel';
+import { Workspace } from './components/Workspace';
 import { useBackendStatus } from './hooks/useBackendStatus';
 import { useModels } from './hooks/useModels';
+
+const ADMIN_QUERY_PREFIXES = [
+  ['admin-models'],
+  ['admin-tenants'],
+  ['usage-summary'],
+  ['usage-series'],
+  ['usage-by-key'],
+];
 
 export default function App() {
   const [masterKey, setMasterKey] = useState<string | null>(null);
@@ -22,8 +30,10 @@ export default function App() {
 
   const handleDisconnect = () => {
     setMasterKey(null);
-    void queryClient.cancelQueries({ queryKey: ['admin-models'] });
-    queryClient.removeQueries({ queryKey: ['admin-models'] });
+    for (const queryKey of ADMIN_QUERY_PREFIXES) {
+      void queryClient.cancelQueries({ queryKey });
+      queryClient.removeQueries({ queryKey });
+    }
   };
 
   return (
@@ -43,7 +53,7 @@ export default function App() {
             </div>
           </div>
           <div className="min-w-0 animate-rise [animation-delay:160ms]">
-            <ModelsPanel masterKey={masterKey} query={modelsQuery} />
+            <Workspace masterKey={masterKey} modelsQuery={modelsQuery} />
           </div>
         </main>
       </div>

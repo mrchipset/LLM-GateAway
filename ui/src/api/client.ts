@@ -25,6 +25,65 @@ export interface ModelListResponse {
   offset: number;
 }
 
+export interface TenantSummary {
+  id: string;
+  name: string;
+  created_at: string;
+  monthly_token_quota: number | null;
+  requests_per_minute: number | null;
+}
+
+export interface TenantListResponse {
+  items: TenantSummary[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface UsageCounts {
+  prompt_tokens: number;
+  completion_tokens: number;
+  cached_tokens: number;
+  total_tokens: number;
+  requests: number;
+}
+
+export interface UsageModelSummary extends UsageCounts {
+  model_id: string;
+  provider: string;
+}
+
+export interface UsageSummaryResponse extends UsageCounts {
+  by_model: UsageModelSummary[];
+}
+
+export interface UsagePoint extends UsageCounts {
+  bucket_start: string;
+}
+
+export type UsageBucket = 'hour' | 'day';
+
+export interface UsageSeriesResponse {
+  bucket: UsageBucket;
+  points: UsagePoint[];
+}
+
+export interface KeyUsageSummary extends UsageCounts {
+  api_key_id: string;
+  name: string | null;
+  key_prefix: string | null;
+}
+
+export interface UsageByKeyResponse {
+  limit: number;
+  items: KeyUsageSummary[];
+}
+
+export interface UsageWindow {
+  tenantId: string | null;
+  since: string;
+}
+
 export class ApiRequestError extends Error {
   readonly status: number;
   readonly code: string | null;
@@ -65,6 +124,61 @@ function isModelSummary(value: unknown): value is ModelSummary {
     typeof value.upstream_model === 'string' &&
     typeof value.enabled === 'boolean' &&
     typeof value.created_at === 'string'
+  );
+}
+
+function isCount(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0;
+}
+
+function isNullableCount(value: unknown): value is number | null {
+  return value === null || isCount(value);
+}
+
+function isTenantSummary(value: unknown): value is TenantSummary {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.id === 'string' &&
+    typeof value.name === 'string' &&
+    typeof value.created_at === 'string' &&
+    isNullableCount(value.monthly_token_quota) &&
+    isNullableCount(value.requests_per_minute)
+  );
+}
+
+function isUsageCounts(value: unknown): value is UsageCounts {
+  if (!isRecord(value)) return false;
+  const { prompt_tokens, completion_tokens, cached_tokens, total_tokens, requests } = value;
+  return (
+    isCount(prompt_tokens) &&
+    isCount(completion_tokens) &&
+    isCount(cached_tokens) &&
+    isCount(total_tokens) &&
+    isCount(requests) &&
+    cached_tokens <= prompt_tokens
+  );
+}
+
+function isUsageModelSummary(value: unknown): value is UsageModelSummary {
+  if (!isRecord(value) || !isUsageCounts(value)) return false;
+  return typeof value.model_id === 'string' && typeof value.provider === 'string';
+}
+
+function isUsagePoint(value: unknown): value is UsagePoint {
+  if (!isRecord(value) || !isUsageCounts(value)) return false;
+  return typeof value.bucket_start === 'string';
+}
+
+function isUsageBucket(value: unknown): value is UsageBucket {
+  return value === 'hour' || value === 'day';
+}
+
+function isKeyUsageSummary(value: unknown): value is KeyUsageSummary {
+  if (!isRecord(value) || !isUsageCounts(value)) return false;
+  return (
+    typeof value.api_key_id === 'string' &&
+    (value.name === null || typeof value.name === 'string') &&
+    (value.key_prefix === null || typeof value.key_prefix === 'string')
   );
 }
 
@@ -116,6 +230,35 @@ function parseErrorEnvelope(
     type,
     requestId: typeof request_id === 'string' ? request_id : null,
   };
+}
+
+async function sendAdmin(path: string, masterKey: string, signal?: AbortSignal): Promise<Response> {
+  const response = await send(path, {
+    signal,
+    headers: {
+      Accept: 'application/json',
+      Authorization: `Bearer ${masterKey}`,
+    },
+  });
+  if (!response.ok) throw await toRequestError(response);
+  return response;
+}
+
+function unexpectedPayload(response: Response, label: string): ApiRequestError {
+  return new ApiRequestError({
+    status: response.status,
+    message: `The backend returned an unexpected ${label} payload.`,
+    requestId: response.headers.get('x-request-id'),
+  });
+}
+
+function usageWindowQuery(window: UsageWindow): URLSearchParams {
+  const params = new URLSearchParams();
+  if (window.tenantId !== null && window.tenantId !== '') {
+    params.set('tenant_id', window.tenantId);
+  }
+  params.set('since', window.since);
+  return params;
 }
 
 async function toRequestError(response: Response): Promise<ApiRequestError> {
@@ -177,28 +320,17 @@ export async function listModels(
   masterKey: string,
   signal?: AbortSignal,
 ): Promise<ModelListResponse> {
-  const response = await send('/api/v1/models?limit=100&offset=0', {
-    signal,
-    headers: {
-      Accept: 'application/json',
-      Authorization: `Bearer ${masterKey}`,
-    },
-  });
-  if (!response.ok) throw await toRequestError(response);
-
+  const response = await sendAdmin('/api/v1/models?limit=100&offset=0', masterKey, signal);
   const payload = await readJson(response, '/api/v1/models');
   if (
     !isRecord(payload) ||
     !Array.isArray(payload.items) ||
     !payload.items.every(isModelSummary) ||
-    typeof payload.total !== 'number' ||
-    typeof payload.limit !== 'number' ||
-    typeof payload.offset !== 'number'
+    !isCount(payload.total) ||
+    !isCount(payload.limit) ||
+    !isCount(payload.offset)
   ) {
-    throw new ApiRequestError({
-      status: response.status,
-      message: 'The backend returned an unexpected model list payload.',
-    });
+    throw unexpectedPayload(response, 'model list');
   }
 
   return {
@@ -207,4 +339,101 @@ export async function listModels(
     limit: payload.limit,
     offset: payload.offset,
   };
+}
+
+export async function listTenants(
+  masterKey: string,
+  signal?: AbortSignal,
+): Promise<TenantListResponse> {
+  const response = await sendAdmin('/api/v1/tenants?limit=100&offset=0', masterKey, signal);
+  const payload = await readJson(response, '/api/v1/tenants');
+  if (
+    !isRecord(payload) ||
+    !Array.isArray(payload.items) ||
+    !payload.items.every(isTenantSummary) ||
+    !isCount(payload.total) ||
+    !isCount(payload.limit) ||
+    !isCount(payload.offset)
+  ) {
+    throw unexpectedPayload(response, 'tenant list');
+  }
+
+  return {
+    items: payload.items,
+    total: payload.total,
+    limit: payload.limit,
+    offset: payload.offset,
+  };
+}
+
+export async function getUsageSummary(
+  masterKey: string,
+  window: UsageWindow,
+  signal?: AbortSignal,
+): Promise<UsageSummaryResponse> {
+  const path = `/api/v1/usage/summary?${usageWindowQuery(window).toString()}`;
+  const response = await sendAdmin(path, masterKey, signal);
+  const payload = await readJson(response, '/api/v1/usage/summary');
+  if (
+    !isRecord(payload) ||
+    !isUsageCounts(payload) ||
+    !Array.isArray(payload.by_model) ||
+    !payload.by_model.every(isUsageModelSummary)
+  ) {
+    throw unexpectedPayload(response, 'usage summary');
+  }
+
+  return {
+    prompt_tokens: payload.prompt_tokens,
+    completion_tokens: payload.completion_tokens,
+    cached_tokens: payload.cached_tokens,
+    total_tokens: payload.total_tokens,
+    requests: payload.requests,
+    by_model: payload.by_model,
+  };
+}
+
+export async function getUsageSeries(
+  masterKey: string,
+  window: UsageWindow,
+  signal?: AbortSignal,
+): Promise<UsageSeriesResponse> {
+  const params = usageWindowQuery(window);
+  params.set('bucket', 'day');
+  const path = `/api/v1/usage/series?${params.toString()}`;
+  const response = await sendAdmin(path, masterKey, signal);
+  const payload = await readJson(response, '/api/v1/usage/series');
+  if (
+    !isRecord(payload) ||
+    !isUsageBucket(payload.bucket) ||
+    !Array.isArray(payload.points) ||
+    !payload.points.every(isUsagePoint)
+  ) {
+    throw unexpectedPayload(response, 'usage series');
+  }
+
+  return { bucket: payload.bucket, points: payload.points };
+}
+
+export async function getUsageByKey(
+  masterKey: string,
+  window: UsageWindow,
+  signal?: AbortSignal,
+  limit = 100,
+): Promise<UsageByKeyResponse> {
+  const params = usageWindowQuery(window);
+  params.set('limit', String(limit));
+  const path = `/api/v1/usage/by-key?${params.toString()}`;
+  const response = await sendAdmin(path, masterKey, signal);
+  const payload = await readJson(response, '/api/v1/usage/by-key');
+  if (
+    !isRecord(payload) ||
+    !isCount(payload.limit) ||
+    !Array.isArray(payload.items) ||
+    !payload.items.every(isKeyUsageSummary)
+  ) {
+    throw unexpectedPayload(response, 'usage by key');
+  }
+
+  return { limit: payload.limit, items: payload.items };
 }

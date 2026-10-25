@@ -6,6 +6,10 @@ export interface Routes {
   '/healthz'?: RouteHandler;
   '/readyz'?: RouteHandler;
   '/api/v1/models'?: RouteHandler;
+  '/api/v1/tenants'?: RouteHandler;
+  '/api/v1/usage/summary'?: RouteHandler;
+  '/api/v1/usage/series'?: RouteHandler;
+  '/api/v1/usage/by-key'?: RouteHandler;
 }
 
 export function toUrl(input: RequestInfo | URL): URL {
@@ -29,6 +33,18 @@ const defaultRoutes: Record<keyof Routes, RouteHandler> = {
   '/healthz': () => jsonResponse({ status: 'ok', version: '0.1.0' }),
   '/readyz': () => jsonResponse({ status: 'ok', checks: { database: 'ok' } }),
   '/api/v1/models': () => jsonResponse({ items: [], total: 0, limit: 100, offset: 0 }),
+  '/api/v1/tenants': () => jsonResponse({ items: [], total: 0, limit: 100, offset: 0 }),
+  '/api/v1/usage/summary': () =>
+    jsonResponse({
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      cached_tokens: 0,
+      total_tokens: 0,
+      requests: 0,
+      by_model: [],
+    }),
+  '/api/v1/usage/series': () => jsonResponse({ bucket: 'day', points: [] }),
+  '/api/v1/usage/by-key': () => jsonResponse({ limit: 100, items: [] }),
 };
 
 export function installFetchMock(overrides: Routes = {}): Mock<typeof fetch> {
