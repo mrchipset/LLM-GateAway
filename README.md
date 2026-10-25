@@ -9,6 +9,7 @@
 - Provider 抽象：OpenAI、DeepSeek（OpenAI 兼容）adapter 与确定性 Fake provider
 - API key 认证：只存 SHA-256 哈希，支持过期与吊销，并归属到一个租户
 - Token 用量记录与汇总：输入、输出、缓存命中，按租户、key、模型归属
+- 租户级月度 token 配额与每分钟请求限流（429 + `Retry-After`）
 - 管理 API：`/api/v1/keys`、`/api/v1/models`、`/api/v1/tenants`、`/api/v1/usage/summary`，由 master key 保护
 - PostgreSQL 持久化（SQLAlchemy 2 async + Alembic），默认也可用内存模式本地开发
 - 结构化 JSON 日志、request id、`/healthz` 与 `/readyz`
@@ -237,6 +238,26 @@ Invoke-RestMethod `
 - 用量写入失败不会影响推理响应，只记录 `usage_record_failed` 告警；客户端在 usage 到达前断开时可能没有记录。
 - 目前没有按 key 的汇总端点，也没有用量 UI。
 
+## 租户配额与限流
+
+为租户设置月度 token 配额与每分钟请求数（`null` 表示不限，值必须 ≥ 1）：
+
+```powershell
+Invoke-RestMethod -Method Patch `
+  -Uri "http://127.0.0.1:4000/api/v1/tenants/$($tenant.id)" `
+  -Headers @{ Authorization = "Bearer $master" } `
+  -ContentType "application/json" `
+  -Body '{"monthly_token_quota":1000000,"requests_per_minute":60}'
+```
+
+- `monthly_token_quota`：UTC 自然月内按上游上报的 `total_tokens` 累计。达到配额后，`POST /v1/chat/completions` 返回 429 `tenant_quota_exceeded`。
+- `requests_per_minute`：固定 60 秒窗口。超出后返回 429 `rate_limited`，并带 `Retry-After`（秒，1–60）。
+- PATCH 只修改请求体里出现的字段；显式传 `null` 清除对应限制。
+- 配额是软限制：请求前检查，并发或进行中的请求可能小幅超出；用量写入失败也会造成偏差。
+- 被限流或超配额的请求不会产生用量记录。
+- 限流只作用于 `POST /v1/chat/completions`；`/v1/models`、健康检查与管理 API 不受租户限流。
+- PostgreSQL 后端使用单行原子计数，支持多 worker；内存后端仅用于本地开发与测试。
+
 ## 配置项
 
 | 变量 | 说明 |
@@ -381,7 +402,8 @@ design.md            LLM-GateAway 设计建议
 
 - 仅实现 OpenAI、DeepSeek（OpenAI 兼容）与 fake provider；Anthropic、Bedrock、Vertex 等非 OpenAI 协议尚未加入。
 - 每个模型对应一个上游模型，不支持多 deployment、权重、fallback 或 cooldown。
-- 没有配额、计费、限流、guardrail、缓存与审计日志；租户只是归属标签，没有租户级管理凭据或权限隔离。
+- 没有计费/账单、按 key 或模型的限额、突发整形（token bucket）；配额是软限制。
+- 限流是固定 60 秒窗口，只到租户级；内存后端的计数仅限单进程。
 - 创建 key 必须指定 `tenant_id`（对旧调用方是破坏性变更）；没有租户更新或删除接口。
 - `usage_records` 没有保留策略或归档任务，会随请求持续增长；没有成本换算、按 key 汇总或用量 UI。
 - 流式请求在 usage 到达前断开时不会留下用量记录；写入超时或失败也只记录告警。
