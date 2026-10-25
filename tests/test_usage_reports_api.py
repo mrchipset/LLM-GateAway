@@ -213,13 +213,59 @@ async def test_usage_series_defaults_to_last_30_days_with_daily_buckets(
     assert response.status_code == 200
     body = response.json()
     assert body["bucket"] == "day"
-    assert [point["bucket_start"] for point in body["points"]] == [
-        "2026-01-01T00:00:00Z",
-        "2026-01-02T00:00:00Z",
-    ]
-    assert body["points"][0]["total_tokens"] == 20
-    assert body["points"][0]["requests"] == 2
-    assert body["points"][1]["total_tokens"] == 10
+    points = body["points"]
+    assert len(points) == 31
+    assert points[0]["bucket_start"] == "2025-12-03T00:00:00Z"
+    assert points[-1]["bucket_start"] == "2026-01-02T00:00:00Z"
+    assert [point["bucket_start"] for point in points] == sorted(
+        point["bucket_start"] for point in points
+    )
+    by_start = {point["bucket_start"]: point for point in points}
+    assert by_start["2026-01-01T00:00:00Z"]["total_tokens"] == 20
+    assert by_start["2026-01-01T00:00:00Z"]["requests"] == 2
+    assert by_start["2026-01-02T00:00:00Z"]["total_tokens"] == 10
+    assert by_start["2025-12-03T00:00:00Z"]["total_tokens"] == 0
+    assert by_start["2025-12-03T00:00:00Z"]["requests"] == 0
+
+
+async def test_usage_series_only_since_uses_now_as_until(
+    make_container: Callable[..., Container],
+    make_client: Callable[..., Any],
+    settings: Settings,
+) -> None:
+    container = make_container(settings, clock=FrozenClock())
+
+    async with make_client(settings, container) as client:
+        response = await client.get(
+            "/api/v1/usage/series?bucket=day&since=2025-12-20T00:00:00Z",
+            headers=_auth(_master(settings)),
+        )
+
+    assert response.status_code == 200
+    points = response.json()["points"]
+    assert len(points) == 14
+    assert points[0]["bucket_start"] == "2025-12-20T00:00:00Z"
+    assert points[-1]["bucket_start"] == "2026-01-02T00:00:00Z"
+
+
+async def test_usage_series_only_until_uses_30_days_before(
+    make_container: Callable[..., Container],
+    make_client: Callable[..., Any],
+    settings: Settings,
+) -> None:
+    container = make_container(settings, clock=FrozenClock())
+
+    async with make_client(settings, container) as client:
+        response = await client.get(
+            "/api/v1/usage/series?bucket=day&until=2026-01-02T00:00:00Z",
+            headers=_auth(_master(settings)),
+        )
+
+    assert response.status_code == 200
+    points = response.json()["points"]
+    assert len(points) == 30
+    assert points[0]["bucket_start"] == "2025-12-03T00:00:00Z"
+    assert points[-1]["bucket_start"] == "2026-01-01T00:00:00Z"
 
 
 async def test_usage_series_hour_bucket_and_validation(
@@ -233,7 +279,8 @@ async def test_usage_series_hour_bucket_and_validation(
 
     async with make_client(settings, container) as client:
         hourly = await client.get(
-            "/api/v1/usage/series?bucket=hour",
+            "/api/v1/usage/series"
+            "?bucket=hour&since=2026-01-01T10:00:00Z&until=2026-01-02T01:00:00Z",
             headers=master,
         )
         naive = await client.get(
@@ -267,11 +314,14 @@ async def test_usage_series_hour_bucket_and_validation(
         )
 
     assert hourly.status_code == 200
-    assert [point["bucket_start"] for point in hourly.json()["points"]] == [
-        "2026-01-01T10:00:00Z",
-        "2026-01-01T23:00:00Z",
-        "2026-01-02T00:00:00Z",
-    ]
+    hourly_points = hourly.json()["points"]
+    assert len(hourly_points) == 15
+    assert all(point["bucket_start"].endswith(":00:00Z") for point in hourly_points)
+    hourly_by_start = {point["bucket_start"]: point for point in hourly_points}
+    assert hourly_by_start["2026-01-01T10:00:00Z"]["total_tokens"] == 10
+    assert hourly_by_start["2026-01-01T23:00:00Z"]["total_tokens"] == 10
+    assert hourly_by_start["2026-01-02T00:00:00Z"]["total_tokens"] == 10
+    assert hourly_by_start["2026-01-01T12:00:00Z"]["total_tokens"] == 0
 
     assert naive.status_code == 400
     assert _error(naive)["code"] == "invalid_request_body"
@@ -287,10 +337,109 @@ async def test_usage_series_hour_bucket_and_validation(
     assert _error(unknown)["code"] == "tenant_not_found"
 
     assert empty.status_code == 200
-    assert empty.json()["points"] == []
+    empty_points = empty.json()["points"]
+    assert len(empty_points) == 31
+    assert all(point["total_tokens"] == 0 for point in empty_points)
+    assert all(point["requests"] == 0 for point in empty_points)
 
     assert invalid_bucket.status_code == 400
     assert _error(invalid_bucket)["code"] == "invalid_request_body"
 
     assert tenant_series.status_code == 200
-    assert len(tenant_series.json()["points"]) == 2
+    tenant_points = tenant_series.json()["points"]
+    assert len(tenant_points) == 31
+    nonzero = [point for point in tenant_points if point["total_tokens"] > 0]
+    assert [point["bucket_start"] for point in nonzero] == [
+        "2026-01-01T00:00:00Z",
+        "2026-01-02T00:00:00Z",
+    ]
+
+
+async def test_usage_series_zero_fills_sparse_days(
+    make_container: Callable[..., Container],
+    make_client: Callable[..., Any],
+    settings: Settings,
+) -> None:
+    container = make_container(settings, clock=FrozenClock())
+    await _seed_series(container)
+
+    async with make_client(settings, container) as client:
+        response = await client.get(
+            "/api/v1/usage/series?bucket=day&since=2026-01-01T00:00:00Z&until=2026-01-04T00:00:00Z",
+            headers=_auth(_master(settings)),
+        )
+
+    assert response.status_code == 200
+    points = response.json()["points"]
+    assert [point["bucket_start"] for point in points] == [
+        "2026-01-01T00:00:00Z",
+        "2026-01-02T00:00:00Z",
+        "2026-01-03T00:00:00Z",
+    ]
+    assert [point["total_tokens"] for point in points] == [20, 10, 0]
+    assert points[2]["requests"] == 0
+
+
+async def test_usage_series_bucket_cap_uses_aligned_bucket_count(
+    make_container: Callable[..., Container],
+    make_client: Callable[..., Any],
+    settings: Settings,
+) -> None:
+    container = make_container(settings, clock=FrozenClock())
+    master = _auth(_master(settings))
+    since = datetime(2020, 1, 1, tzinfo=UTC)
+    exactly_1000 = since + timedelta(days=1000)
+    over_1000 = since + timedelta(days=1001)
+
+    async with make_client(settings, container) as client:
+        allowed = await client.get(
+            f"/api/v1/usage/series?bucket=day&since={_iso(since)}&until={_iso(exactly_1000)}",
+            headers=master,
+        )
+        rejected = await client.get(
+            f"/api/v1/usage/series?bucket=day&since={_iso(since)}&until={_iso(over_1000)}",
+            headers=master,
+        )
+
+    assert allowed.status_code == 200
+    assert len(allowed.json()["points"]) == 1000
+
+    assert rejected.status_code == 400
+    assert _error(rejected)["code"] == "invalid_request_body"
+    assert _error(rejected)["param"] == "since"
+
+
+async def test_usage_by_key_limit_returns_top_rows_and_validates_range(
+    make_container: Callable[..., Container],
+    make_client: Callable[..., Any],
+    settings: Settings,
+) -> None:
+    container = make_container(settings, clock=FrozenClock())
+    _tenant_a, _tenant_b, _key_a, key_b, tenant_b_key, _missing = await _seed_by_key(container)
+    master = _auth(_master(settings))
+
+    async with make_client(settings, container) as client:
+        limited = await client.get(
+            "/api/v1/usage/by-key?limit=2",
+            headers=master,
+        )
+        zero = await client.get(
+            "/api/v1/usage/by-key?limit=0",
+            headers=master,
+        )
+        too_large = await client.get(
+            "/api/v1/usage/by-key?limit=501",
+            headers=master,
+        )
+
+    assert limited.status_code == 200
+    body = limited.json()
+    assert body["limit"] == 2
+    assert [item["api_key_id"] for item in body["items"]] == [
+        str(tenant_b_key.id),
+        str(key_b.id),
+    ]
+
+    for response in (zero, too_large):
+        assert response.status_code == 400
+        assert _error(response)["code"] == "invalid_request_body"

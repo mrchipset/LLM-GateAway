@@ -49,6 +49,7 @@ class KeyUsageResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     items: list[KeyUsageSummary]
+    limit: int
 
 
 class UsagePointSummary(BaseModel):
