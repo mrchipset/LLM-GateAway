@@ -51,10 +51,15 @@ is acceptable at this scale.
 - Tenant selector with `All tenants` as the default; selecting a tenant filters
   all three usage queries and shows its limits as read-only facts
   (`100,000 tokens/month`, `60 req/min`, or "No limits").
-- Range presets 7/30/90 days; the client computes a UTC `since` (rolling window)
-  and omits `until`, so the server uses its own clock. Bucket is fixed to `day`.
+- Range presets 7/30/90 days; the client floors the anchor to UTC midnight and
+  computes a rolling `since` from it, omitting `until` so the server uses its
+  own clock. Refresh recomputes the anchor (a same-day refresh explicitly
+  refetches because the query key does not change). Bucket is fixed to `day`,
+  so the final bar covers "today so far".
 - Totals cards: requests, input, output, cached (labeled "subset of input"),
-  total. Compact formatting with exact values in `title`/`sr-only` text.
+  total. Cached counts are rendered as reported; the client only enforces
+  non-negative integers, so one odd provider aggregate cannot blank the whole
+  panel. Exact values live in `title`/`sr-only` text.
 - Daily total-token SVG bars: one bar per dense point including zero-token days,
   first/middle/last UTC labels, peak annotation, per-bar `<title>` and
   `aria-label`, reduced-motion support, and a single-point-safe layout.
@@ -67,11 +72,20 @@ is acceptable at this scale.
 - The master key remains in React state only; usage query keys contain tenant,
   range, and limit but never the key; disconnect removes model, tenant, and usage
   queries.
+- A polite, visually hidden status announces "Usage updated at ... UTC for the
+  last N days" when all three usage queries settle successfully.
+- When the tenant list exceeds the fetched page, the selector shows
+  "Showing N of M tenants" instead of silently hiding the remainder.
 
 ## Trade-offs and risks
 
-- `since` comes from the client clock; a skewed browser shifts the window. The
-  server still enforces its own validation and defaults.
+- `since` comes from the client clock (floored to UTC midnight); a skewed
+  browser shifts the window. The server still enforces its own validation and
+  defaults.
+- The final bucket is partial by definition; the chart labels it rather than
+  pretending the day is complete.
+- Tenant and per-key lists are capped at 100; both surface a truncation note,
+  but neither paginates in the console.
 - No hour bucket in the UI even though the API supports it; a 7-day hourly view
   would need a new control and point-cap messaging.
 - The 90-day view produces up to 91 bars; labels are intentionally sparse.
