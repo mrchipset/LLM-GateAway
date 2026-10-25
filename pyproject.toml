@@ -3,6 +3,7 @@ name = "llm-gateaway"
 version = "0.1.0"
 description = "Self-hosted OpenAI-compatible gateway for multiple LLM providers"
 readme = "README.md"
+license = "MIT"
 requires-python = ">=3.12"
 dependencies = [
     "alembic>=1.13.2",
