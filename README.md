@@ -1,91 +1,93 @@
 # LLM-GateAway
 
-自托管、多 provider 的 OpenAI 兼容 LLM 网关。当前为 MVP 骨架：可运行的后端、真实与测试 provider、API key 认证、模型注册表、PostgreSQL 持久化，以及一个只读的管理台骨架。
+**English** | [简体中文](README.zh-CN.md)
 
-## 当前能力
+A self-hosted, multi-provider, OpenAI-compatible LLM gateway. Current state: a runnable backend, OpenAI / DeepSeek (OpenAI-compatible) / Fake providers, tenant-scoped API keys, a model registry, PostgreSQL persistence, token usage accounting, tenant quotas and rate limiting, and an admin console with a usage panel.
 
-- OpenAI 兼容的 `POST /v1/chat/completions`，支持 `stream=true` 与 `stream=false`
-- `GET /v1/models` 返回已启用的模型
-- Provider 抽象：OpenAI、DeepSeek（OpenAI 兼容）adapter 与确定性 Fake provider
-- API key 认证：只存 SHA-256 哈希，支持过期与吊销，并归属到一个租户
-- Token 用量记录与汇总：输入、输出、缓存命中，按租户、key、模型归属
-- 租户级月度 token 配额与每分钟请求限流（429 + `Retry-After`）
-- 管理 API：`/api/v1/keys`、`/api/v1/models`、`/api/v1/tenants`、`/api/v1/usage/summary`，由 master key 保护
-- PostgreSQL 持久化（SQLAlchemy 2 async + Alembic），默认也可用内存模式本地开发
-- 结构化 JSON 日志、request id、`/healthz` 与 `/readyz`
-- React + Vite + TypeScript 管理台：健康状态、模型列表与用量面板
+## Current capabilities
 
-不在本次范围：预算与计费、guardrail、MCP/Agent、租户级权限模型与 SSO/JWT/OAuth、Redis 限流/缓存、高级路由与 fallback、完整 Dashboard。
+- OpenAI-compatible `POST /v1/chat/completions` with `stream=true` and `stream=false`
+- `GET /v1/models` returns the enabled models
+- Provider abstraction: OpenAI and DeepSeek (OpenAI-compatible) adapters plus a deterministic Fake provider
+- API key auth: only SHA-256 hashes are stored; keys support expiry, revocation, and tenant ownership
+- Token usage records and aggregates: input, output, and cache-hit tokens, attributed to tenant, key, and model
+- Tenant-level monthly token quotas and per-minute request limits (429 + `Retry-After`)
+- Management API: `/api/v1/keys`, `/api/v1/models`, `/api/v1/tenants`, `/api/v1/usage/{summary,by-key,series}`, protected by the master key
+- PostgreSQL persistence (SQLAlchemy 2 async + Alembic), with an in-memory mode for local development
+- Structured JSON logs, request ids, `/healthz`, and `/readyz`
+- React + Vite + TypeScript admin console: health, model list, and usage panel
 
-## 环境要求
+Out of scope: budgets and billing, guardrails, MCP/agents, tenant-level authorization with SSO/JWT/OAuth, Redis rate limiting or caching, advanced routing and fallback, and a full dashboard.
+
+## Requirements
 
 - Python 3.12+
 - [uv](https://docs.astral.sh/uv/)
-- Node.js 20+（仅管理台需要）
-- Docker（可选，用于本地 PostgreSQL / Redis）
+- Node.js 20+ (admin console only)
+- Docker (optional; local PostgreSQL / Redis)
 
-以下命令示例使用 PowerShell 7；bash 用户可将 `Invoke-RestMethod` 示例改写为等价的 `curl` 调用。
+The examples use PowerShell 7. Bash users can rewrite the `Invoke-RestMethod` calls as equivalent `curl` commands.
 
-## 快速开始
+## Quick start
 
-### 1. 安装依赖
+### 1. Install dependencies
 
 ```powershell
 uv sync
 ```
 
-### 2. 准备配置
+### 2. Prepare configuration
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
-编辑 `.env`，替换 `GATEWAY_MASTER_KEY`。示例里的占位值会被拒绝，请使用足够长的随机字符串：
+Edit `.env` and replace `GATEWAY_MASTER_KEY`. The placeholder value is rejected; use a sufficiently long random string:
 
 ```powershell
-# 生成本地 master key
+# Generate a local master key
 uv run python -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
 
-内存模式（默认）适合本地试用，重启后 API key 与模型会丢失。下面的配置同时启用了 fake provider；如果只替换 master key 而保留 `.env.example` 中的 `GATEWAY_FAKE_PROVIDER_ENABLED=false`，第 4 步注册 fake 模型会返回 400 `provider_not_configured`。
+Memory mode (the default) is convenient for local experiments; API keys and models are lost on restart. The configuration below also enables the fake provider. If you only replace the master key and keep `GATEWAY_FAKE_PROVIDER_ENABLED=false` from `.env.example`, registering a fake model in step 4 returns 400 `provider_not_configured`.
 
 ```dotenv
 GATEWAY_ENVIRONMENT=development
-GATEWAY_MASTER_KEY=<替换为真实随机值>
+GATEWAY_MASTER_KEY=<replace with a real random value>
 GATEWAY_STORAGE_BACKEND=memory
 GATEWAY_FAKE_PROVIDER_ENABLED=true
 ```
 
-### 3. 启动开发服务
+### 3. Start the development server
 
-在仓库根目录执行（`.env` 相对于当前工作目录读取）：
+Run from the repository root (`.env` is resolved relative to the working directory):
 
 ```powershell
 uv run uvicorn llm_gateway.app:create_app --factory --reload --port 4000
 ```
 
-验证：
+Verify:
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:4000/healthz
 Invoke-RestMethod http://127.0.0.1:4000/readyz
 ```
 
-### 4. 创建 API key 并注册模型
+### 4. Create an API key and register a model
 
-管理 API 使用 master key 认证。
+The management API authenticates with the master key.
 
 ```powershell
-$master = "你的 master key"
+$master = "your master key"
 
-# 先创建租户；每个 API key 必须归属一个租户
+# Create a tenant first; every API key belongs to one tenant
 $tenant = Invoke-RestMethod -Method Post `
   -Uri http://127.0.0.1:4000/api/v1/tenants `
   -Headers @{ Authorization = "Bearer $master" } `
   -ContentType "application/json" `
   -Body '{"name":"local-dev"}'
 
-# 创建推理用 API key；明文只在这一次响应中返回
+# Create an inference key; the plaintext is returned exactly once
 $keyResponse = Invoke-RestMethod -Method Post `
   -Uri http://127.0.0.1:4000/api/v1/keys `
   -Headers @{ Authorization = "Bearer $master" } `
@@ -95,7 +97,7 @@ $keyResponse = Invoke-RestMethod -Method Post `
 $key = $keyResponse.key
 $key
 
-# 注册一个 fake 模型（需要 GATEWAY_FAKE_PROVIDER_ENABLED=true）
+# Register a fake model (requires GATEWAY_FAKE_PROVIDER_ENABLED=true)
 Invoke-RestMethod -Method Post `
   -Uri http://127.0.0.1:4000/api/v1/models `
   -Headers @{ Authorization = "Bearer $master" } `
@@ -103,9 +105,9 @@ Invoke-RestMethod -Method Post `
   -Body '{"id":"fake-echo","provider":"fake","upstream_model":"fake-echo"}'
 ```
 
-### 5. 调用推理 API
+### 5. Call the inference API
 
-非流式：
+Non-streaming:
 
 ```powershell
 Invoke-RestMethod -Method Post `
@@ -115,7 +117,7 @@ Invoke-RestMethod -Method Post `
   -Body '{"model":"fake-echo","messages":[{"role":"user","content":"hello"}]}'
 ```
 
-流式（PowerShell 下显式调用 `curl.exe`，避免 `curl` 别名差异）：
+Streaming (call `curl.exe` explicitly in PowerShell to avoid the `curl` alias):
 
 ```powershell
 '{"model":"fake-echo","messages":[{"role":"user","content":"hello"}],"stream":true}' |
@@ -129,16 +131,16 @@ curl.exe -N -X POST http://127.0.0.1:4000/v1/chat/completions `
 Remove-Item body.json
 ```
 
-流式响应为 SSE：每个事件是 `data: <json>`，以 `data: [DONE]` 结束。
+Streaming responses use SSE: each event is `data: <json>`, terminated by `data: [DONE]`.
 
-查看模型列表：
+List models:
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:4000/v1/models `
   -Headers @{ Authorization = "Bearer $key" }
 ```
 
-吊销 key（`id` 来自创建响应）：
+Revoke a key (`id` comes from the creation response):
 
 ```powershell
 Invoke-RestMethod -Method Delete `
@@ -146,16 +148,16 @@ Invoke-RestMethod -Method Delete `
   -Headers @{ Authorization = "Bearer $master" }
 ```
 
-## 接入真实 OpenAI
+## Real OpenAI
 
-在 `.env` 中设置：
+Set the following in `.env`:
 
 ```dotenv
 GATEWAY_OPENAI_API_KEY=sk-...
 GATEWAY_OPENAI_BASE_URL=https://api.openai.com/v1
 ```
 
-重启服务后，用管理 API 注册模型：
+Restart the service, then register a model through the management API:
 
 ```powershell
 Invoke-RestMethod -Method Post `
@@ -165,18 +167,18 @@ Invoke-RestMethod -Method Post `
   -Body '{"id":"gpt-4o-mini","provider":"openai","upstream_model":"gpt-4o-mini"}'
 ```
 
-客户端只使用网关返回的 `gpt-4o-mini`，上游模型名变化时无需改客户端。
+Clients only use the gateway's `gpt-4o-mini`; upstream model renames do not require client changes.
 
-## 接入 DeepSeek
+## DeepSeek
 
-DeepSeek 的 Chat Completions 接口与 OpenAI 兼容，复用同一个 adapter，只需要单独的 key 与 base URL：
+DeepSeek's Chat Completions API is OpenAI-compatible, so it reuses the same adapter with its own key and base URL:
 
 ```dotenv
 GATEWAY_DEEPSEEK_API_KEY=sk-...
 GATEWAY_DEEPSEEK_BASE_URL=https://api.deepseek.com
 ```
 
-重启服务后注册模型。模型 id 以 DeepSeek 当前文档为准；旧的 `deepseek-chat` / `deepseek-reasoner` 已停用：
+Restart the service and register a model. Model ids follow DeepSeek's current documentation; the older `deepseek-chat` / `deepseek-reasoner` ids are retired:
 
 ```powershell
 Invoke-RestMethod -Method Post `
@@ -186,18 +188,18 @@ Invoke-RestMethod -Method Post `
   -Body '{"id":"deepseek-flash","provider":"deepseek","upstream_model":"deepseek-flash"}'
 ```
 
-注意事项：
+Notes:
 
-- 思考模式的 `reasoning_content` 会原样透传给客户端（流式 delta 同样保留）。
-- 带 `tools` 的多轮对话中，历史 assistant 消息里的 `reasoning_content` 必须回传，否则 DeepSeek 返回 400。
-- DeepSeek 在 `stream_options.include_usage=true` 时把 usage 附在最后一个内容 chunk 上，没有独立的 usage-only chunk；网关按原样转发。
-- 推理模型首 token 可能较慢，必要时提高 `GATEWAY_REQUEST_TIMEOUT_SECONDS`。
+- `reasoning_content` from thinking mode is passed through to clients unchanged, including stream deltas.
+- In multi-turn tool calls, historical assistant messages must include `reasoning_content`, otherwise DeepSeek returns 400.
+- With `stream_options.include_usage=true`, DeepSeek attaches usage to the final content chunk and does not emit a separate usage-only chunk; the gateway forwards it as-is.
+- Reasoning models can be slow to the first token; raise `GATEWAY_REQUEST_TIMEOUT_SECONDS` if needed.
 
-## Token 用量统计
+## Token usage
 
-每个成功请求都会记录一条用量（租户、API key、模型、provider），包含输入、输出、总 token 与缓存命中 token。流式请求同样会记录：网关会向上游请求 usage，但只有客户端显式设置 `stream_options.include_usage=true` 时，usage chunk 才会转发给客户端。
+Every successful request records one usage row (tenant, API key, model, provider) with input, output, total, and cache-hit tokens. Streaming requests are recorded too: the gateway asks the upstream for usage, but only forwards the usage chunk to the client when the client explicitly sets `stream_options.include_usage=true`.
 
-查询汇总（master key）：
+Query the summary (master key):
 
 ```powershell
 Invoke-RestMethod `
@@ -205,9 +207,9 @@ Invoke-RestMethod `
   -Headers @{ Authorization = "Bearer $master" }
 ```
 
-可选参数：`tenant_id`、`model_id`、`since`、`until`。时间必须是带时区的 RFC 3339 字符串，区间为左闭右开 `[since, until)`；未知租户返回 404。
+Optional parameters: `tenant_id`, `model_id`, `since`, `until`. Timestamps must be timezone-aware RFC 3339 strings; the window is half-open `[since, until)`. An unknown tenant returns 404.
 
-响应示例：
+Response example:
 
 ```json
 {
@@ -230,14 +232,14 @@ Invoke-RestMethod `
 }
 ```
 
-语义说明：
+Semantics:
 
-- `cached_tokens` 是 `prompt_tokens` 的子集，不是额外的一档。它来自 OpenAI 的 `prompt_tokens_details.cached_tokens` 或 DeepSeek 的 `prompt_cache_hit_tokens`；不要把它与 `prompt_tokens` 相加。
-- `total_tokens` 使用上游上报值，不做重新计算。
-- `by_model` 按 `(model_id, provider)` 分组；同一个模型名如果换过 provider，会出现两行。
-- 用量写入失败不会影响推理响应，只记录 `usage_record_failed` 告警；客户端在 usage 到达前断开时可能没有记录。
+- `cached_tokens` is a subset of `prompt_tokens`, not an additional bucket. It comes from OpenAI's `prompt_tokens_details.cached_tokens` or DeepSeek's `prompt_cache_hit_tokens`; never add it to `prompt_tokens`.
+- `total_tokens` is reported by the upstream and is not recomputed.
+- `by_model` groups by `(model_id, provider)`; if a public model name is re-registered under another provider, it appears twice.
+- A failed usage write never affects the inference response; it logs `usage_record_failed`. A client that disconnects before usage arrives may leave no record.
 
-按 key 汇总：
+Per-key totals:
 
 ```powershell
 Invoke-RestMethod `
@@ -245,9 +247,9 @@ Invoke-RestMethod `
   -Headers @{ Authorization = "Bearer $master" }
 ```
 
-返回按总 token 降序的 `items`（key 名称、前缀、输入/输出/缓存/总 token、请求数）。`limit` 默认 100、最大 500；无法解析的 key 显示 `null`。
+Returns `items` ordered by total tokens desc (key name, prefix, input/output/cached/total tokens, requests). `limit` defaults to 100 and maxes at 500; keys that cannot be resolved show `null`.
 
-时间序列：
+Time series:
 
 ```powershell
 Invoke-RestMethod `
@@ -255,13 +257,13 @@ Invoke-RestMethod `
   -Headers @{ Authorization = "Bearer $master" }
 ```
 
-- `since` / `until` 缺省为最近 30 天；只传 `since` 时 `until` 默认为当前时间。
-- `bucket` 支持 `hour` 与 `day`，返回按 UTC 对齐且**补零**的 `points`（最多 1000 个桶），适合直接画图。
-- 管理台暂不展示用量；没有成本换算。
+- `since` / `until` default to the last 30 days; passing only `since` makes `until` the current time.
+- `bucket` supports `hour` and `day`; `points` are UTC-aligned and **zero-filled** (max 1000 buckets), ready for charting.
+- The console now provides the usage panel; there is no cost conversion.
 
-## 租户配额与限流
+## Tenant quotas and rate limits
 
-为租户设置月度 token 配额与每分钟请求数（`null` 表示不限，值必须 ≥ 1）：
+Set a tenant's monthly token quota and per-minute request limit (`null` means unlimited; values must be >= 1):
 
 ```powershell
 Invoke-RestMethod -Method Patch `
@@ -271,87 +273,87 @@ Invoke-RestMethod -Method Patch `
   -Body '{"monthly_token_quota":1000000,"requests_per_minute":60}'
 ```
 
-- `monthly_token_quota`：UTC 自然月内按上游上报的 `total_tokens` 累计。达到配额后，`POST /v1/chat/completions` 返回 429 `tenant_quota_exceeded`。
-- `requests_per_minute`：固定 60 秒窗口。超出后返回 429 `rate_limited`，并带 `Retry-After`（秒，1–60）。
-- PATCH 只修改请求体里出现的字段；显式传 `null` 清除对应限制。
-- 配额是软限制：请求前检查，并发或进行中的请求可能小幅超出；用量写入失败也会造成偏差。
-- 被限流或超配额的请求不会产生用量记录。
-- 限流只作用于 `POST /v1/chat/completions`；`/v1/models`、健康检查与管理 API 不受租户限流。
-- PostgreSQL 后端使用单行原子计数，支持多 worker；内存后端仅用于本地开发与测试。
+- `monthly_token_quota`: cumulative upstream-reported `total_tokens` in the UTC calendar month. Once reached, `POST /v1/chat/completions` returns 429 `tenant_quota_exceeded`.
+- `requests_per_minute`: fixed 60-second window. Excess requests return 429 `rate_limited` with `Retry-After` (seconds, 1–60).
+- PATCH only writes the fields present in the body; an explicit `null` clears that limit.
+- Quotas are soft: they are checked before the request, so concurrent or in-flight requests can slightly overshoot, and usage write failures can cause drift.
+- Rejected requests (rate-limited or over quota) do not create usage records.
+- Rate limiting applies only to `POST /v1/chat/completions`; `/v1/models`, health checks, and the management API are not tenant-limited.
+- The PostgreSQL backend uses a single-row atomic counter and supports multiple workers; the memory backend is for local development and tests only.
 
-## 配置项
+## Configuration
 
-| 变量 | 说明 |
+| Variable | Description |
 |---|---|
-| `GATEWAY_ENVIRONMENT` | 必填。`development` / `test` / `production` |
-| `GATEWAY_MASTER_KEY` | 必填。管理 API 凭据；至少 16 字符，production 至少 32 |
-| `GATEWAY_LOG_LEVEL` | 默认 `INFO` |
-| `GATEWAY_STORAGE_BACKEND` | `memory` 或 `postgres` |
-| `GATEWAY_DATABASE_URL` | postgres 模式必填，例如 `postgresql+asyncpg://gateway:gateway@127.0.0.1:5432/gateway` |
-| `GATEWAY_REDIS_URL` | 预留，当前未使用 |
-| `GATEWAY_OPENAI_API_KEY` | 为空时不注册 OpenAI provider |
-| `GATEWAY_OPENAI_BASE_URL` | 默认 `https://api.openai.com/v1` |
-| `GATEWAY_DEEPSEEK_API_KEY` | 为空时不注册 DeepSeek provider |
-| `GATEWAY_DEEPSEEK_BASE_URL` | 默认 `https://api.deepseek.com` |
-| `GATEWAY_FAKE_PROVIDER_ENABLED` | 仅开发/测试使用，production 禁止开启 |
-| `GATEWAY_REQUEST_TIMEOUT_SECONDS` | 上游请求总超时，默认 60 |
-| `GATEWAY_CONNECT_TIMEOUT_SECONDS` | 连接超时，默认 10 |
-| `GATEWAY_MAX_RETRIES` | 首个字节前的最大重试次数，默认 2（上限 5） |
+| `GATEWAY_ENVIRONMENT` | Required. `development` / `test` / `production` |
+| `GATEWAY_MASTER_KEY` | Required. Management API credential; at least 16 characters, 32 in production |
+| `GATEWAY_LOG_LEVEL` | Defaults to `INFO` |
+| `GATEWAY_STORAGE_BACKEND` | `memory` or `postgres` |
+| `GATEWAY_DATABASE_URL` | Required for postgres, e.g. `postgresql+asyncpg://gateway:gateway@127.0.0.1:5432/gateway` |
+| `GATEWAY_REDIS_URL` | Reserved; unused for now |
+| `GATEWAY_OPENAI_API_KEY` | When empty, the OpenAI provider is not registered |
+| `GATEWAY_OPENAI_BASE_URL` | Defaults to `https://api.openai.com/v1` |
+| `GATEWAY_DEEPSEEK_API_KEY` | When empty, the DeepSeek provider is not registered |
+| `GATEWAY_DEEPSEEK_BASE_URL` | Defaults to `https://api.deepseek.com` |
+| `GATEWAY_FAKE_PROVIDER_ENABLED` | Development/test only; production forbids it |
+| `GATEWAY_REQUEST_TIMEOUT_SECONDS` | Total upstream request timeout, default 60 |
+| `GATEWAY_CONNECT_TIMEOUT_SECONDS` | Connect timeout, default 10 |
+| `GATEWAY_MAX_RETRIES` | Max retries before the first byte, default 2 (cap 5) |
 
-`production` 会强制要求 `postgres` 后端、禁用 fake provider，并拒绝占位或过短的 master key，避免误用示例配置上线。
+`production` requires the `postgres` backend, disables the fake provider, and rejects placeholder or short master keys, so sample configuration cannot be deployed by accident.
 
-## 数据库与迁移
+## Database and migrations
 
-启动 PostgreSQL（仅监听本地回环）：
+Start PostgreSQL (bound to loopback only):
 
 ```powershell
 docker compose up -d postgres
 ```
 
-执行迁移：
+Run migrations:
 
 ```powershell
 $env:GATEWAY_DATABASE_URL = "postgresql+asyncpg://gateway:gateway@127.0.0.1:5432/gateway"
 uv run alembic upgrade head
 ```
 
-然后把 `.env` 改为：
+Then update `.env`:
 
 ```dotenv
 GATEWAY_STORAGE_BACKEND=postgres
 GATEWAY_DATABASE_URL=postgresql+asyncpg://gateway:gateway@127.0.0.1:5432/gateway
 ```
 
-迁移只读取 `GATEWAY_DATABASE_URL`，不需要 master key。服务启动时不会自动迁移，部署时必须单独执行迁移步骤。
+Migrations only read `GATEWAY_DATABASE_URL`; they do not need the master key. The service never migrates automatically at startup, so deployments must run the migration step separately.
 
-Redis 为后续限流与缓存预留，可用 profile 启动：
+Redis is reserved for future rate limiting and caching and can be started with a profile:
 
 ```powershell
 docker compose --profile redis up -d
 ```
 
-## 测试与代码检查
+## Tests and checks
 
 ```powershell
-# 单元测试（默认不访问数据库）
+# Unit tests (no database by default)
 uv run pytest
 
-# 代码检查
+# Static checks
 uv run ruff check .
 uv run ruff format --check .
 uv run pyright
 ```
 
-PostgreSQL 集成测试默认跳过，显式提供测试库后运行：
+PostgreSQL integration tests are skipped by default; provide a test database to run them:
 
 ```powershell
 $env:GATEWAY_TEST_DATABASE_URL = "postgresql+asyncpg://gateway:gateway@127.0.0.1:5432/gateway"
 uv run pytest -m integration
 ```
 
-集成测试会执行 `alembic upgrade head` 并清空表，请使用专用测试数据库。
+Integration tests run `alembic upgrade head` and truncate tables; use a dedicated test database.
 
-## 管理台
+## Admin console
 
 ```powershell
 cd ui
@@ -359,25 +361,25 @@ npm install
 npm run dev
 ```
 
-默认打开 `http://localhost:5173`。开发服务器把 `/healthz`、`/readyz`、`/api`、`/v1` 代理到 `http://127.0.0.1:4000`；如需修改：
+Open `http://localhost:5173`. The dev server proxies `/healthz`, `/readyz`, `/api`, and `/v1` to `http://127.0.0.1:4000`. To change the target:
 
 ```powershell
 $env:VITE_PROXY_TARGET = "http://127.0.0.1:4000"
 npm run dev
 ```
 
-在页面中填入 master key 后即可查看后端健康状态、模型列表与用量面板。用量面板支持：
+Enter the master key to view backend health, the model list, and the usage panel. The usage panel provides:
 
-- `Models / Usage` 标签切换
-- 租户筛选（含“全部租户”），选中租户时只读显示其配额与限流；租户列表最多 100 个，超出会显示提示
-- 7 / 30 / 90 天滚动范围，`since` 对齐到 UTC 零点；最后一根柱是“今日至今”的部分桶
-- 请求数、输入/输出/缓存/总 token 汇总（缓存按上游上报值展示，标记为输入的子集）
-- 按 UTC 日对齐、补零的每日总量柱状图
-- 按 key 的用量明细（最多 100 个 key）
+- `Models / Usage` tabs
+- Tenant filtering (including "All tenants"); the selected tenant's quota and rate limit are shown read-only. The tenant list is capped at 100 with a truncation note.
+- 7 / 30 / 90-day rolling ranges with `since` floored to UTC midnight; the final bar is the partial "today so far" bucket.
+- Totals for requests, input, output, cached, and total tokens (cached counts are displayed as reported and labeled as a subset of input).
+- A UTC-aligned, zero-filled daily total-token bar chart.
+- Per-key usage details (up to 100 keys).
 
-master key 只保存在当前页面的内存中，不会写入 localStorage、sessionStorage、cookie 或 URL；断开连接会清除所有查询缓存。
+The master key stays in page memory only; it is never written to localStorage, sessionStorage, cookies, or the URL. Disconnecting clears all query caches.
 
-前端检查：
+Frontend checks:
 
 ```powershell
 npm run lint
@@ -387,11 +389,11 @@ npm run format:check
 npm run build
 ```
 
-构建产物在 `ui/dist`，应由与 API 同源的静态服务器托管；MVP 不提供 CORS 放宽，前端通过同源或开发代理访问后端。
+Build output lives in `ui/dist` and should be served by a static server on the same origin as the API. The MVP does not relax CORS; the console uses same-origin or the dev proxy.
 
-## 错误格式
+## Error format
 
-所有错误返回 OpenAI 兼容结构，并带 `x-request-id` 响应头：
+All errors use an OpenAI-compatible shape and include an `x-request-id` response header:
 
 ```json
 {
@@ -405,46 +407,55 @@ npm run build
 }
 ```
 
-流式请求在返回响应头之前就完成首个 chunk 的拉取，因此上游的认证失败、超时、限流会以正常 JSON 错误返回。若错误发生在流开始之后，网关会发送一条 `data: {"error": ...}` 事件，再发送 `data: [DONE]`，此时 HTTP 状态码已经是 200。
+Streaming requests prefetch the first chunk before sending response headers, so upstream auth failures, timeouts, and rate limits become normal JSON errors. If an error occurs after the stream starts, the gateway emits a `data: {"error": ...}` event followed by `data: [DONE]`; the HTTP status is already 200 at that point.
 
-## 项目结构
+## Project layout
 
 ```text
-src/llm_gateway/     后端应用（api、auth、providers、services、storage、schemas）
-alembic/             数据库迁移
-tests/               pytest 单元与集成测试
-ui/                  React + Vite 管理台
-notes/               英文设计笔记
-architecture.md      LiteLLM 架构分析
-design.md            LLM-GateAway 设计建议
+src/llm_gateway/     Backend (api, auth, providers, services, storage, schemas)
+alembic/             Database migrations
+tests/               pytest unit and integration tests
+ui/                  React + Vite admin console
+notes/               English design notes
+architecture.md      LiteLLM architecture analysis
+design.md            LLM-GateAway design guidance
+.opencode/skills/    Repository-level Agent Skills
 ```
 
-## 安全说明
+## Security
 
-- 不要把 `.env`、API key 或 master key 提交到仓库。
-- 推理 key 只以 SHA-256 哈希存储；明文仅在创建响应中出现一次。
-- master key 只从环境变量读取，且不能用于推理端点；推理 key 也不能访问管理 API。
-- 日志不记录提示词、补全内容、Authorization 头或完整密钥。
-- 上游错误信息对外做通用化处理，避免泄露凭据或内部地址。
-- 默认只在本机回环地址暴露 PostgreSQL/Redis；生产环境请放在反向代理与 TLS 之后。
+- Never commit `.env`, API keys, or the master key.
+- Inference keys are stored only as SHA-256 hashes; plaintext appears only in the creation response.
+- The master key is read only from the environment and cannot be used on inference endpoints; inference keys cannot access the management API.
+- Logs never contain prompts, completions, Authorization headers, or full keys.
+- Upstream error text is generalized before reaching clients, avoiding credential or internal-address leaks.
+- PostgreSQL/Redis bind to loopback by default; production deployments belong behind a reverse proxy with TLS.
 
-## 已知限制
+## Known limitations
 
-- 仅实现 OpenAI、DeepSeek（OpenAI 兼容）与 fake provider；Anthropic、Bedrock、Vertex 等非 OpenAI 协议尚未加入。
-- 每个模型对应一个上游模型，不支持多 deployment、权重、fallback 或 cooldown。
-- 没有计费/账单、按 key 或模型的限额、突发整形（token bucket）；配额是软限制。
-- 限流是固定 60 秒窗口，只到租户级；内存后端的计数仅限单进程。
-- 创建 key 必须指定 `tenant_id`（对旧调用方是破坏性变更）；没有租户更新或删除接口。
-- `usage_records` 没有保留策略或归档任务，会随请求持续增长；没有成本换算、按 key 汇总或用量 UI。
-- 流式请求在 usage 到达前断开时不会留下用量记录；写入超时或失败也只记录告警。
-- 模型配置只有创建、列出、删除，没有更新接口；修改需删除后重建。
-- `/v1/models` 最多返回 1000 条；管理 API 使用 offset 分页。
-- 每个已认证推理请求都会写一次 `last_used_at`，高并发下需要改为采样或批处理。
-- 管理台不提供 key 管理、模型注册或限额编辑；用量面板只读、固定日粒度，按 key 与租户各最多展示 100 条，最后一根柱为今日至今。
-- 迁移需要手动执行，未提供服务启动时自动迁移。
+- Only OpenAI, DeepSeek (OpenAI-compatible), and the fake provider are implemented; Anthropic, Bedrock, Vertex, and other non-OpenAI protocols are not.
+- Each model maps to a single upstream model; no multi-deployment, weights, fallback, or cooldown.
+- No billing/invoicing, per-key or per-model limits, or burst shaping (token bucket); quotas are soft.
+- Rate limiting uses a fixed 60-second window at tenant level only; the memory backend counts per process.
+- Creating a key requires `tenant_id` (a breaking change for old callers); there is no tenant delete or rename API.
+- `usage_records` has no retention or archival job and grows with traffic; there is no cost conversion.
+- A stream that disconnects before usage arrives leaves no record; write timeouts or failures only log a warning.
+- Model configuration supports create, list, and delete only; changing it requires delete and recreate.
+- `/v1/models` returns at most 1000 entries; the management API uses offset pagination.
+- Every authenticated inference request writes `last_used_at`; high-throughput deployments should sample or batch it.
+- The console does not manage keys, register models, or edit limits; the usage panel is read-only with daily granularity, caps keys and tenants at 100 each, and labels the final bar as today so far.
+- Migrations are manual; there is no automatic migration on startup.
 
-## 相关文档
+## Related documents
 
-- `architecture.md`：LiteLLM 的组件、请求流与关键文件分析
-- `design.md`：本项目的设计原则、技术选型与演进路线
-- `notes/`：分阶段设计笔记（英文），记录取舍与风险
+- `architecture.md`: LiteLLM components, request flow, and key files
+- `design.md`: design principles, technology choices, and roadmap
+- `notes/`: staged English design notes with trade-offs and risks
+
+## Agent skill
+
+Repository-level skill: [`.opencode/skills/llm-gateway/SKILL.md`](.opencode/skills/llm-gateway/SKILL.md). It documents the repository map, commands, invariants, and verification workflow. Use it in place, or copy it to `~/.config/opencode/skills/` as a global skill.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
