@@ -531,6 +531,8 @@ async def test_every_admin_route_rejects_missing_and_inference_credentials(
 
     assert targets, "expected the management routes to be mounted"
     assert ("GET", "/api/v1/usage/summary") in targets
+    assert ("GET", "/api/v1/usage/by-key") in targets
+    assert ("GET", "/api/v1/usage/series") in targets
     assert any(path == "/api/v1/tenants" for _, path in targets), (
         "tenant routes must be covered by the credential boundary test"
     )

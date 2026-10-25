@@ -3,12 +3,19 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from enum import StrEnum
 from typing import Protocol
 from uuid import UUID
 
 from llm_gateway.providers.base import ProviderName
 
 _HEX_DIGITS = frozenset("0123456789abcdef")
+
+
+class TimeBucket(StrEnum):
+    HOUR = "hour"
+    DAY = "day"
+
 
 DEFAULT_TENANT_ID = UUID("00000000-0000-0000-0000-000000000001")
 
@@ -181,6 +188,48 @@ class ModelUsage:
             _require_non_negative_int(getattr(self, field), field)
 
 
+@dataclass(frozen=True, slots=True)
+class KeyUsage:
+    api_key_id: UUID
+    prompt_tokens: int
+    completion_tokens: int
+    cached_tokens: int
+    total_tokens: int
+    requests: int
+
+    def __post_init__(self) -> None:
+        _require_uuid(self.api_key_id, "api_key_id")
+        for field in (
+            "prompt_tokens",
+            "completion_tokens",
+            "cached_tokens",
+            "total_tokens",
+            "requests",
+        ):
+            _require_non_negative_int(getattr(self, field), field)
+
+
+@dataclass(frozen=True, slots=True)
+class UsagePoint:
+    bucket_start: datetime
+    prompt_tokens: int
+    completion_tokens: int
+    cached_tokens: int
+    total_tokens: int
+    requests: int
+
+    def __post_init__(self) -> None:
+        _require_aware(self.bucket_start, "bucket_start")
+        for field in (
+            "prompt_tokens",
+            "completion_tokens",
+            "cached_tokens",
+            "total_tokens",
+            "requests",
+        ):
+            _require_non_negative_int(getattr(self, field), field)
+
+
 class DuplicateModelError(Exception):
     def __init__(self, model_id: str) -> None:
         super().__init__(f"model '{model_id}' already exists")
@@ -245,6 +294,25 @@ class UsageRepository(Protocol):
         until: datetime | None,
     ) -> Sequence[ModelUsage]: ...
 
+    async def summary_by_key(
+        self,
+        *,
+        tenant_id: UUID | None,
+        model_id: str | None,
+        since: datetime | None,
+        until: datetime | None,
+    ) -> Sequence[KeyUsage]: ...
+
+    async def summary_series(
+        self,
+        *,
+        tenant_id: UUID | None,
+        model_id: str | None,
+        since: datetime | None,
+        until: datetime | None,
+        bucket: TimeBucket,
+    ) -> Sequence[UsagePoint]: ...
+
 
 class ModelRepository(Protocol):
     async def list_models(
@@ -264,6 +332,8 @@ class ApiKeyRepository(Protocol):
     async def get_key_by_hash(self, key_hash: str) -> ApiKeyRecord | None: ...
 
     async def get_key(self, key_id: UUID) -> ApiKeyRecord | None: ...
+
+    async def get_keys(self, key_ids: Sequence[UUID]) -> Sequence[ApiKeyRecord]: ...
 
     async def list_keys(
         self, *, limit: int, offset: int, tenant_id: UUID | None = None

@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import cast
 from uuid import UUID
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, literal, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -17,11 +17,14 @@ from llm_gateway.storage.repositories import (
     DuplicateApiKeyError,
     DuplicateModelError,
     DuplicateTenantError,
+    KeyUsage,
     ModelConfig,
     ModelUsage,
     Tenant,
     TenantLimitPatch,
+    TimeBucket,
     UnknownTenantError,
+    UsagePoint,
     UsageRecord,
 )
 from llm_gateway.storage.tables import ApiKeyRow, ModelRow, TenantRow, UsageRow
@@ -59,6 +62,14 @@ def _is_tenant_foreign_key_violation(error: IntegrityError) -> bool:
     if constraint is not None:
         return constraint == "fk_usage_records_tenant_id"
     return "fk_usage_records_tenant_id" in str(original)
+
+
+def _validate_optional_window(*, since: datetime | None, until: datetime | None) -> None:
+    for field, value in (("since", since), ("until", until)):
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError(f"{field} must be timezone-aware")
+    if since is not None and until is not None and since >= until:
+        raise ValueError("since must be before until")
 
 
 def _usage_filters(
@@ -283,6 +294,13 @@ class SqlAlchemyApiKeyRepository:
             row = await session.get(ApiKeyRow, key_id)
             return _to_key(row) if row is not None else None
 
+    async def get_keys(self, key_ids: Sequence[UUID]) -> Sequence[ApiKeyRecord]:
+        if not key_ids:
+            return []
+        async with self._session_factory() as session, session.begin():
+            rows = (await session.scalars(select(ApiKeyRow).where(ApiKeyRow.id.in_(key_ids)))).all()
+            return [_to_key(row) for row in rows]
+
     async def list_keys(
         self, *, limit: int, offset: int, tenant_id: UUID | None = None
     ) -> tuple[Sequence[ApiKeyRecord], int]:
@@ -373,6 +391,7 @@ class SqlAlchemyUsageRepository:
         since: datetime | None,
         until: datetime | None,
     ) -> Sequence[ModelUsage]:
+        _validate_optional_window(since=since, until=until)
         filters = _usage_filters(tenant_id=tenant_id, model_id=model_id, since=since, until=until)
         total_tokens = func.sum(UsageRow.total_tokens)
         statement = (
@@ -400,6 +419,88 @@ class SqlAlchemyUsageRepository:
                 cached_tokens=int(row[4]),
                 total_tokens=int(row[5]),
                 requests=int(row[6]),
+            )
+            for row in rows
+        ]
+
+    async def summary_by_key(
+        self,
+        *,
+        tenant_id: UUID | None,
+        model_id: str | None,
+        since: datetime | None,
+        until: datetime | None,
+    ) -> Sequence[KeyUsage]:
+        _validate_optional_window(since=since, until=until)
+        filters = _usage_filters(tenant_id=tenant_id, model_id=model_id, since=since, until=until)
+        total_tokens = func.sum(UsageRow.total_tokens)
+        statement = (
+            select(
+                UsageRow.api_key_id,
+                func.coalesce(func.sum(UsageRow.prompt_tokens), 0),
+                func.coalesce(func.sum(UsageRow.completion_tokens), 0),
+                func.coalesce(func.sum(UsageRow.cached_tokens), 0),
+                func.coalesce(total_tokens, 0),
+                func.count(),
+            )
+            .where(*filters)
+            .group_by(UsageRow.api_key_id)
+            .order_by(total_tokens.desc(), UsageRow.api_key_id.asc())
+        )
+        async with self._session_factory() as session, session.begin():
+            rows = (await session.execute(statement)).all()
+        return [
+            KeyUsage(
+                api_key_id=row[0],
+                prompt_tokens=int(row[1]),
+                completion_tokens=int(row[2]),
+                cached_tokens=int(row[3]),
+                total_tokens=int(row[4]),
+                requests=int(row[5]),
+            )
+            for row in rows
+        ]
+
+    async def summary_series(
+        self,
+        *,
+        tenant_id: UUID | None,
+        model_id: str | None,
+        since: datetime | None,
+        until: datetime | None,
+        bucket: TimeBucket,
+    ) -> Sequence[UsagePoint]:
+        _validate_optional_window(since=since, until=until)
+        filters = _usage_filters(tenant_id=tenant_id, model_id=model_id, since=since, until=until)
+        bucket_start = func.date_trunc(
+            literal(bucket.value),
+            UsageRow.created_at,
+            literal("UTC"),
+        ).label("bucket_start")
+        total_tokens = func.sum(UsageRow.total_tokens)
+        statement = (
+            select(
+                bucket_start,
+                func.coalesce(func.sum(UsageRow.prompt_tokens), 0),
+                func.coalesce(func.sum(UsageRow.completion_tokens), 0),
+                func.coalesce(func.sum(UsageRow.cached_tokens), 0),
+                func.coalesce(total_tokens, 0),
+                func.count(),
+            )
+            .where(*filters)
+            .group_by(bucket_start)
+            .order_by(bucket_start.asc())
+        )
+        async with self._session_factory() as session, session.begin():
+            rows = (await session.execute(statement)).all()
+        return [
+            UsagePoint(
+                bucket_start=row[0],
+                prompt_tokens=int(row[1]),
+                completion_tokens=int(row[2]),
+                cached_tokens=int(row[3]),
+                total_tokens=int(row[4]),
+                requests=int(row[5]),
             )
             for row in rows
         ]

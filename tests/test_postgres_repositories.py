@@ -27,6 +27,7 @@ from llm_gateway.storage.repositories import (
     ModelConfig,
     Tenant,
     TenantLimitPatch,
+    TimeBucket,
     UnknownTenantError,
     UsageRecord,
 )
@@ -797,3 +798,161 @@ async def test_usage_record_rejects_unknown_api_key(database: Database) -> None:
 
     with pytest.raises(IntegrityError):
         await database.usage.record(_usage(1, tenant_id=tenant.id, api_key_id=uuid4()))
+
+
+async def test_usage_summary_by_key_aggregates_and_filters(database: Database) -> None:
+    tenant_a = await database.tenants.create_tenant(_tenant(1))
+    tenant_b = await database.tenants.create_tenant(_tenant(2))
+    key_1 = _key(1, tenant_id=tenant_a.id)
+    key_2 = _key(2, tenant_id=tenant_a.id)
+    key_3 = _key(3, tenant_id=tenant_b.id)
+    for key in (key_1, key_2, key_3):
+        await database.api_keys.create_key(key)
+
+    await database.usage.record(
+        _usage(
+            1,
+            tenant_id=tenant_a.id,
+            api_key_id=key_1.id,
+            model_id="model-a",
+            created_at=BASE + timedelta(hours=1),
+            prompt_tokens=10,
+            completion_tokens=5,
+            cached_tokens=2,
+        )
+    )
+    await database.usage.record(
+        _usage(
+            2,
+            tenant_id=tenant_a.id,
+            api_key_id=key_1.id,
+            model_id="model-a",
+            created_at=BASE + timedelta(hours=2),
+            prompt_tokens=20,
+            completion_tokens=10,
+        )
+    )
+    await database.usage.record(
+        _usage(
+            3,
+            tenant_id=tenant_a.id,
+            api_key_id=key_2.id,
+            model_id="model-b",
+            created_at=BASE + timedelta(hours=3),
+            prompt_tokens=50,
+            completion_tokens=0,
+        )
+    )
+    await database.usage.record(
+        _usage(
+            4,
+            tenant_id=tenant_b.id,
+            api_key_id=key_3.id,
+            model_id="model-a",
+            created_at=BASE + timedelta(hours=4),
+            prompt_tokens=5,
+            completion_tokens=1,
+        )
+    )
+
+    items = await database.usage.summary_by_key(
+        tenant_id=None,
+        model_id=None,
+        since=None,
+        until=None,
+    )
+    assert [item.api_key_id for item in items] == [key_2.id, key_1.id, key_3.id]
+    assert items[0].total_tokens == 50
+    assert items[1].prompt_tokens == 30
+    assert items[1].completion_tokens == 15
+    assert items[1].cached_tokens == 2
+    assert items[1].requests == 2
+
+    tenant_items = await database.usage.summary_by_key(
+        tenant_id=tenant_a.id,
+        model_id=None,
+        since=None,
+        until=None,
+    )
+    assert [item.api_key_id for item in tenant_items] == [key_2.id, key_1.id]
+
+    windowed = await database.usage.summary_by_key(
+        tenant_id=None,
+        model_id=None,
+        since=BASE + timedelta(hours=2),
+        until=BASE + timedelta(hours=4),
+    )
+    assert [item.api_key_id for item in windowed] == [key_2.id, key_1.id]
+
+
+async def test_usage_summary_series_buckets_utc_hours_and_days(database: Database) -> None:
+    tenant = await database.tenants.create_tenant(_tenant(1))
+    key = _key(1, tenant_id=tenant.id)
+    await database.api_keys.create_key(key)
+    timestamps = (
+        datetime(2026, 1, 2, 10, 59, 30, tzinfo=UTC),
+        datetime(2026, 1, 2, 11, 0, 30, tzinfo=UTC),
+        datetime(2026, 1, 2, 23, 30, 0, tzinfo=UTC),
+        datetime(2026, 1, 3, 0, 30, 0, tzinfo=UTC),
+    )
+    for index, created_at in enumerate(timestamps):
+        await database.usage.record(
+            _usage(
+                index,
+                tenant_id=tenant.id,
+                api_key_id=key.id,
+                created_at=created_at,
+                prompt_tokens=10,
+                completion_tokens=0,
+            )
+        )
+
+    hourly = await database.usage.summary_series(
+        tenant_id=None,
+        model_id=None,
+        since=None,
+        until=None,
+        bucket=TimeBucket.HOUR,
+    )
+    assert [point.bucket_start for point in hourly] == [
+        datetime(2026, 1, 2, 10, 0, tzinfo=UTC),
+        datetime(2026, 1, 2, 11, 0, tzinfo=UTC),
+        datetime(2026, 1, 2, 23, 0, tzinfo=UTC),
+        datetime(2026, 1, 3, 0, 0, tzinfo=UTC),
+    ]
+
+    daily = await database.usage.summary_series(
+        tenant_id=None,
+        model_id=None,
+        since=None,
+        until=None,
+        bucket=TimeBucket.DAY,
+    )
+    assert [point.bucket_start for point in daily] == [
+        datetime(2026, 1, 2, 0, 0, tzinfo=UTC),
+        datetime(2026, 1, 3, 0, 0, tzinfo=UTC),
+    ]
+    assert [point.total_tokens for point in daily] == [30, 10]
+
+    windowed = await database.usage.summary_series(
+        tenant_id=None,
+        model_id=None,
+        since=datetime(2026, 1, 2, 11, 0, tzinfo=UTC),
+        until=datetime(2026, 1, 2, 23, 30, tzinfo=UTC),
+        bucket=TimeBucket.HOUR,
+    )
+    assert [point.bucket_start for point in windowed] == [datetime(2026, 1, 2, 11, 0, tzinfo=UTC)]
+
+
+async def test_api_key_get_keys_bulk_lookup(database: Database) -> None:
+    tenant = await database.tenants.create_tenant(_tenant(1))
+    first = _key(1, tenant_id=tenant.id)
+    second = _key(2, tenant_id=tenant.id)
+    await database.api_keys.create_key(first)
+    await database.api_keys.create_key(second)
+
+    assert list(await database.api_keys.get_keys([])) == []
+
+    records = await database.api_keys.get_keys([first.id, uuid4()])
+
+    assert [record.id for record in records] == [first.id]

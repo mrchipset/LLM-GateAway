@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Sequence
 from dataclasses import replace
-from datetime import datetime
+from datetime import UTC, datetime
 from uuid import UUID
 
 from llm_gateway.storage.repositories import (
@@ -11,10 +11,13 @@ from llm_gateway.storage.repositories import (
     DuplicateApiKeyError,
     DuplicateModelError,
     DuplicateTenantError,
+    KeyUsage,
     ModelConfig,
     ModelUsage,
     Tenant,
     TenantLimitPatch,
+    TimeBucket,
+    UsagePoint,
     UsageRecord,
 )
 
@@ -142,6 +145,9 @@ class InMemoryApiKeyRepository:
     async def get_key(self, key_id: UUID) -> ApiKeyRecord | None:
         return self._keys.get(key_id)
 
+    async def get_keys(self, key_ids: Sequence[UUID]) -> Sequence[ApiKeyRecord]:
+        return [self._keys[key_id] for key_id in key_ids if key_id in self._keys]
+
     async def list_keys(
         self, *, limit: int, offset: int, tenant_id: UUID | None = None
     ) -> tuple[Sequence[ApiKeyRecord], int]:
@@ -177,6 +183,14 @@ def _validate_token_window(*, since: datetime, until: datetime) -> None:
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError(f"{field} must be timezone-aware")
     if since >= until:
+        raise ValueError("since must be before until")
+
+
+def _validate_optional_window(*, since: datetime | None, until: datetime | None) -> None:
+    for field, value in (("since", since), ("until", until)):
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError(f"{field} must be timezone-aware")
+    if since is not None and until is not None and since >= until:
         raise ValueError("since must be before until")
 
 
@@ -246,6 +260,7 @@ class InMemoryUsageRepository:
         since: datetime | None,
         until: datetime | None,
     ) -> Sequence[ModelUsage]:
+        _validate_optional_window(since=since, until=until)
         records = self._select(tenant_id=tenant_id, model_id=model_id, since=since, until=until)
         aggregated: dict[tuple[str, str], ModelUsage] = {}
         for record in records:
@@ -275,3 +290,81 @@ class InMemoryUsageRepository:
             aggregated.values(),
             key=lambda item: (-item.total_tokens, item.model_id),
         )
+
+    async def summary_by_key(
+        self,
+        *,
+        tenant_id: UUID | None,
+        model_id: str | None,
+        since: datetime | None,
+        until: datetime | None,
+    ) -> Sequence[KeyUsage]:
+        _validate_optional_window(since=since, until=until)
+        records = self._select(tenant_id=tenant_id, model_id=model_id, since=since, until=until)
+        aggregated: dict[UUID, KeyUsage] = {}
+        for record in records:
+            current = aggregated.get(record.api_key_id)
+            if current is None:
+                aggregated[record.api_key_id] = KeyUsage(
+                    api_key_id=record.api_key_id,
+                    prompt_tokens=record.prompt_tokens,
+                    completion_tokens=record.completion_tokens,
+                    cached_tokens=record.cached_tokens,
+                    total_tokens=record.total_tokens,
+                    requests=1,
+                )
+                continue
+            aggregated[record.api_key_id] = KeyUsage(
+                api_key_id=current.api_key_id,
+                prompt_tokens=current.prompt_tokens + record.prompt_tokens,
+                completion_tokens=current.completion_tokens + record.completion_tokens,
+                cached_tokens=current.cached_tokens + record.cached_tokens,
+                total_tokens=current.total_tokens + record.total_tokens,
+                requests=current.requests + 1,
+            )
+        return sorted(
+            aggregated.values(),
+            key=lambda item: (-item.total_tokens, item.api_key_id),
+        )
+
+    async def summary_series(
+        self,
+        *,
+        tenant_id: UUID | None,
+        model_id: str | None,
+        since: datetime | None,
+        until: datetime | None,
+        bucket: TimeBucket,
+    ) -> Sequence[UsagePoint]:
+        _validate_optional_window(since=since, until=until)
+        records = self._select(tenant_id=tenant_id, model_id=model_id, since=since, until=until)
+        aggregated: dict[datetime, UsagePoint] = {}
+        for record in records:
+            bucket_start = _bucket_start(record.created_at, bucket)
+            current = aggregated.get(bucket_start)
+            if current is None:
+                aggregated[bucket_start] = UsagePoint(
+                    bucket_start=bucket_start,
+                    prompt_tokens=record.prompt_tokens,
+                    completion_tokens=record.completion_tokens,
+                    cached_tokens=record.cached_tokens,
+                    total_tokens=record.total_tokens,
+                    requests=1,
+                )
+                continue
+            aggregated[bucket_start] = UsagePoint(
+                bucket_start=bucket_start,
+                prompt_tokens=current.prompt_tokens + record.prompt_tokens,
+                completion_tokens=current.completion_tokens + record.completion_tokens,
+                cached_tokens=current.cached_tokens + record.cached_tokens,
+                total_tokens=current.total_tokens + record.total_tokens,
+                requests=current.requests + 1,
+            )
+        return sorted(aggregated.values(), key=lambda item: item.bucket_start)
+
+
+def _bucket_start(created_at: datetime, bucket: TimeBucket) -> datetime:
+    utc = created_at.astimezone(UTC)
+    if bucket is TimeBucket.HOUR:
+        return utc.replace(minute=0, second=0, microsecond=0)
+    return utc.replace(hour=0, minute=0, second=0, microsecond=0)
