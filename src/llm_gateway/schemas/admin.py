@@ -14,6 +14,7 @@ class CreateApiKeyRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     name: str = Field(min_length=1, max_length=100)
+    tenant_id: UUID
     expires_at: datetime | None = None
 
     @field_validator("name", mode="before")
@@ -37,6 +38,7 @@ class CreatedApiKeyResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     id: UUID
+    tenant_id: UUID
     name: str
     key: str
     key_prefix: str
@@ -50,6 +52,7 @@ class ApiKeySummary(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     id: UUID
+    tenant_id: UUID
     name: str
     key_prefix: str
     created_at: datetime
@@ -62,6 +65,38 @@ class ApiKeyListResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     items: list[ApiKeySummary]
+    total: int
+    limit: int
+    offset: int
+
+
+class CreateTenantRequest(BaseModel):
+    """Body for `POST /api/v1/tenants`."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str = Field(min_length=1, max_length=100)
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def _strip_name(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip()
+        return value
+
+
+class TenantDetail(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: UUID
+    name: str
+    created_at: datetime
+
+
+class TenantListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    items: list[TenantDetail]
     total: int
     limit: int
     offset: int

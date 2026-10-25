@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from llm_gateway.auth.keys import generate_api_key
 from llm_gateway.container import Container
 from llm_gateway.providers.base import ProviderName
-from llm_gateway.storage.repositories import ModelConfig
+from llm_gateway.storage.repositories import ModelConfig, Tenant
 
 FROZEN_NOW = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
+TEST_TENANT_NAME = "test-tenant"
 
 
 class FrozenClock:
@@ -41,9 +42,41 @@ async def seed_model(
     return model
 
 
-async def seed_api_key(container: Container, *, name: str = "test key") -> str:
+async def seed_tenant(
+    container: Container,
+    *,
+    name: str = TEST_TENANT_NAME,
+    tenant_id: UUID | None = None,
+    created_at: datetime | None = None,
+) -> Tenant:
+    tenant = Tenant(
+        id=tenant_id if tenant_id is not None else uuid4(),
+        name=name,
+        created_at=created_at if created_at is not None else container.clock.now(),
+    )
+    return await container.tenants.create_tenant(tenant)
+
+
+async def _ensure_test_tenant(container: Container) -> Tenant:
+    tenants, _ = await container.tenants.list_tenants(limit=100, offset=0)
+    for tenant in tenants:
+        if tenant.name == TEST_TENANT_NAME:
+            return tenant
+    return await seed_tenant(container, name=TEST_TENANT_NAME)
+
+
+async def seed_api_key(
+    container: Container,
+    *,
+    tenant_id: UUID | None = None,
+    name: str = "test key",
+) -> str:
+    resolved_tenant_id = (
+        tenant_id if tenant_id is not None else (await _ensure_test_tenant(container)).id
+    )
     secret, record = generate_api_key(
         key_id=uuid4(),
+        tenant_id=resolved_tenant_id,
         name=name,
         now=container.clock.now(),
     )

@@ -28,6 +28,8 @@ class ApiErrorCode(StrEnum):
     MODEL_NOT_FOUND = "model_not_found"
     MODEL_DISABLED = "model_disabled"
     DUPLICATE_MODEL = "duplicate_model"
+    DUPLICATE_TENANT = "duplicate_tenant"
+    TENANT_NOT_FOUND = "tenant_not_found"
     KEY_NOT_FOUND = "key_not_found"
     PROVIDER_NOT_CONFIGURED = "provider_not_configured"
     UPSTREAM_AUTH_FAILED = "upstream_auth_failed"

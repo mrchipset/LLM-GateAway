@@ -1,26 +1,31 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import os
 from collections.abc import AsyncIterator, Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from llm_gateway.config import Environment, Settings, StorageBackend
 from llm_gateway.providers.base import ProviderName
 from llm_gateway.storage.db import Database
 from llm_gateway.storage.repositories import (
+    DEFAULT_TENANT_ID,
     ApiKeyRecord,
     DuplicateApiKeyError,
     DuplicateModelError,
+    DuplicateTenantError,
     ModelConfig,
+    Tenant,
 )
 
 _TEST_DATABASE_URL = os.environ.get("GATEWAY_TEST_DATABASE_URL")
@@ -57,9 +62,18 @@ def _model(index: int, *, enabled: bool = True) -> ModelConfig:
     )
 
 
-def _key(index: int, *, key_hash: str | None = None) -> ApiKeyRecord:
+def _tenant(index: int, *, name: str | None = None) -> Tenant:
+    return Tenant(
+        id=uuid4(),
+        name=name if name is not None else f"tenant-{index}",
+        created_at=BASE + timedelta(seconds=index),
+    )
+
+
+def _key(index: int, *, tenant_id: UUID, key_hash: str | None = None) -> ApiKeyRecord:
     return ApiKeyRecord(
         id=uuid4(),
+        tenant_id=tenant_id,
         name=f"key-{index}",
         key_hash=key_hash if key_hash is not None else _hash(f"key-{index}"),
         key_prefix=f"sk-gw-{index:06d}",
@@ -83,7 +97,9 @@ async def _truncate() -> None:
     engine = create_async_engine(_test_url())
     try:
         async with engine.begin() as connection:
-            await connection.execute(text("TRUNCATE api_keys, models RESTART IDENTITY CASCADE"))
+            await connection.execute(
+                text("TRUNCATE api_keys, models, tenants RESTART IDENTITY CASCADE")
+            )
     finally:
         await engine.dispose()
 
@@ -183,8 +199,44 @@ async def test_model_list_rejects_invalid_pagination(
         await database.models.list_models(limit=limit, offset=offset)
 
 
+async def test_tenant_round_trip_and_list(database: Database) -> None:
+    tenant = _tenant(1)
+
+    created = await database.tenants.create_tenant(tenant)
+
+    assert created == tenant
+    assert await database.tenants.get_tenant(tenant.id) == tenant
+    assert await database.tenants.get_tenant(uuid4()) is None
+    items, total = await database.tenants.list_tenants(limit=10, offset=0)
+    assert [item.id for item in items] == [tenant.id]
+    assert total == 1
+
+
+async def test_tenant_duplicate_name_raises(database: Database) -> None:
+    await database.tenants.create_tenant(_tenant(1))
+
+    with pytest.raises(DuplicateTenantError, match="tenant 'tenant-1' already exists"):
+        await database.tenants.create_tenant(_tenant(2, name="tenant-1"))
+
+
+async def test_tenant_list_is_newest_first_with_pagination(database: Database) -> None:
+    for index in range(5):
+        await database.tenants.create_tenant(_tenant(index))
+
+    items, total = await database.tenants.list_tenants(limit=2, offset=1)
+
+    assert total == 5
+    assert [item.name for item in items] == ["tenant-3", "tenant-2"]
+
+
+async def test_tenant_list_rejects_invalid_pagination(database: Database) -> None:
+    with pytest.raises(ValueError, match="offset must be >= 0"):
+        await database.tenants.list_tenants(limit=1, offset=-1)
+
+
 async def test_api_key_round_trip_preserves_fields(database: Database) -> None:
-    key = _key(1)
+    tenant = await database.tenants.create_tenant(_tenant(1))
+    key = _key(1, tenant_id=tenant.id)
 
     created = await database.api_keys.create_key(key)
 
@@ -196,15 +248,17 @@ async def test_api_key_round_trip_preserves_fields(database: Database) -> None:
 
 
 async def test_api_key_duplicate_hash_raises(database: Database) -> None:
+    tenant = await database.tenants.create_tenant(_tenant(1))
     shared_hash = _hash("shared")
-    await database.api_keys.create_key(_key(1, key_hash=shared_hash))
+    await database.api_keys.create_key(_key(1, tenant_id=tenant.id, key_hash=shared_hash))
 
     with pytest.raises(DuplicateApiKeyError):
-        await database.api_keys.create_key(_key(2, key_hash=shared_hash))
+        await database.api_keys.create_key(_key(2, tenant_id=tenant.id, key_hash=shared_hash))
 
 
 async def test_api_key_revoke_transitions_once(database: Database) -> None:
-    key = _key(1)
+    tenant = await database.tenants.create_tenant(_tenant(1))
+    key = _key(1, tenant_id=tenant.id)
     await database.api_keys.create_key(key)
 
     assert await database.api_keys.revoke_key(key.id, BASE) is True
@@ -215,7 +269,8 @@ async def test_api_key_revoke_transitions_once(database: Database) -> None:
 
 
 async def test_api_key_touch_last_used_updates_record(database: Database) -> None:
-    key = _key(1)
+    tenant = await database.tenants.create_tenant(_tenant(1))
+    key = _key(1, tenant_id=tenant.id)
     await database.api_keys.create_key(key)
 
     await database.api_keys.touch_last_used(key.id, BASE)
@@ -230,14 +285,40 @@ async def test_api_key_touch_last_used_raises_for_missing_key(database: Database
         await database.api_keys.touch_last_used(uuid4(), BASE)
 
 
+async def test_api_key_fk_rejects_unknown_tenant(database: Database) -> None:
+    with pytest.raises(IntegrityError):
+        await database.api_keys.create_key(_key(1, tenant_id=uuid4()))
+
+
 async def test_api_key_list_is_newest_first_with_pagination(database: Database) -> None:
+    tenant = await database.tenants.create_tenant(_tenant(1))
     for index in range(5):
-        await database.api_keys.create_key(_key(index))
+        await database.api_keys.create_key(_key(index, tenant_id=tenant.id))
 
     items, total = await database.api_keys.list_keys(limit=2, offset=1)
 
     assert total == 5
     assert [item.name for item in items] == ["key-3", "key-2"]
+
+
+async def test_api_key_list_filters_by_tenant_before_pagination(database: Database) -> None:
+    tenant_a = await database.tenants.create_tenant(_tenant(1))
+    tenant_b = await database.tenants.create_tenant(_tenant(2))
+    await database.api_keys.create_key(_key(0, tenant_id=tenant_a.id))
+    await database.api_keys.create_key(_key(1, tenant_id=tenant_a.id))
+    await database.api_keys.create_key(_key(2, tenant_id=tenant_b.id))
+
+    items, total = await database.api_keys.list_keys(limit=10, offset=0, tenant_id=tenant_b.id)
+
+    assert total == 1
+    assert [item.name for item in items] == ["key-2"]
+
+    page, filtered_total = await database.api_keys.list_keys(
+        limit=1, offset=1, tenant_id=tenant_a.id
+    )
+
+    assert filtered_total == 2
+    assert [item.name for item in page] == ["key-0"]
 
 
 async def test_api_key_list_rejects_invalid_pagination(database: Database) -> None:
@@ -257,3 +338,82 @@ async def test_ping_returns_true_and_aclose_allows_new_database(
         assert await second.ping() is True
     finally:
         await second.aclose()
+
+
+def _run_migration(direction: str, revision: str) -> None:
+    previous = os.environ.get("GATEWAY_DATABASE_URL")
+    os.environ["GATEWAY_DATABASE_URL"] = _test_url()
+    try:
+        config = Config(str(_REPO_ROOT / "alembic.ini"))
+        config.set_main_option("script_location", str(_REPO_ROOT / "alembic"))
+        if direction == "downgrade":
+            command.downgrade(config, revision)
+        else:
+            command.upgrade(config, revision)
+    finally:
+        if previous is None:
+            os.environ.pop("GATEWAY_DATABASE_URL", None)
+        else:
+            os.environ["GATEWAY_DATABASE_URL"] = previous
+
+
+async def test_migration_creates_default_tenant_and_not_null_column(
+    migrated_schema: None,
+) -> None:
+    await asyncio.to_thread(_run_migration, "downgrade", "0001")
+    engine = create_async_engine(_test_url())
+    try:
+        await asyncio.to_thread(_run_migration, "upgrade", "head")
+        async with engine.connect() as connection:
+            tenant_name = await connection.scalar(
+                text("SELECT name FROM tenants WHERE id = :id"),
+                {"id": DEFAULT_TENANT_ID},
+            )
+            nullable = await connection.scalar(
+                text(
+                    "SELECT is_nullable FROM information_schema.columns "
+                    "WHERE table_name = 'api_keys' AND column_name = 'tenant_id'"
+                )
+            )
+        assert tenant_name == "default"
+        assert nullable == "NO"
+    finally:
+        await asyncio.to_thread(_run_migration, "upgrade", "head")
+        await engine.dispose()
+
+
+async def test_migration_backfills_existing_keys_with_default_tenant(
+    migrated_schema: None,
+) -> None:
+    await asyncio.to_thread(_run_migration, "downgrade", "0001")
+    key_id = uuid4()
+    engine = create_async_engine(_test_url())
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(
+                text(
+                    "INSERT INTO api_keys "
+                    "(id, name, key_hash, key_prefix, created_at) "
+                    "VALUES (:id, :name, :key_hash, :key_prefix, now())"
+                ),
+                {
+                    "id": key_id,
+                    "name": "legacy-key",
+                    "key_hash": _hash("legacy-key"),
+                    "key_prefix": "sk-gw-legacy",
+                },
+            )
+
+        await asyncio.to_thread(_run_migration, "upgrade", "head")
+
+        async with engine.connect() as connection:
+            tenant_id = await connection.scalar(
+                text("SELECT tenant_id FROM api_keys WHERE id = :id"),
+                {"id": key_id},
+            )
+        assert tenant_id == DEFAULT_TENANT_ID
+    finally:
+        await asyncio.to_thread(_run_migration, "upgrade", "head")
+        async with engine.begin() as connection:
+            await connection.execute(text("DELETE FROM api_keys WHERE id = :id"), {"id": key_id})
+        await engine.dispose()

@@ -10,6 +10,9 @@ from llm_gateway.providers.base import ProviderName
 
 _HEX_DIGITS = frozenset("0123456789abcdef")
 
+DEFAULT_TENANT_ID = UUID("00000000-0000-0000-0000-000000000001")
+DEFAULT_TENANT_NAME = "default"
+
 
 def _require_non_blank(value: str, field: str) -> None:
     if not value.strip():
@@ -24,6 +27,25 @@ def _require_aware(value: datetime, field: str) -> None:
 def _require_key_hash(value: str) -> None:
     if len(value) != 64 or any(char not in _HEX_DIGITS for char in value):
         raise ValueError("key_hash must be 64 lowercase hex characters")
+
+
+def _require_uuid(value: object, field: str) -> None:
+    if not isinstance(value, UUID):
+        raise ValueError(f"{field} must be a UUID")
+
+
+@dataclass(frozen=True, slots=True)
+class Tenant:
+    """An organizational label that owns API keys."""
+
+    id: UUID
+    name: str
+    created_at: datetime
+
+    def __post_init__(self) -> None:
+        _require_uuid(self.id, "id")
+        _require_non_blank(self.name, "name")
+        _require_aware(self.created_at, "created_at")
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +69,7 @@ class ApiKeyRecord:
     """Persisted API key metadata. The plaintext secret is never stored."""
 
     id: UUID
+    tenant_id: UUID
     name: str
     key_hash: str
     key_prefix: str
@@ -56,6 +79,7 @@ class ApiKeyRecord:
     last_used_at: datetime | None = None
 
     def __post_init__(self) -> None:
+        _require_uuid(self.tenant_id, "tenant_id")
         _require_non_blank(self.name, "name")
         _require_key_hash(self.key_hash)
         _require_aware(self.created_at, "created_at")
@@ -71,9 +95,23 @@ class DuplicateModelError(Exception):
         self.model_id = model_id
 
 
+class DuplicateTenantError(Exception):
+    def __init__(self, name: str) -> None:
+        super().__init__(f"tenant '{name}' already exists")
+        self.name = name
+
+
 class DuplicateApiKeyError(Exception):
     def __init__(self) -> None:
         super().__init__("an API key with the same hash already exists")
+
+
+class TenantRepository(Protocol):
+    async def create_tenant(self, tenant: Tenant) -> Tenant: ...
+
+    async def get_tenant(self, tenant_id: UUID) -> Tenant | None: ...
+
+    async def list_tenants(self, *, limit: int, offset: int) -> tuple[Sequence[Tenant], int]: ...
 
 
 class ModelRepository(Protocol):
@@ -95,7 +133,9 @@ class ApiKeyRepository(Protocol):
 
     async def get_key(self, key_id: UUID) -> ApiKeyRecord | None: ...
 
-    async def list_keys(self, *, limit: int, offset: int) -> tuple[Sequence[ApiKeyRecord], int]: ...
+    async def list_keys(
+        self, *, limit: int, offset: int, tenant_id: UUID | None = None
+    ) -> tuple[Sequence[ApiKeyRecord], int]: ...
 
     async def revoke_key(self, key_id: UUID, revoked_at: datetime) -> bool: ...
 

@@ -11,8 +11,16 @@ from llm_gateway.config import Settings, StorageBackend
 from llm_gateway.providers.factory import build_providers
 from llm_gateway.providers.registry import ProviderRegistry
 from llm_gateway.storage.db import Database
-from llm_gateway.storage.memory import InMemoryApiKeyRepository, InMemoryModelRepository
-from llm_gateway.storage.repositories import ApiKeyRepository, ModelRepository
+from llm_gateway.storage.memory import (
+    InMemoryApiKeyRepository,
+    InMemoryModelRepository,
+    InMemoryTenantRepository,
+)
+from llm_gateway.storage.repositories import (
+    ApiKeyRepository,
+    ModelRepository,
+    TenantRepository,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,6 +43,7 @@ class Container:
     clock: Clock
     api_keys: ApiKeyRepository
     models: ModelRepository
+    tenants: TenantRepository
     providers: ProviderRegistry
     readiness_checks: tuple[ReadinessCheck, ...] = ()
     database: Database | None = None
@@ -90,6 +99,7 @@ def build_container(settings: Settings) -> Container:
             clock=clock,
             api_keys=database.api_keys,
             models=database.models,
+            tenants=database.tenants,
             providers=providers,
             readiness_checks=(ReadinessCheck(name="database", check=database.ping),),
             database=database,
@@ -100,5 +110,6 @@ def build_container(settings: Settings) -> Container:
         clock=clock,
         api_keys=InMemoryApiKeyRepository(),
         models=InMemoryModelRepository(),
+        tenants=InMemoryTenantRepository(),
         providers=providers,
     )

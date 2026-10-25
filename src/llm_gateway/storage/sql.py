@@ -15,9 +15,11 @@ from llm_gateway.storage.repositories import (
     ApiKeyRecord,
     DuplicateApiKeyError,
     DuplicateModelError,
+    DuplicateTenantError,
     ModelConfig,
+    Tenant,
 )
-from llm_gateway.storage.tables import ApiKeyRow, ModelRow
+from llm_gateway.storage.tables import ApiKeyRow, ModelRow, TenantRow
 
 _UNIQUE_VIOLATION_SQLSTATE = "23505"
 
@@ -51,9 +53,14 @@ def _to_model(row: ModelRow) -> ModelConfig:
     )
 
 
+def _to_tenant(row: TenantRow) -> Tenant:
+    return Tenant(id=row.id, name=row.name, created_at=row.created_at)
+
+
 def _to_key(row: ApiKeyRow) -> ApiKeyRecord:
     return ApiKeyRecord(
         id=row.id,
+        tenant_id=row.tenant_id,
         name=row.name,
         key_hash=row.key_hash,
         key_prefix=row.key_prefix,
@@ -118,6 +125,42 @@ class SqlAlchemyModelRepository:
             return result.rowcount == 1
 
 
+class SqlAlchemyTenantRepository:
+    def __init__(self, *, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        self._session_factory = session_factory
+
+    async def create_tenant(self, tenant: Tenant) -> Tenant:
+        row = TenantRow(id=tenant.id, name=tenant.name, created_at=tenant.created_at)
+        try:
+            async with self._session_factory() as session, session.begin():
+                session.add(row)
+        except IntegrityError as exc:
+            if _is_unique_violation(exc):
+                raise DuplicateTenantError(tenant.name) from exc
+            raise
+        return tenant
+
+    async def get_tenant(self, tenant_id: UUID) -> Tenant | None:
+        async with self._session_factory() as session, session.begin():
+            row = await session.get(TenantRow, tenant_id)
+            return _to_tenant(row) if row is not None else None
+
+    async def list_tenants(self, *, limit: int, offset: int) -> tuple[Sequence[Tenant], int]:
+        _validate_page(limit=limit, offset=offset)
+        async with self._session_factory() as session, session.begin():
+            rows = (
+                await session.scalars(
+                    select(TenantRow)
+                    .order_by(TenantRow.created_at.desc(), TenantRow.id.desc())
+                    .limit(limit)
+                    .offset(offset)
+                )
+            ).all()
+            total = await session.scalar(select(func.count()).select_from(TenantRow))
+            tenants = [_to_tenant(row) for row in rows]
+        return tenants, total or 0
+
+
 class SqlAlchemyApiKeyRepository:
     def __init__(self, *, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._session_factory = session_factory
@@ -125,6 +168,7 @@ class SqlAlchemyApiKeyRepository:
     async def create_key(self, record: ApiKeyRecord) -> ApiKeyRecord:
         row = ApiKeyRow(
             id=record.id,
+            tenant_id=record.tenant_id,
             name=record.name,
             key_hash=record.key_hash,
             key_prefix=record.key_prefix,
@@ -152,18 +196,24 @@ class SqlAlchemyApiKeyRepository:
             row = await session.get(ApiKeyRow, key_id)
             return _to_key(row) if row is not None else None
 
-    async def list_keys(self, *, limit: int, offset: int) -> tuple[Sequence[ApiKeyRecord], int]:
+    async def list_keys(
+        self, *, limit: int, offset: int, tenant_id: UUID | None = None
+    ) -> tuple[Sequence[ApiKeyRecord], int]:
         _validate_page(limit=limit, offset=offset)
+        filters = (ApiKeyRow.tenant_id == tenant_id,) if tenant_id is not None else ()
         async with self._session_factory() as session, session.begin():
             rows = (
                 await session.scalars(
                     select(ApiKeyRow)
+                    .where(*filters)
                     .order_by(ApiKeyRow.created_at.desc(), ApiKeyRow.id.desc())
                     .limit(limit)
                     .offset(offset)
                 )
             ).all()
-            total = await session.scalar(select(func.count()).select_from(ApiKeyRow))
+            total = await session.scalar(
+                select(func.count()).select_from(ApiKeyRow).where(*filters)
+            )
             keys = [_to_key(row) for row in rows]
         return keys, total or 0
 

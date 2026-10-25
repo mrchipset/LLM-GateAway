@@ -18,10 +18,17 @@ from llm_gateway.auth.keys import (
 from llm_gateway.storage.repositories import ApiKeyRecord
 
 NOW = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+TENANT_ID = uuid4()
 
 
 def _record(*, expires_at: datetime | None = None) -> ApiKeyRecord:
-    secret, record = generate_api_key(key_id=uuid4(), name="test", now=NOW, expires_at=expires_at)
+    secret, record = generate_api_key(
+        key_id=uuid4(),
+        tenant_id=TENANT_ID,
+        name="test",
+        now=NOW,
+        expires_at=expires_at,
+    )
     assert secret
     return record
 
@@ -35,8 +42,12 @@ def test_hash_api_key_is_deterministic_lowercase_hex() -> None:
 
 
 def test_generate_api_key_produces_distinct_secrets_and_hashed_record() -> None:
-    secret_one, record_one = generate_api_key(key_id=uuid4(), name="first", now=NOW)
-    secret_two, record_two = generate_api_key(key_id=uuid4(), name="second", now=NOW)
+    secret_one, record_one = generate_api_key(
+        key_id=uuid4(), tenant_id=TENANT_ID, name="first", now=NOW
+    )
+    secret_two, record_two = generate_api_key(
+        key_id=uuid4(), tenant_id=TENANT_ID, name="second", now=NOW
+    )
 
     assert secret_one.startswith(API_KEY_PREFIX)
     assert secret_two.startswith(API_KEY_PREFIX)
@@ -49,7 +60,25 @@ def test_generate_api_key_produces_distinct_secrets_and_hashed_record() -> None:
 
 def test_generate_api_key_rejects_blank_name() -> None:
     with pytest.raises(ValueError, match="name must not be blank"):
-        generate_api_key(key_id=uuid4(), name="   ", now=NOW)
+        generate_api_key(key_id=uuid4(), tenant_id=TENANT_ID, name="   ", now=NOW)
+
+
+def test_generate_api_key_stores_tenant_id() -> None:
+    _, record = generate_api_key(key_id=uuid4(), tenant_id=TENANT_ID, name="tenant key", now=NOW)
+
+    assert record.tenant_id == TENANT_ID
+
+
+def test_api_key_record_rejects_non_uuid_tenant_id() -> None:
+    with pytest.raises(ValueError, match="tenant_id must be a UUID"):
+        ApiKeyRecord(
+            id=uuid4(),
+            tenant_id="not-a-uuid",  # pyright: ignore[reportArgumentType]
+            name="key-1",
+            key_hash=hash_api_key("secret"),
+            key_prefix="sk-gw-000001",
+            created_at=NOW,
+        )
 
 
 def test_is_key_active_for_live_key() -> None:
@@ -61,6 +90,7 @@ def test_is_key_active_is_false_for_revoked_key() -> None:
     record = _record()
     revoked = ApiKeyRecord(
         id=record.id,
+        tenant_id=record.tenant_id,
         name=record.name,
         key_hash=record.key_hash,
         key_prefix=record.key_prefix,

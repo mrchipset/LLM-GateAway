@@ -11,7 +11,11 @@ from llm_gateway.clock import SystemClock
 from llm_gateway.config import Environment, Settings
 from llm_gateway.container import Container
 from llm_gateway.providers.registry import ProviderRegistry
-from llm_gateway.storage.memory import InMemoryApiKeyRepository, InMemoryModelRepository
+from llm_gateway.storage.memory import (
+    InMemoryApiKeyRepository,
+    InMemoryModelRepository,
+    InMemoryTenantRepository,
+)
 
 ClientFactory = Callable[..., AbstractAsyncContextManager[httpx.AsyncClient]]
 
@@ -23,6 +27,7 @@ class _TrackingContainer(Container):
             clock=SystemClock(),
             api_keys=InMemoryApiKeyRepository(),
             models=InMemoryModelRepository(),
+            tenants=InMemoryTenantRepository(),
             providers=ProviderRegistry({}),
         )
         self.closed = False

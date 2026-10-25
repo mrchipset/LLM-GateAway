@@ -34,8 +34,19 @@ async def create_api_key(
             param="expires_at",
         )
 
+    tenant = await container.tenants.get_tenant(payload.tenant_id)
+    if tenant is None:
+        raise ApiError(
+            status_code=404,
+            code=ApiErrorCode.TENANT_NOT_FOUND,
+            message=f"Tenant '{payload.tenant_id}' was not found",
+            error_type="invalid_request_error",
+            param="tenant_id",
+        )
+
     secret, record = generate_api_key(
         key_id=uuid4(),
+        tenant_id=payload.tenant_id,
         name=payload.name,
         now=now,
         expires_at=payload.expires_at,
@@ -45,6 +56,7 @@ async def create_api_key(
     # The plaintext secret is returned exactly once and never logged or stored.
     return CreatedApiKeyResponse(
         id=record.id,
+        tenant_id=record.tenant_id,
         name=record.name,
         key=secret,
         key_prefix=record.key_prefix,
@@ -56,14 +68,18 @@ async def create_api_key(
 @router.get("/keys", response_model=ApiKeyListResponse)
 async def list_api_keys(
     container: Annotated[Container, Depends(get_container)],
+    tenant_id: UUID | None = None,
     limit: PaginationLimit = 50,
     offset: PaginationOffset = 0,
 ) -> ApiKeyListResponse:
-    records, total = await container.api_keys.list_keys(limit=limit, offset=offset)
+    records, total = await container.api_keys.list_keys(
+        limit=limit, offset=offset, tenant_id=tenant_id
+    )
     return ApiKeyListResponse(
         items=[
             ApiKeySummary(
                 id=record.id,
+                tenant_id=record.tenant_id,
                 name=record.name,
                 key_prefix=record.key_prefix,
                 created_at=record.created_at,

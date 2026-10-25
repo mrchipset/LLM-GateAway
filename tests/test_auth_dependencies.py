@@ -21,10 +21,15 @@ from llm_gateway.auth.keys import generate_api_key
 from llm_gateway.config import Settings
 from llm_gateway.container import Container
 from llm_gateway.providers.registry import ProviderRegistry
-from llm_gateway.storage.memory import InMemoryApiKeyRepository, InMemoryModelRepository
+from llm_gateway.storage.memory import (
+    InMemoryApiKeyRepository,
+    InMemoryModelRepository,
+    InMemoryTenantRepository,
+)
 from llm_gateway.storage.repositories import ApiKeyRecord
 
 NOW = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+TENANT_ID = uuid4()
 
 
 class FixedClock:
@@ -50,6 +55,7 @@ def _container(
         clock=FixedClock(NOW),
         api_keys=api_keys if api_keys is not None else InMemoryApiKeyRepository(),
         models=InMemoryModelRepository(),
+        tenants=InMemoryTenantRepository(),
         providers=ProviderRegistry({}),
     )
 
@@ -83,6 +89,7 @@ async def _create_key(
 ) -> tuple[str, ApiKeyRecord]:
     secret, record = generate_api_key(
         key_id=uuid4(),
+        tenant_id=TENANT_ID,
         name="test key",
         now=NOW,
         expires_at=expires_at,

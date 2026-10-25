@@ -16,7 +16,13 @@ from llm_gateway.providers.fake import FakeProvider
 from llm_gateway.providers.openai import OpenAIProvider
 from llm_gateway.providers.registry import ProviderRegistry
 from llm_gateway.providers.retry import RetryPolicy
-from support import FROZEN_NOW, FrozenClock, seed_api_key, seed_model
+from support import (
+    FROZEN_NOW,
+    FrozenClock,
+    seed_api_key,
+    seed_model,
+    seed_tenant,
+)
 
 FAKE_MODEL = "fake-model"
 UPSTREAM_MODEL = "upstream-fake-model"
@@ -105,11 +111,12 @@ async def test_create_api_key_returns_plaintext_once_and_stores_only_hash(
 ) -> None:
     clock = FrozenClock()
     container = make_container(settings, clock=clock)
+    tenant = await seed_tenant(container)
 
     async with make_client(settings, container) as client:
         created = await client.post(
             "/api/v1/keys",
-            json={"name": "  ci key  "},
+            json={"name": "  ci key  ", "tenant_id": str(tenant.id)},
             headers=_auth(_master(settings)),
         )
         listing = await client.get("/api/v1/keys", headers=_auth(_master(settings)))
@@ -120,6 +127,7 @@ async def test_create_api_key_returns_plaintext_once_and_stores_only_hash(
     assert secret.startswith("sk-gw-")
     assert body["key_prefix"] == secret[: len(body["key_prefix"])]
     assert body["name"] == "ci key"
+    assert body["tenant_id"] == str(tenant.id)
     assert body["expires_at"] is None
 
     assert listing.status_code == 200
@@ -128,6 +136,7 @@ async def test_create_api_key_returns_plaintext_once_and_stores_only_hash(
     assert all("key" not in item for item in listed["items"])
     assert set(listed["items"][0]) == {
         "id",
+        "tenant_id",
         "name",
         "key_prefix",
         "created_at",
@@ -149,6 +158,7 @@ async def test_created_key_authenticates_inference_requests(
 ) -> None:
     clock = FrozenClock()
     container = make_container(settings, providers=_registry(clock), clock=clock)
+    tenant = await seed_tenant(container)
     await seed_model(
         container,
         model_id=FAKE_MODEL,
@@ -159,7 +169,7 @@ async def test_created_key_authenticates_inference_requests(
     async with make_client(settings, container) as client:
         created = await client.post(
             "/api/v1/keys",
-            json={"name": "inference key"},
+            json={"name": "inference key", "tenant_id": str(tenant.id)},
             headers=_auth(_master(settings)),
         )
         secret = created.json()["key"]
@@ -181,21 +191,23 @@ async def test_create_api_key_rejects_invalid_name_and_expiry(
 ) -> None:
     clock = FrozenClock()
     container = make_container(settings, clock=clock)
+    tenant = await seed_tenant(container)
+    tenant_id = str(tenant.id)
 
     async with make_client(settings, container) as client:
         blank = await client.post(
             "/api/v1/keys",
-            json={"name": "   "},
+            json={"name": "   ", "tenant_id": tenant_id},
             headers=_auth(_master(settings)),
         )
         naive = await client.post(
             "/api/v1/keys",
-            json={"name": "key", "expires_at": "2026-01-02T03:04:05"},
+            json={"name": "key", "tenant_id": tenant_id, "expires_at": "2026-01-02T03:04:05"},
             headers=_auth(_master(settings)),
         )
         past = await client.post(
             "/api/v1/keys",
-            json={"name": "key", "expires_at": "2020-01-01T00:00:00Z"},
+            json={"name": "key", "tenant_id": tenant_id, "expires_at": "2020-01-01T00:00:00Z"},
             headers=_auth(_master(settings)),
         )
 
@@ -212,12 +224,13 @@ async def test_list_api_keys_paginates_and_orders_newest_first(
 ) -> None:
     clock = SteppingClock()
     container = make_container(settings, clock=clock)
+    tenant = await seed_tenant(container)
 
     async with make_client(settings, container) as client:
         for index in range(3):
             created = await client.post(
                 "/api/v1/keys",
-                json={"name": f"key-{index}"},
+                json={"name": f"key-{index}", "tenant_id": str(tenant.id)},
                 headers=_auth(_master(settings)),
             )
             assert created.status_code == 201
@@ -255,6 +268,7 @@ async def test_revoke_api_key_removes_inference_access(
 ) -> None:
     clock = FrozenClock()
     container = make_container(settings, providers=_registry(clock), clock=clock)
+    tenant = await seed_tenant(container)
     await seed_model(
         container,
         model_id=FAKE_MODEL,
@@ -266,7 +280,7 @@ async def test_revoke_api_key_removes_inference_access(
     async with make_client(settings, container) as client:
         created = await client.post(
             "/api/v1/keys",
-            json={"name": "revoked key"},
+            json={"name": "revoked key", "tenant_id": str(tenant.id)},
             headers=master_auth,
         )
         key_id = created.json()["id"]
@@ -527,3 +541,228 @@ async def test_every_admin_route_rejects_missing_and_inference_credentials(
             assert _error(anonymous)["code"] == "master_key_required"
             assert inference.status_code == 401, f"{method} {path} must reject inference keys"
             assert _error(inference)["code"] == "invalid_api_key"
+
+
+async def test_create_tenant_returns_detail_and_rejects_duplicates(
+    make_container: Callable[..., Container],
+    make_client: Callable[..., Any],
+    settings: Settings,
+) -> None:
+    container = make_container(settings, clock=SteppingClock())
+    master_auth = _auth(_master(settings))
+
+    async with make_client(settings, container) as client:
+        created = await client.post(
+            "/api/v1/tenants",
+            json={"name": "  acme  "},
+            headers=master_auth,
+        )
+        duplicate = await client.post(
+            "/api/v1/tenants",
+            json={"name": "acme"},
+            headers=master_auth,
+        )
+
+    assert created.status_code == 201
+    body = created.json()
+    assert set(body) == {"id", "name", "created_at"}
+    assert body["name"] == "acme"
+    assert UUID(body["id"])
+    assert body["created_at"]
+
+    assert duplicate.status_code == 409
+    error = _error(duplicate)
+    assert error["code"] == "duplicate_tenant"
+    assert error["param"] == "name"
+    assert "acme" in error["message"]
+
+
+async def test_create_tenant_rejects_blank_and_too_long_names(
+    make_container: Callable[..., Container],
+    make_client: Callable[..., Any],
+    settings: Settings,
+) -> None:
+    container = make_container(settings, clock=FrozenClock())
+    master_auth = _auth(_master(settings))
+
+    async with make_client(settings, container) as client:
+        blank = await client.post(
+            "/api/v1/tenants",
+            json={"name": "   "},
+            headers=master_auth,
+        )
+        too_long = await client.post(
+            "/api/v1/tenants",
+            json={"name": "x" * 101},
+            headers=master_auth,
+        )
+
+    for response in (blank, too_long):
+        assert response.status_code == 400
+        assert _error(response)["code"] == "invalid_request_body"
+
+
+async def test_list_tenants_paginates_newest_first(
+    make_container: Callable[..., Container],
+    make_client: Callable[..., Any],
+    settings: Settings,
+) -> None:
+    container = make_container(settings, clock=SteppingClock())
+    master_auth = _auth(_master(settings))
+
+    async with make_client(settings, container) as client:
+        for index in range(3):
+            created = await client.post(
+                "/api/v1/tenants",
+                json={"name": f"tenant-{index}"},
+                headers=master_auth,
+            )
+            assert created.status_code == 201
+
+        first_page = await client.get(
+            "/api/v1/tenants?limit=2&offset=0",
+            headers=master_auth,
+        )
+        second_page = await client.get(
+            "/api/v1/tenants?limit=2&offset=2",
+            headers=master_auth,
+        )
+
+    body = first_page.json()
+    assert body["total"] == 3
+    assert body["limit"] == 2
+    assert body["offset"] == 0
+    assert [item["name"] for item in body["items"]] == ["tenant-2", "tenant-1"]
+    assert [item["name"] for item in second_page.json()["items"]] == ["tenant-0"]
+    assert second_page.json()["total"] == 3
+
+
+async def test_create_api_key_requires_a_tenant_id(
+    make_container: Callable[..., Container],
+    make_client: Callable[..., Any],
+    settings: Settings,
+) -> None:
+    container = make_container(settings, clock=FrozenClock())
+
+    async with make_client(settings, container) as client:
+        response = await client.post(
+            "/api/v1/keys",
+            json={"name": "key"},
+            headers=_auth(_master(settings)),
+        )
+
+    assert response.status_code == 400
+    assert _error(response)["code"] == "invalid_request_body"
+
+
+async def test_create_api_key_rejects_unknown_tenant(
+    make_container: Callable[..., Container],
+    make_client: Callable[..., Any],
+    settings: Settings,
+) -> None:
+    container = make_container(settings, clock=FrozenClock())
+    unknown_tenant_id = uuid4()
+
+    async with make_client(settings, container) as client:
+        response = await client.post(
+            "/api/v1/keys",
+            json={"name": "key", "tenant_id": str(unknown_tenant_id)},
+            headers=_auth(_master(settings)),
+        )
+
+    assert response.status_code == 404
+    error = _error(response)
+    assert error["code"] == "tenant_not_found"
+    assert error["param"] == "tenant_id"
+    assert str(unknown_tenant_id) in error["message"]
+
+
+async def test_list_api_keys_filters_by_tenant_and_isolates_other_tenants(
+    make_container: Callable[..., Container],
+    make_client: Callable[..., Any],
+    settings: Settings,
+) -> None:
+    container = make_container(settings, clock=SteppingClock())
+    tenant_a = await seed_tenant(container, name="tenant-a")
+    tenant_b = await seed_tenant(container, name="tenant-b")
+    master_auth = _auth(_master(settings))
+
+    async with make_client(settings, container) as client:
+        for name, tenant in (("a-key", tenant_a), ("b-key", tenant_b)):
+            created = await client.post(
+                "/api/v1/keys",
+                json={"name": name, "tenant_id": str(tenant.id)},
+                headers=master_auth,
+            )
+            assert created.status_code == 201
+            assert created.json()["tenant_id"] == str(tenant.id)
+
+        page_a = await client.get(
+            f"/api/v1/keys?tenant_id={tenant_a.id}",
+            headers=master_auth,
+        )
+        page_b = await client.get(
+            f"/api/v1/keys?tenant_id={tenant_b.id}",
+            headers=master_auth,
+        )
+        page_unknown = await client.get(
+            f"/api/v1/keys?tenant_id={uuid4()}",
+            headers=master_auth,
+        )
+
+    body_a = page_a.json()
+    assert body_a["total"] == 1
+    assert [item["name"] for item in body_a["items"]] == ["a-key"]
+    assert body_a["items"][0]["tenant_id"] == str(tenant_a.id)
+
+    body_b = page_b.json()
+    assert body_b["total"] == 1
+    assert [item["name"] for item in body_b["items"]] == ["b-key"]
+
+    assert page_unknown.status_code == 200
+    assert page_unknown.json()["total"] == 0
+    assert page_unknown.json()["items"] == []
+
+
+async def test_tenant_key_authenticates_inference_and_health_is_unaffected(
+    make_container: Callable[..., Container],
+    make_client: Callable[..., Any],
+    settings: Settings,
+) -> None:
+    clock = FrozenClock()
+    container = make_container(settings, providers=_registry(clock), clock=clock)
+    await seed_model(
+        container,
+        model_id=FAKE_MODEL,
+        provider=ProviderName.FAKE,
+        upstream_model=UPSTREAM_MODEL,
+    )
+    master_auth = _auth(_master(settings))
+
+    async with make_client(settings, container) as client:
+        tenant = await client.post(
+            "/api/v1/tenants",
+            json={"name": "e2e-tenant"},
+            headers=master_auth,
+        )
+        assert tenant.status_code == 201
+        tenant_id = tenant.json()["id"]
+
+        created = await client.post(
+            "/api/v1/keys",
+            json={"name": "e2e-key", "tenant_id": tenant_id},
+            headers=master_auth,
+        )
+        assert created.status_code == 201
+        assert created.json()["tenant_id"] == tenant_id
+        secret = created.json()["key"]
+
+        completion = await client.post(
+            "/v1/chat/completions",
+            json={"model": FAKE_MODEL, "messages": [USER_MESSAGE]},
+            headers=_auth(secret),
+        )
+        readyz = await client.get("/readyz")
+
+    assert completion.status_code == 200
+    assert readyz.status_code == 200

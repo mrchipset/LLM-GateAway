@@ -10,7 +10,9 @@ from llm_gateway.storage.repositories import (
     ApiKeyRecord,
     DuplicateApiKeyError,
     DuplicateModelError,
+    DuplicateTenantError,
     ModelConfig,
+    Tenant,
 )
 
 
@@ -62,6 +64,33 @@ class InMemoryModelRepository:
             return self._models.pop(model_id, None) is not None
 
 
+class InMemoryTenantRepository:
+    """Process-local tenant registry with the same caveats as the model store."""
+
+    def __init__(self) -> None:
+        self._tenants: dict[UUID, Tenant] = {}
+        self._lock = asyncio.Lock()
+
+    async def create_tenant(self, tenant: Tenant) -> Tenant:
+        async with self._lock:
+            if any(existing.name == tenant.name for existing in self._tenants.values()):
+                raise DuplicateTenantError(tenant.name)
+            self._tenants[tenant.id] = tenant
+            return tenant
+
+    async def get_tenant(self, tenant_id: UUID) -> Tenant | None:
+        return self._tenants.get(tenant_id)
+
+    async def list_tenants(self, *, limit: int, offset: int) -> tuple[Sequence[Tenant], int]:
+        _validate_page(limit=limit, offset=offset)
+        ordered = sorted(
+            self._tenants.values(),
+            key=lambda tenant: (tenant.created_at, tenant.id),
+            reverse=True,
+        )
+        return ordered[offset : offset + limit], len(ordered)
+
+
 class InMemoryApiKeyRepository:
     """Process-local API key store with the same caveats as the model store."""
 
@@ -87,10 +116,15 @@ class InMemoryApiKeyRepository:
     async def get_key(self, key_id: UUID) -> ApiKeyRecord | None:
         return self._keys.get(key_id)
 
-    async def list_keys(self, *, limit: int, offset: int) -> tuple[Sequence[ApiKeyRecord], int]:
+    async def list_keys(
+        self, *, limit: int, offset: int, tenant_id: UUID | None = None
+    ) -> tuple[Sequence[ApiKeyRecord], int]:
         _validate_page(limit=limit, offset=offset)
+        records: list[ApiKeyRecord] = list(self._keys.values())
+        if tenant_id is not None:
+            records = [record for record in records if record.tenant_id == tenant_id]
         ordered = sorted(
-            self._keys.values(),
+            records,
             key=lambda record: (record.created_at, str(record.id)),
             reverse=True,
         )

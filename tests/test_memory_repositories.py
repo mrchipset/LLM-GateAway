@@ -2,20 +2,36 @@ from __future__ import annotations
 
 import hashlib
 from datetime import UTC, datetime, timedelta
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
 from llm_gateway.providers.base import ProviderName
-from llm_gateway.storage.memory import InMemoryApiKeyRepository, InMemoryModelRepository
+from llm_gateway.storage.memory import (
+    InMemoryApiKeyRepository,
+    InMemoryModelRepository,
+    InMemoryTenantRepository,
+)
 from llm_gateway.storage.repositories import (
     ApiKeyRecord,
     DuplicateApiKeyError,
     DuplicateModelError,
+    DuplicateTenantError,
     ModelConfig,
+    Tenant,
 )
 
 BASE = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+TENANT_ID = uuid4()
+OTHER_TENANT_ID = uuid4()
+
+
+def _tenant(index: int) -> Tenant:
+    return Tenant(
+        id=uuid4(),
+        name=f"tenant-{index}",
+        created_at=BASE + timedelta(seconds=index),
+    )
 
 
 def _hash(label: str) -> str:
@@ -31,9 +47,10 @@ def _model(index: int) -> ModelConfig:
     )
 
 
-def _key(index: int, *, key_hash: str | None = None) -> ApiKeyRecord:
+def _key(index: int, *, key_hash: str | None = None, tenant_id: UUID = TENANT_ID) -> ApiKeyRecord:
     return ApiKeyRecord(
         id=uuid4(),
+        tenant_id=tenant_id,
         name=f"key-{index}",
         key_hash=key_hash if key_hash is not None else _hash(f"key-{index}"),
         key_prefix=f"sk-gw-{index:06d}",
@@ -202,6 +219,7 @@ def test_api_key_rejects_naive_expires_at() -> None:
     with pytest.raises(ValueError, match="expires_at"):
         ApiKeyRecord(
             id=uuid4(),
+            tenant_id=TENANT_ID,
             name="key-1",
             key_hash=_hash("key-1"),
             key_prefix="sk-gw-000001",
@@ -214,6 +232,7 @@ def test_api_key_rejects_naive_last_used_at() -> None:
     with pytest.raises(ValueError, match="last_used_at"):
         ApiKeyRecord(
             id=uuid4(),
+            tenant_id=TENANT_ID,
             name="key-1",
             key_hash=_hash("key-1"),
             key_prefix="sk-gw-000001",
@@ -225,3 +244,76 @@ def test_api_key_rejects_naive_last_used_at() -> None:
 def test_api_key_rejects_invalid_hash() -> None:
     with pytest.raises(ValueError, match="key_hash"):
         _key(1, key_hash="not-a-hash")
+
+
+async def test_tenant_create_get_and_list() -> None:
+    repository = InMemoryTenantRepository()
+    tenant = _tenant(1)
+
+    created = await repository.create_tenant(tenant)
+
+    assert created == tenant
+    assert await repository.get_tenant(tenant.id) == tenant
+    assert await repository.get_tenant(uuid4()) is None
+    items, total = await repository.list_tenants(limit=10, offset=0)
+    assert list(items) == [tenant]
+    assert total == 1
+
+
+async def test_tenant_duplicate_name_raises() -> None:
+    repository = InMemoryTenantRepository()
+    await repository.create_tenant(_tenant(1))
+
+    duplicate = Tenant(id=uuid4(), name="tenant-1", created_at=BASE)
+    with pytest.raises(DuplicateTenantError, match="tenant 'tenant-1' already exists"):
+        await repository.create_tenant(duplicate)
+
+
+async def test_tenant_names_are_case_sensitive() -> None:
+    repository = InMemoryTenantRepository()
+    await repository.create_tenant(Tenant(id=uuid4(), name="Acme", created_at=BASE))
+
+    created = await repository.create_tenant(Tenant(id=uuid4(), name="acme", created_at=BASE))
+
+    assert created.name == "acme"
+
+
+async def test_tenant_list_is_newest_first_with_pagination() -> None:
+    repository = InMemoryTenantRepository()
+    for index in range(5):
+        await repository.create_tenant(_tenant(index))
+
+    items, total = await repository.list_tenants(limit=2, offset=1)
+
+    assert total == 5
+    assert [item.name for item in items] == ["tenant-3", "tenant-2"]
+
+
+@pytest.mark.parametrize(
+    ("limit", "offset", "message"),
+    [(0, 0, "limit must be >= 1"), (-1, 0, "limit must be >= 1"), (1, -1, "offset must be >= 0")],
+)
+async def test_tenant_list_rejects_invalid_pagination(
+    limit: int, offset: int, message: str
+) -> None:
+    repository = InMemoryTenantRepository()
+
+    with pytest.raises(ValueError, match=message):
+        await repository.list_tenants(limit=limit, offset=offset)
+
+
+async def test_api_key_list_filters_by_tenant_before_pagination() -> None:
+    repository = InMemoryApiKeyRepository()
+    await repository.create_key(_key(0, tenant_id=TENANT_ID))
+    await repository.create_key(_key(1, tenant_id=TENANT_ID))
+    await repository.create_key(_key(2, tenant_id=OTHER_TENANT_ID))
+
+    items, total = await repository.list_keys(limit=10, offset=0, tenant_id=OTHER_TENANT_ID)
+
+    assert total == 1
+    assert [item.name for item in items] == ["key-2"]
+
+    page, filtered_total = await repository.list_keys(limit=1, offset=1, tenant_id=TENANT_ID)
+
+    assert filtered_total == 2
+    assert [item.name for item in page] == ["key-0"]

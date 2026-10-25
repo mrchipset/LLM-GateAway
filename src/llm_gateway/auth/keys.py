@@ -22,6 +22,7 @@ def hash_api_key(secret: str) -> str:
 def generate_api_key(
     *,
     key_id: UUID,
+    tenant_id: UUID,
     name: str,
     now: datetime,
     expires_at: datetime | None = None,
@@ -33,6 +34,7 @@ def generate_api_key(
     secret = API_KEY_PREFIX + secrets.token_urlsafe(32)
     record = ApiKeyRecord(
         id=key_id,
+        tenant_id=tenant_id,
         name=name,
         key_hash=hash_api_key(secret),
         key_prefix=secret[:API_KEY_DISPLAY_LENGTH],

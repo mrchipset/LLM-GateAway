@@ -11,7 +11,11 @@ from llm_gateway.clock import Clock, SystemClock
 from llm_gateway.config import Environment, Settings
 from llm_gateway.container import Container, ReadinessCheck
 from llm_gateway.providers.registry import ProviderRegistry
-from llm_gateway.storage.memory import InMemoryApiKeyRepository, InMemoryModelRepository
+from llm_gateway.storage.memory import (
+    InMemoryApiKeyRepository,
+    InMemoryModelRepository,
+    InMemoryTenantRepository,
+)
 
 TEST_MASTER_KEY = "test-master-key-0123456789abcdef"
 
@@ -39,6 +43,7 @@ def make_container(
         clock=clock if clock is not None else SystemClock(),
         api_keys=InMemoryApiKeyRepository(),
         models=InMemoryModelRepository(),
+        tenants=InMemoryTenantRepository(),
         providers=providers if providers is not None else ProviderRegistry({}),
         readiness_checks=readiness_checks,
     )

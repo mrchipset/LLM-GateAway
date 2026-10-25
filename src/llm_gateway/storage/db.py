@@ -12,8 +12,16 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from llm_gateway.config import Settings
-from llm_gateway.storage.repositories import ApiKeyRepository, ModelRepository
-from llm_gateway.storage.sql import SqlAlchemyApiKeyRepository, SqlAlchemyModelRepository
+from llm_gateway.storage.repositories import (
+    ApiKeyRepository,
+    ModelRepository,
+    TenantRepository,
+)
+from llm_gateway.storage.sql import (
+    SqlAlchemyApiKeyRepository,
+    SqlAlchemyModelRepository,
+    SqlAlchemyTenantRepository,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +42,7 @@ class Database:
         )
         self._api_keys = SqlAlchemyApiKeyRepository(session_factory=self._session_factory)
         self._models = SqlAlchemyModelRepository(session_factory=self._session_factory)
+        self._tenants = SqlAlchemyTenantRepository(session_factory=self._session_factory)
 
     @classmethod
     def from_settings(cls, settings: Settings) -> Database:
@@ -57,6 +66,10 @@ class Database:
     @property
     def models(self) -> ModelRepository:
         return self._models
+
+    @property
+    def tenants(self) -> TenantRepository:
+        return self._tenants
 
     async def ping(self) -> bool:
         try:

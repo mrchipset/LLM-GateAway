@@ -63,6 +63,7 @@ async def test_readyz_returns_503_when_database_is_unreachable(
         clock=SystemClock(),
         api_keys=database.api_keys,
         models=database.models,
+        tenants=database.tenants,
         providers=ProviderRegistry({}),
         readiness_checks=(ReadinessCheck(name="database", check=database.ping),),
         database=database,
