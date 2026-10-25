@@ -451,6 +451,7 @@ design.md            LLM-GateAway design guidance
 - `architecture.md`: LiteLLM components, request flow, and key files
 - `design.md`: design principles, technology choices, and roadmap
 - `notes/`: staged English design notes with trade-offs and risks
+- [`docs/verification.md`](docs/verification.md): step-by-step verification for DeepSeek, tenant keys, and gateway calls
 
 ## Agent skill
 

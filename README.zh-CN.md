@@ -451,6 +451,7 @@ design.md            LLM-GateAway 设计建议
 - `architecture.md`：LiteLLM 的组件、请求流与关键文件分析
 - `design.md`：本项目的设计原则、技术选型与演进路线
 - `notes/`：分阶段设计笔记（英文），记录取舍与风险
+- [`docs/verification.md`](docs/verification.md)：DeepSeek、租户 key 与网关调用的逐步验证
 
 ## Agent skill
 
