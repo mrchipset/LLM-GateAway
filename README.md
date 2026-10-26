@@ -15,7 +15,7 @@ A self-hosted, multi-provider, OpenAI-compatible LLM gateway. Current state: a r
 - Management API: `/api/v1/keys`, `/api/v1/models`, `/api/v1/tenants`, `/api/v1/usage/{summary,by-key,series}`, protected by the master key
 - PostgreSQL persistence (SQLAlchemy 2 async + Alembic), with an in-memory mode for local development
 - Structured JSON logs, request ids, `/healthz`, and `/readyz`
-- React + Vite + TypeScript admin console: health, model list, and usage panel
+- React + Vite + TypeScript admin console: health, models, usage, tenant management, and one-time API key issuance
 
 Out of scope: budgets and billing, guardrails, MCP/agents, tenant-level authorization with SSO/JWT/OAuth, Redis rate limiting or caching, advanced routing and fallback, and a full dashboard.
 
@@ -386,14 +386,20 @@ $env:VITE_PROXY_TARGET = "http://127.0.0.1:4000"
 npm run dev
 ```
 
-Enter the master key to view backend health, the model list, and the usage panel. The usage panel provides:
+Enter the master key to view backend health, the model list, the usage panel, and the Access tab. The usage panel provides:
 
-- `Models / Usage` tabs
+- `Models / Usage / Access` tabs
 - Tenant filtering (including "All tenants"); the selected tenant's quota and rate limit are shown read-only. The tenant list is capped at 100 with a truncation note.
 - 7 / 30 / 90-day rolling ranges with `since` floored to UTC midnight; the final bar is the partial "today so far" bucket.
 - Totals for requests, input, output, cached, and total tokens (cached counts are displayed as reported and labeled as a subset of input).
 - A UTC-aligned, zero-filled daily total-token bar chart.
 - Per-key usage details (up to 100 keys).
+
+The Access tab manages tenants and API keys:
+
+- Create tenants and edit the monthly token quota / requests-per-minute limit; empty input clears a limit.
+- Create keys per tenant with an optional expiry. The plaintext is shown once, can be copied, and is never written to storage, the URL, or the query cache; closing an uncopied dialog asks for confirmation.
+- Revoke keys with confirmation. Revoked and expired keys are labeled, and only non-revoked keys offer the revoke action.
 
 The master key stays in page memory only; it is never written to localStorage, sessionStorage, cookies, or the URL. Disconnecting clears all query caches.
 
@@ -461,7 +467,7 @@ design.md            LLM-GateAway design guidance
 - Model configuration supports create, list, and delete only; changing it requires delete and recreate.
 - `/v1/models` returns at most 1000 entries; the management API uses offset pagination.
 - Every authenticated inference request writes `last_used_at`; high-throughput deployments should sample or batch it.
-- The console does not manage keys, register models, or edit limits; the usage panel is read-only with daily granularity, caps keys and tenants at 100 each, and labels the final bar as today so far.
+- The console does not register models or provide a prompt-audit UI; the usage panel is read-only with daily granularity, caps keys and tenants at 100 each, and labels the final bar as today so far. Tenant delete/rename is not available.
 - Migrations are manual; there is no automatic migration on startup.
 
 ## Related documents
@@ -472,7 +478,7 @@ design.md            LLM-GateAway design guidance
 - [`docs/verification.md`](docs/verification.md): step-by-step verification for DeepSeek, tenant keys, and gateway calls
 - [`docs/tenant-key-model.md`](docs/tenant-key-model.md): focused runbook for creating a tenant, API key, and model registration, with a verified DeepSeek call
 - [`docs/docker.md`](docs/docker.md): Docker Compose deployment, configuration, upgrades, and backups
-- [`TODO.md`](TODO.md): upcoming admin-console tenant/key management and prompt audit work
+- [`TODO.md`](TODO.md): upcoming prompt-audit work and P2 items
 
 ## Agent skill
 

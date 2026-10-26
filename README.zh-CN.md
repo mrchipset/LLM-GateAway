@@ -15,7 +15,7 @@
 - 管理 API：`/api/v1/keys`、`/api/v1/models`、`/api/v1/tenants`、`/api/v1/usage/{summary,by-key,series}`，由 master key 保护
 - PostgreSQL 持久化（SQLAlchemy 2 async + Alembic），默认也可用内存模式本地开发
 - 结构化 JSON 日志、request id、`/healthz` 与 `/readyz`
-- React + Vite + TypeScript 管理台：健康状态、模型列表与用量面板
+- React + Vite + TypeScript 管理台：健康状态、模型列表、用量面板、租户管理与一次性 API key 发放
 
 不在本次范围：预算与计费、guardrail、MCP/Agent、租户级权限模型与 SSO/JWT/OAuth、Redis 限流/缓存、高级路由与 fallback、完整 Dashboard。
 
@@ -386,14 +386,20 @@ $env:VITE_PROXY_TARGET = "http://127.0.0.1:4000"
 npm run dev
 ```
 
-在页面中填入 master key 后即可查看后端健康状态、模型列表与用量面板。用量面板支持：
+在页面中填入 master key 后即可查看后端健康状态、模型列表、用量面板与 Access 标签。用量面板支持：
 
-- `Models / Usage` 标签切换
+- `Models / Usage / Access` 标签切换
 - 租户筛选（含“全部租户”），选中租户时只读显示其配额与限流；租户列表最多 100 个，超出会显示提示
 - 7 / 30 / 90 天滚动范围，`since` 对齐到 UTC 零点；最后一根柱是“今日至今”的部分桶
 - 请求数、输入/输出/缓存/总 token 汇总（缓存按上游上报值展示，标记为输入的子集）
 - 按 UTC 日对齐、补零的每日总量柱状图
 - 按 key 的用量明细（最多 100 个 key）
+
+Access 标签用于管理租户与 API key：
+
+- 创建租户，编辑月度 token 配额与每分钟请求数；留空表示清除限制。
+- 按租户创建 key，可设置过期时间。明文只展示一次、可复制，且不会写入浏览器存储、URL 或查询缓存；未复制就关闭时会二次确认。
+- 吊销 key 需要确认；已吊销/已过期的 key 会显示状态，只有未吊销的 key 提供吊销操作。
 
 master key 只保存在当前页面的内存中，不会写入 localStorage、sessionStorage、cookie 或 URL；断开连接会清除所有查询缓存。
 
@@ -461,7 +467,7 @@ design.md            LLM-GateAway 设计建议
 - 模型配置只有创建、列出、删除，没有更新接口；修改需删除后重建。
 - `/v1/models` 最多返回 1000 条；管理 API 使用 offset 分页。
 - 每个已认证推理请求都会写一次 `last_used_at`，高并发下需要改为采样或批处理。
-- 管理台不提供 key 管理、模型注册或限额编辑；用量面板只读、固定日粒度，按 key 与租户各最多展示 100 条，最后一根柱为今日至今。
+- 管理台不提供模型注册或提示词审计 UI；用量面板只读、固定日粒度，按 key 与租户各最多展示 100 条，最后一根柱为今日至今。没有租户删除/重命名接口。
 - 迁移需要手动执行，未提供服务启动时自动迁移。
 
 ## 相关文档
@@ -472,7 +478,7 @@ design.md            LLM-GateAway 设计建议
 - [`docs/verification.md`](docs/verification.md)：DeepSeek、租户 key 与网关调用的逐步验证
 - [`docs/tenant-key-model.md`](docs/tenant-key-model.md)：租户创建、API key 生成、模型注册与 DeepSeek 实测的聚焦记录
 - [`docs/docker.md`](docs/docker.md)：Docker Compose 部署、配置、升级与备份
-- [`TODO.md`](TODO.md)：管理台租户/key 管理与提示词审计的后续计划
+- [`TODO.md`](TODO.md)：后续的提示词审计与 P2 计划
 
 ## Agent skill
 
