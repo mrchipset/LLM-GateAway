@@ -332,6 +332,24 @@ Redis is reserved for future rate limiting and caching and can be started with a
 docker compose --profile redis up -d
 ```
 
+## Docker Compose
+
+The full stack (PostgreSQL, migrations, backend, and console) runs behind one nginx entry point:
+
+```powershell
+Copy-Item .env.docker.example .env.docker
+# fill in GATEWAY_MASTER_KEY, POSTGRES_PASSWORD, and provider keys
+docker compose --profile app --env-file .env.docker up -d --build
+Invoke-RestMethod http://127.0.0.1:8080/healthz
+```
+
+- Console: `http://127.0.0.1:8080`
+- OpenAI-compatible base URL: `http://127.0.0.1:8080/v1`
+- The one-shot `migrate` service runs `alembic upgrade head` before the backend starts; a failed migration blocks the backend.
+- PostgreSQL data lives in the `pgdata` volume; `down -v` deletes it.
+
+See [`docs/docker.md`](docs/docker.md) for the configuration table, upgrades, backups, troubleshooting, and production hardening. Infrastructure only (backend via `uv`, console via Vite): `docker compose up -d postgres`.
+
 ## Tests and checks
 
 ```powershell
@@ -452,6 +470,7 @@ design.md            LLM-GateAway design guidance
 - `design.md`: design principles, technology choices, and roadmap
 - `notes/`: staged English design notes with trade-offs and risks
 - [`docs/verification.md`](docs/verification.md): step-by-step verification for DeepSeek, tenant keys, and gateway calls
+- [`docs/docker.md`](docs/docker.md): Docker Compose deployment, configuration, upgrades, and backups
 
 ## Agent skill
 

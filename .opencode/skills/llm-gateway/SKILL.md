@@ -35,6 +35,7 @@ uv run ruff format --check .
 uv run pyright
 
 docker compose up -d postgres
+docker compose --profile app --env-file .env.docker up -d --build   # full stack: UI + API on :8080
 $env:GATEWAY_DATABASE_URL = "postgresql+asyncpg://gateway:gateway@127.0.0.1:5432/gateway"
 uv run alembic upgrade head
 

@@ -332,6 +332,24 @@ Redis 为后续限流与缓存预留，可用 profile 启动：
 docker compose --profile redis up -d
 ```
 
+## Docker Compose
+
+完整栈（PostgreSQL、迁移、后端、管理台）通过单一 nginx 入口运行：
+
+```powershell
+Copy-Item .env.docker.example .env.docker
+# 填写 GATEWAY_MASTER_KEY、POSTGRES_PASSWORD 与 provider key
+docker compose --profile app --env-file .env.docker up -d --build
+Invoke-RestMethod http://127.0.0.1:8080/healthz
+```
+
+- 管理台：`http://127.0.0.1:8080`
+- OpenAI 兼容 API base：`http://127.0.0.1:8080/v1`
+- 一次性 `migrate` 服务会在后端启动前执行 `alembic upgrade head`；迁移失败会阻止后台上线。
+- PostgreSQL 数据保存在 `pgdata` 数据卷；`down -v` 会删除数据。
+
+配置表、升级、备份、排错与生产加固见 [`docs/docker.md`](docs/docker.md)。只启动基础设施（后端用 `uv`、前端用 Vite）：`docker compose up -d postgres`。
+
 ## 测试与代码检查
 
 ```powershell
@@ -452,6 +470,7 @@ design.md            LLM-GateAway 设计建议
 - `design.md`：本项目的设计原则、技术选型与演进路线
 - `notes/`：分阶段设计笔记（英文），记录取舍与风险
 - [`docs/verification.md`](docs/verification.md)：DeepSeek、租户 key 与网关调用的逐步验证
+- [`docs/docker.md`](docs/docker.md)：Docker Compose 部署、配置、升级与备份
 
 ## Agent skill
 

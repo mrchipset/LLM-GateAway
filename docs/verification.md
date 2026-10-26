@@ -8,6 +8,8 @@
 
 命令在 Windows PowerShell 7 下验证；bash 用户把 `Invoke-RestMethod` 改写为等价的 `curl` 即可。
 
+> 使用 Docker Compose 启动完整栈时，先按 [`docs/docker.md`](docker.md) 操作；把下文的 `http://127.0.0.1:4000` 换成 `http://127.0.0.1:8080`（管理台与 API 共用一个入口），其余步骤不变。
+
 > 三类凭据不要混用：
 >
 > | 凭据 | 用途 | 存放位置 |
