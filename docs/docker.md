@@ -88,7 +88,7 @@ Invoke-RestMethod http://127.0.0.1:8080/readyz
 | 就绪检查 | `http://127.0.0.1:8080/readyz` |
 | 管理 API | `http://127.0.0.1:8080/api/v1/*` |
 
-首次初始化（创建租户、API key、模型）见 [`docs/verification.md`](verification.md)，把其中的 `4000` 端口换成 `8080` 即可。
+首次初始化（创建租户、API key、模型）见 [`docs/verification.md`](verification.md)，把其中的 `4000` 端口换成 `8080` 即可；只想看最小闭环可参考 [`docs/tenant-key-model.md`](tenant-key-model.md)。
 
 ## 需要配置什么
 

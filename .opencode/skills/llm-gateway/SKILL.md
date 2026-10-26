@@ -92,7 +92,8 @@ Route visual decisions through the designer workflow. Extend `ui/src/api/client.
 5. Confirm `git status` is clean of artifacts, secrets, `.env`, and generated files.
 
 For a copy-paste operator check (DeepSeek key, tenant key, streaming, usage), follow
-`docs/verification.md`.
+`docs/verification.md`; the focused tenant/key/model runbook is
+`docs/tenant-key-model.md`.
 
 ## Pitfalls
 
