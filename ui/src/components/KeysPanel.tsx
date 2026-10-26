@@ -4,7 +4,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import type { ApiKeySummary, CreatedApiKey } from '../api/client';
 import { discardCreateKeyMutation, useCreateKey } from '../hooks/useKeyMutations';
 import { useKeyPage } from '../hooks/useKeys';
-import { useTenants } from '../hooks/useTenants';
+import { TENANT_SELECTOR_LIMIT, useTenants } from '../hooks/useTenants';
 import { formatExactNumber, formatUpdatedAt } from '../lib/format';
 import { Button } from './Button';
 import { CheckCircleIcon, KeyIcon, RefreshIcon } from './Icons';
@@ -16,6 +16,7 @@ import { Panel, PanelHeader } from './Panel';
 import { RequestErrorPanel } from './RequestErrorPanel';
 
 export const KEY_PAGE_SIZE = 20;
+const STATUS_CLOCK_INTERVAL_MS = 60_000;
 
 interface KeysPanelProps {
   masterKey: string | null;
@@ -52,13 +53,20 @@ function ConnectedKeysPanel({ masterKey }: { masterKey: string }) {
   const [createOpen, setCreateOpen] = useState(false);
   const [secret, setSecret] = useState<CreatedApiKey | null>(null);
   const [revokingKey, setRevokingKey] = useState<ApiKeySummary | null>(null);
+  const [statusNow, setStatusNow] = useState<number | null>(null);
   const filterId = useId();
+  const tenantNoteId = useId();
   const createButtonRef = useRef<HTMLButtonElement>(null);
   const revokeTriggerRef = useRef<HTMLElement | null>(null);
   const queryClient = useQueryClient();
 
   const tenantsQuery = useTenants(masterKey);
   const tenants = tenantsQuery.data?.items ?? [];
+  const tenantTotal = tenantsQuery.data?.total ?? 0;
+  const tenantsTruncated = tenantsQuery.status === 'success' && tenantTotal > tenants.length;
+  const tenantTruncationNote = tenantsTruncated
+    ? `Showing the first ${formatExactNumber(Math.min(tenantTotal, TENANT_SELECTOR_LIMIT))} of ${formatExactNumber(tenantTotal)} tenants; use the API for the rest.`
+    : null;
   const canCreate = tenantsQuery.status === 'success' && tenants.length > 0;
   const tenantNames = new Map(tenants.map((tenant) => [tenant.id, tenant.name]));
 
@@ -68,6 +76,13 @@ function ConnectedKeysPanel({ masterKey }: { masterKey: string }) {
     offset,
   });
   const createMutation = useCreateKey(masterKey);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      setStatusNow(Date.now());
+    }, STATUS_CLOCK_INTERVAL_MS);
+    return () => window.clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -163,6 +178,7 @@ function ConnectedKeysPanel({ masterKey }: { masterKey: string }) {
               value={tenantFilter}
               onChange={(event) => handleFilterChange(event.target.value)}
               disabled={tenantsQuery.isPending}
+              aria-describedby={tenantsTruncated ? tenantNoteId : undefined}
               className="mt-1 block w-full min-w-0 rounded-md border border-line-strong bg-white px-2.5 py-1.5 text-[12.5px] text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/15 disabled:cursor-not-allowed disabled:bg-surface-sunken disabled:text-ink-muted"
             >
               <option value="">All tenants</option>
@@ -172,6 +188,11 @@ function ConnectedKeysPanel({ masterKey }: { masterKey: string }) {
                 </option>
               ))}
             </select>
+            {tenantTruncationNote !== null && (
+              <p id={tenantNoteId} className="mt-1 text-[11px] text-ink-muted">
+                {tenantTruncationNote}
+              </p>
+            )}
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
@@ -202,6 +223,7 @@ function ConnectedKeysPanel({ masterKey }: { masterKey: string }) {
           <KeyDirectory
             query={keyPage}
             tenants={tenantNames}
+            statusNow={statusNow}
             canCreate={canCreate}
             onCreate={openCreate}
             onRevoke={handleRevoke}
@@ -247,6 +269,7 @@ function ConnectedKeysPanel({ masterKey }: { masterKey: string }) {
 interface KeyDirectoryProps {
   query: ReturnType<typeof useKeyPage>;
   tenants: ReadonlyMap<string, string>;
+  statusNow: number | null;
   canCreate: boolean;
   onCreate: () => void;
   onRevoke: (apiKey: ApiKeySummary, trigger: HTMLButtonElement) => void;
@@ -257,6 +280,7 @@ interface KeyDirectoryProps {
 function KeyDirectory({
   query,
   tenants,
+  statusNow,
   canCreate,
   onCreate,
   onRevoke,
@@ -278,7 +302,7 @@ function KeyDirectory({
     return <EmptyKeys createDisabled={!canCreate} onCreate={onCreate} />;
   }
 
-  const now = query.dataUpdatedAt;
+  const now = statusNow ?? query.dataUpdatedAt;
 
   return (
     <>

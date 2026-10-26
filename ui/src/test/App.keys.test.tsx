@@ -75,6 +75,22 @@ const LEGACY: ApiKeySummary = {
 
 const KEYS = [PRODUCTION, ANALYTICS, OLD_STAGING, LEGACY];
 
+const EXPIRING: ApiKeySummary = {
+  ...PRODUCTION,
+  id: 'aaaaaaaa-5555-4555-8555-555555555555',
+  name: 'Expiring',
+  key_prefix: 'lgw_live_exp',
+  expires_at: '2026-10-25T12:01:00Z',
+};
+
+const REVOKED_EXPIRED: ApiKeySummary = {
+  ...LEGACY,
+  id: 'aaaaaaaa-6666-4666-8666-666666666666',
+  name: 'Revoked and expired',
+  key_prefix: 'lgw_test_both',
+  revoked_at: '2026-10-20T00:00:00Z',
+};
+
 const MANY_KEYS: ApiKeySummary[] = Array.from({ length: 45 }, (_, index) => ({
   id: `key-${String(index + 1).padStart(4, '0')}`,
   tenant_id: ACME.id,
@@ -332,6 +348,41 @@ describe('API key management', () => {
     expect(within(revokedRow).queryByRole('button', { name: /^Revoke / })).not.toBeInTheDocument();
   });
 
+  it('advances an expiring key to Expired while the page stays open', async () => {
+    vi.useRealTimers();
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+    vi.setSystemTime(FIXED_NOW);
+    installKeyStore([EXPIRING]);
+    const user = userEvent.setup();
+    renderApp();
+
+    await openAccessKeys(user);
+    const table = await screen.findByRole('table', { name: 'API keys' });
+    const row = within(table).getByRole('row', { name: /Expiring/ });
+    expect(within(row).getByText('Active')).toBeInTheDocument();
+
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+
+    await waitFor(() => {
+      expect(within(row).getByText('Expired')).toBeInTheDocument();
+    });
+  });
+
+  it('prefers Revoked over Expired when a key is both revoked and past expiry', async () => {
+    installKeyStore([REVOKED_EXPIRED]);
+    const user = userEvent.setup();
+    renderApp();
+
+    await openAccessKeys(user);
+    const table = await screen.findByRole('table', { name: 'API keys' });
+    const row = within(table).getByRole('row', { name: /Revoked and expired/ });
+
+    expect(within(row).getByText('Revoked')).toBeInTheDocument();
+    expect(within(row).queryByText('Expired')).not.toBeInTheDocument();
+  });
+
   it('loads key rows through a loading skeleton', async () => {
     let resolvePage: (response: Response) => void = () => {};
     const pendingPage = new Promise<Response>((resolve) => {
@@ -395,6 +446,27 @@ describe('API key management', () => {
     await user.click(within(region).getByRole('button', { name: 'Create API key' }));
     const dialog = await screen.findByRole('dialog', { name: 'Create API key' });
     expect(within(dialog).getByLabelText('Tenant')).toHaveValue(ACME.id);
+  });
+
+  it('shows a muted truncation note when the tenant query is capped', async () => {
+    installKeyStore(KEYS, {
+      '/api/v1/tenants': (url) => {
+        const limit = Number(url.searchParams.get('limit') ?? '100');
+        return jsonResponse({ items: TENANTS, total: 150, limit, offset: 0 });
+      },
+    });
+    const user = userEvent.setup();
+    renderApp();
+
+    await openAccessKeys(user);
+    const region = keysRegion();
+    const filter = within(region).getByLabelText('Tenant filter');
+    const note = await within(region).findByText(
+      'Showing the first 100 of 150 tenants; use the API for the rest.',
+    );
+
+    expect(filter.getAttribute('aria-describedby')).toBe(note.id);
+    expect(note).toHaveClass('text-ink-muted');
   });
 
   it('paginates key pages with limit 20 and the right offsets', async () => {
@@ -577,6 +649,7 @@ describe('API key management', () => {
     expect(new Headers(createCall?.[1]?.headers).get('Authorization')).toBe('Bearer mk_test_123');
 
     await user.click(within(secretDialog).getByRole('button', { name: 'Close' }));
+    await user.click(within(secretDialog).getByRole('button', { name: 'Close without copying' }));
     await waitFor(() => {
       expect(screen.queryByRole('dialog', { name: 'API key created' })).not.toBeInTheDocument();
     });
@@ -688,6 +761,115 @@ describe('API key management', () => {
       expect(createKeyCalls(fetchMock)).toHaveLength(2);
     },
   );
+
+  it('asks for confirmation before closing an uncopied key with Escape', async () => {
+    installKeyStore(KEYS);
+    const user = userEvent.setup();
+    renderApp();
+
+    await openAccessKeys(user);
+    const secretDialog = await createKeyThroughDialog(user);
+    expect(within(secretDialog).getByText(CREATED_SECRET)).toBeInTheDocument();
+
+    await user.keyboard('{Escape}');
+
+    expect(
+      await within(secretDialog).findByText('You have not copied this key. Close anyway?'),
+    ).toBeInTheDocument();
+    expect(within(secretDialog).getByText(CREATED_SECRET)).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'API key created' })).toBeInTheDocument();
+
+    const keepKey = within(secretDialog).getByRole('button', { name: 'Keep key' });
+    await waitFor(() => {
+      expect(document.activeElement).toBe(keepKey);
+    });
+  });
+
+  it('restores the key dialog when Keep key is chosen', async () => {
+    installKeyStore(KEYS);
+    const user = userEvent.setup();
+    renderApp();
+
+    await openAccessKeys(user);
+    const secretDialog = await createKeyThroughDialog(user);
+
+    await user.click(within(secretDialog).getByRole('button', { name: 'Close' }));
+    expect(
+      await within(secretDialog).findByText('You have not copied this key. Close anyway?'),
+    ).toBeInTheDocument();
+
+    await user.click(within(secretDialog).getByRole('button', { name: 'Keep key' }));
+
+    expect(
+      within(secretDialog).queryByText('You have not copied this key. Close anyway?'),
+    ).not.toBeInTheDocument();
+    expect(within(secretDialog).getByText(CREATED_SECRET)).toBeInTheDocument();
+    expect(within(secretDialog).getByRole('button', { name: 'Close' })).toBeInTheDocument();
+
+    const copy = within(secretDialog).getByRole('button', { name: 'Copy key' });
+    await waitFor(() => {
+      expect(document.activeElement).toBe(copy);
+    });
+  });
+
+  it('closes without copying only after confirmation and removes the secret', async () => {
+    installKeyStore(KEYS);
+    const { queryClient } = renderApp();
+    const user = userEvent.setup();
+
+    await openAccessKeys(user);
+    const secretDialog = await createKeyThroughDialog(user);
+
+    await user.click(within(secretDialog).getByRole('button', { name: 'Close API key dialog' }));
+    expect(
+      await within(secretDialog).findByText('You have not copied this key. Close anyway?'),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'API key created' })).toBeInTheDocument();
+
+    await user.click(within(secretDialog).getByRole('button', { name: 'Close without copying' }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: 'API key created' })).not.toBeInTheDocument();
+    });
+    expect(screen.queryByText(CREATED_SECRET)).not.toBeInTheDocument();
+    expect(localStorage.length).toBe(0);
+    expect(sessionStorage.length).toBe(0);
+    expect(document.cookie).toBe('');
+
+    const mutationCacheText = JSON.stringify(
+      queryClient
+        .getMutationCache()
+        .getAll()
+        .map((mutation) => mutation.state),
+    );
+    expect(mutationCacheText).not.toContain(CREATED_SECRET);
+  });
+
+  it('closes a copied key immediately on Escape', async () => {
+    installKeyStore(KEYS);
+    const user = userEvent.setup();
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: vi.fn().mockResolvedValue(undefined) },
+    });
+    renderApp();
+
+    await openAccessKeys(user);
+    const secretDialog = await createKeyThroughDialog(user);
+
+    await user.click(within(secretDialog).getByRole('button', { name: 'Copy key' }));
+    expect(await within(secretDialog).findByText('Copied to clipboard.')).toBeInTheDocument();
+
+    await user.keyboard('{Escape}');
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: 'API key created' })).not.toBeInTheDocument();
+    });
+    expect(screen.queryByText(CREATED_SECRET)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText('You have not copied this key. Close anyway?'),
+    ).not.toBeInTheDocument();
+  });
 
   it('shows the key once, copies it, clears it on close, and never stores it', async () => {
     installKeyStore(KEYS);

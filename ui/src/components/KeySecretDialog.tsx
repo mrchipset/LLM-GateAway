@@ -1,4 +1,4 @@
-import { useId, useRef, useState, type RefObject } from 'react';
+import { useEffect, useId, useRef, useState, type RefObject } from 'react';
 
 import type { CreatedApiKey } from '../api/client';
 import { Button } from './Button';
@@ -15,22 +15,42 @@ interface KeySecretDialogProps {
 
 export function KeySecretDialog({ created, returnFocusRef, onClose }: KeySecretDialogProps) {
   const [copyStatus, setCopyStatus] = useState<CopyStatus>('idle');
+  const [confirmingClose, setConfirmingClose] = useState(false);
   const titleId = useId();
   const copyButtonRef = useRef<HTMLButtonElement>(null);
+  const keepKeyRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (confirmingClose) keepKeyRef.current?.focus();
+  }, [confirmingClose]);
+
+  const requestClose = () => {
+    if (copyStatus === 'copied') {
+      onClose();
+      return;
+    }
+    setConfirmingClose(true);
+  };
 
   const handleCopy = async () => {
     try {
       await navigator.clipboard.writeText(created.key);
       setCopyStatus('copied');
+      setConfirmingClose(false);
     } catch {
       setCopyStatus('failed');
     }
   };
 
+  const handleKeepKey = () => {
+    setConfirmingClose(false);
+    copyButtonRef.current?.focus();
+  };
+
   return (
     <Modal
       labelledBy={titleId}
-      onClose={onClose}
+      onClose={requestClose}
       initialFocusRef={copyButtonRef}
       returnFocusRef={returnFocusRef}
     >
@@ -48,7 +68,7 @@ export function KeySecretDialog({ created, returnFocusRef, onClose }: KeySecretD
         </div>
         <Button
           variant="ghost"
-          onClick={onClose}
+          onClick={requestClose}
           aria-label="Close API key dialog"
           className="shrink-0 px-2"
         >
@@ -97,11 +117,30 @@ export function KeySecretDialog({ created, returnFocusRef, onClose }: KeySecretD
           </p>
         </div>
 
-        <div className="mt-4 flex justify-end border-t border-line pt-3">
-          <Button variant="secondary" onClick={onClose}>
-            Close
-          </Button>
-        </div>
+        {confirmingClose ? (
+          <div className="mt-4 border-t border-line pt-3">
+            <p role="alert" className="text-[12px] font-medium text-ink">
+              You have not copied this key. Close anyway?
+            </p>
+            <div className="mt-2 flex flex-wrap justify-end gap-2">
+              <Button ref={keepKeyRef} variant="secondary" onClick={handleKeepKey}>
+                Keep key
+              </Button>
+              <Button
+                onClick={onClose}
+                className="bg-danger text-white hover:bg-danger/90 disabled:bg-line-strong disabled:text-ink-muted"
+              >
+                Close without copying
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-4 flex justify-end border-t border-line pt-3">
+            <Button variant="secondary" onClick={requestClose}>
+              Close
+            </Button>
+          </div>
+        )}
       </div>
     </Modal>
   );
