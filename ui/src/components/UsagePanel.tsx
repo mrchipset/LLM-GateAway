@@ -9,6 +9,7 @@ import { Button } from './Button';
 import { KeyIcon, RefreshIcon } from './Icons';
 import { Panel, PanelHeader } from './Panel';
 import { RequestErrorPanel } from './RequestErrorPanel';
+import { TenantLimitFacts } from './TenantLimitFacts';
 import { UsageByKeyTable, UsageTableSkeleton } from './UsageByKeyTable';
 import { UsageChart } from './UsageChart';
 import { UsageStats, UsageStatsSkeleton } from './UsageStats';
@@ -335,7 +336,7 @@ function UsageControls({
           Limits
         </span>
         {selectedTenant !== null ? (
-          <TenantLimits tenant={selectedTenant} />
+          <TenantLimitFacts tenant={selectedTenant} />
         ) : (
           <span className="text-[11.5px] text-ink-muted">Select a tenant to see its limits.</span>
         )}
@@ -352,38 +353,6 @@ function UsageControls({
         </div>
       )}
     </div>
-  );
-}
-
-function TenantLimits({ tenant }: { tenant: TenantSummary }) {
-  const quota = tenant.monthly_token_quota;
-  const rate = tenant.requests_per_minute;
-
-  if (quota === null && rate === null) {
-    return <LimitFact>No limits</LimitFact>;
-  }
-
-  return (
-    <span className="flex flex-wrap items-center gap-1.5">
-      {quota !== null ? (
-        <LimitFact>{formatExactNumber(quota)} tokens/month</LimitFact>
-      ) : (
-        <LimitFact>No token limit</LimitFact>
-      )}
-      {rate !== null ? (
-        <LimitFact>{formatExactNumber(rate)} req/min</LimitFact>
-      ) : (
-        <LimitFact>No rate limit</LimitFact>
-      )}
-    </span>
-  );
-}
-
-function LimitFact({ children }: { children: ReactNode }) {
-  return (
-    <span className="rounded border border-line bg-surface px-1.5 py-0.5 font-mono text-[11px] tabular-nums text-ink">
-      {children}
-    </span>
   );
 }
 

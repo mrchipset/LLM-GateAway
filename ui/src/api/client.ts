@@ -40,6 +40,20 @@ export interface TenantListResponse {
   offset: number;
 }
 
+export interface TenantPageOptions {
+  limit?: number;
+  offset?: number;
+}
+
+export interface CreateTenantInput {
+  name: string;
+}
+
+export interface TenantLimitsPatch {
+  monthly_token_quota?: number | null;
+  requests_per_minute?: number | null;
+}
+
 export interface UsageCounts {
   prompt_tokens: number;
   completion_tokens: number;
@@ -243,12 +257,41 @@ async function sendAdmin(path: string, masterKey: string, signal?: AbortSignal):
   return response;
 }
 
+async function sendAdminJson(
+  path: string,
+  masterKey: string,
+  method: 'POST' | 'PATCH',
+  body: unknown,
+  signal?: AbortSignal,
+): Promise<Response> {
+  const response = await send(path, {
+    method,
+    signal,
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${masterKey}`,
+    },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) throw await toRequestError(response);
+  return response;
+}
+
 function unexpectedPayload(response: Response, label: string): ApiRequestError {
   return new ApiRequestError({
     status: response.status,
     message: `The backend returned an unexpected ${label} payload.`,
     requestId: response.headers.get('x-request-id'),
   });
+}
+
+async function readTenant(response: Response, path: string): Promise<TenantSummary> {
+  const payload = await readJson(response, path);
+  if (!isTenantSummary(payload)) {
+    throw unexpectedPayload(response, 'tenant');
+  }
+  return payload;
 }
 
 function usageWindowQuery(window: UsageWindow): URLSearchParams {
@@ -343,8 +386,12 @@ export async function listModels(
 export async function listTenants(
   masterKey: string,
   signal?: AbortSignal,
+  options: TenantPageOptions = {},
 ): Promise<TenantListResponse> {
-  const response = await sendAdmin('/api/v1/tenants?limit=100&offset=0', masterKey, signal);
+  const limit = options.limit ?? 100;
+  const offset = options.offset ?? 0;
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  const response = await sendAdmin(`/api/v1/tenants?${params.toString()}`, masterKey, signal);
   const payload = await readJson(response, '/api/v1/tenants');
   if (
     !isRecord(payload) ||
@@ -363,6 +410,26 @@ export async function listTenants(
     limit: payload.limit,
     offset: payload.offset,
   };
+}
+
+export async function createTenant(
+  masterKey: string,
+  input: CreateTenantInput,
+  signal?: AbortSignal,
+): Promise<TenantSummary> {
+  const response = await sendAdminJson('/api/v1/tenants', masterKey, 'POST', input, signal);
+  return readTenant(response, '/api/v1/tenants');
+}
+
+export async function updateTenantLimits(
+  masterKey: string,
+  tenantId: string,
+  patch: TenantLimitsPatch,
+  signal?: AbortSignal,
+): Promise<TenantSummary> {
+  const path = `/api/v1/tenants/${encodeURIComponent(tenantId)}`;
+  const response = await sendAdminJson(path, masterKey, 'PATCH', patch, signal);
+  return readTenant(response, path);
 }
 
 export async function getUsageSummary(

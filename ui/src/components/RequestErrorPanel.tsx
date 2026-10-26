@@ -4,8 +4,8 @@ import { Button } from './Button';
 interface RequestErrorPanelProps {
   error: Error;
   title: string;
-  retryLabel: string;
-  onRetry: () => void;
+  retryLabel?: string;
+  onRetry?: () => void;
 }
 
 export function RequestErrorPanel({ error, title, retryLabel, onRetry }: RequestErrorPanelProps) {
@@ -40,9 +40,16 @@ export function RequestErrorPanel({ error, title, retryLabel, onRetry }: Request
           )}
         </dl>
       )}
-      <Button variant="secondary" className="mt-4" onClick={onRetry} aria-label={retryLabel}>
-        Retry
-      </Button>
+      {onRetry !== undefined && (
+        <Button
+          variant="secondary"
+          className="mt-4"
+          onClick={onRetry}
+          aria-label={retryLabel ?? 'Retry'}
+        >
+          Retry
+        </Button>
+      )}
     </div>
   );
 }

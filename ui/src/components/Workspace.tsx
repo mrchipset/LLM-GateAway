@@ -5,13 +5,15 @@ import { useTenants } from '../hooks/useTenants';
 import { useUsageByKey, useUsageSeries, useUsageSummary } from '../hooks/useUsage';
 import { formatUpdatedAt } from '../lib/format';
 import { DEFAULT_USAGE_RANGE_DAYS, usageRangeSinceIso, type UsageRangeDays } from '../lib/usage';
-import { ModelsIcon, UsageIcon } from './Icons';
+import { AccessIcon, ModelsIcon, UsageIcon } from './Icons';
+import { AccessPanel } from './AccessPanel';
 import { ModelsPanel } from './ModelsPanel';
 import { UsagePanel } from './UsagePanel';
 
 const TABS = [
   { id: 'models', label: 'Models', Icon: ModelsIcon },
   { id: 'usage', label: 'Usage', Icon: UsageIcon },
+  { id: 'access', label: 'Access', Icon: AccessIcon },
 ] as const;
 
 type WorkspaceTab = (typeof TABS)[number]['id'];
@@ -174,6 +176,16 @@ export function Workspace({ masterKey, modelsQuery }: WorkspaceProps) {
           seriesQuery={seriesQuery}
           byKeyQuery={byKeyQuery}
         />
+      </div>
+
+      <div
+        role="tabpanel"
+        id="access-panel"
+        aria-labelledby="access-tab"
+        hidden={tab !== 'access'}
+        className="min-w-0"
+      >
+        <AccessPanel masterKey={masterKey} />
       </div>
     </div>
   );

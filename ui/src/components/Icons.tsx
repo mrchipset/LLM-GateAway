@@ -87,3 +87,29 @@ export function UsageIcon({ className }: IconProps) {
     </svg>
   );
 }
+
+export function AccessIcon({ className }: IconProps) {
+  return (
+    <svg {...iconProps} className={className}>
+      <path d="M8 1.8 13 3.6v4.1c0 3.1-2.1 5.3-5 6.5-2.9-1.2-5-3.4-5-6.5V3.6L8 1.8Z" />
+      <path d="m5.8 8.1 1.4 1.4 3-3.2" />
+    </svg>
+  );
+}
+
+export function EditIcon({ className }: IconProps) {
+  return (
+    <svg {...iconProps} className={className}>
+      <path d="m10.9 2.9 2.2 2.2-7.4 7.4-2.9.7.7-2.9 7.4-7.4Z" />
+      <path d="m9.6 4.2 2.2 2.2" />
+    </svg>
+  );
+}
+
+export function CloseIcon({ className }: IconProps) {
+  return (
+    <svg {...iconProps} className={className}>
+      <path d="m4 4 8 8M12 4l-8 8" />
+    </svg>
+  );
+}

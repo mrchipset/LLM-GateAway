@@ -7,6 +7,8 @@ export interface Routes {
   '/readyz'?: RouteHandler;
   '/api/v1/models'?: RouteHandler;
   '/api/v1/tenants'?: RouteHandler;
+  'POST /api/v1/tenants'?: RouteHandler;
+  'PATCH /api/v1/tenants/:id'?: RouteHandler;
   '/api/v1/usage/summary'?: RouteHandler;
   '/api/v1/usage/series'?: RouteHandler;
   '/api/v1/usage/by-key'?: RouteHandler;
@@ -34,6 +36,12 @@ const defaultRoutes: Record<keyof Routes, RouteHandler> = {
   '/readyz': () => jsonResponse({ status: 'ok', checks: { database: 'ok' } }),
   '/api/v1/models': () => jsonResponse({ items: [], total: 0, limit: 100, offset: 0 }),
   '/api/v1/tenants': () => jsonResponse({ items: [], total: 0, limit: 100, offset: 0 }),
+  'POST /api/v1/tenants': () => {
+    throw new Error('Unexpected request: POST /api/v1/tenants');
+  },
+  'PATCH /api/v1/tenants/:id': () => {
+    throw new Error('Unexpected request: PATCH /api/v1/tenants/:id');
+  },
   '/api/v1/usage/summary': () =>
     jsonResponse({
       prompt_tokens: 0,
@@ -47,11 +55,26 @@ const defaultRoutes: Record<keyof Routes, RouteHandler> = {
   '/api/v1/usage/by-key': () => jsonResponse({ limit: 100, items: [] }),
 };
 
+function resolveHandler(routes: Routes, url: URL, init: RequestInit): RouteHandler | undefined {
+  const method = (init.method ?? 'GET').toUpperCase();
+
+  if (method === 'PATCH' && url.pathname.startsWith('/api/v1/tenants/')) {
+    const handler = routes['PATCH /api/v1/tenants/:id'];
+    if (handler !== undefined) return handler;
+  }
+
+  const methodKey = `${method} ${url.pathname}` as keyof Routes;
+  const methodHandler = routes[methodKey];
+  if (methodHandler !== undefined) return methodHandler;
+
+  return routes[url.pathname as keyof Routes];
+}
+
 export function installFetchMock(overrides: Routes = {}): Mock<typeof fetch> {
   const routes = { ...defaultRoutes, ...overrides };
   const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
     const url = toUrl(input);
-    const handler = routes[url.pathname as keyof Routes];
+    const handler = resolveHandler(routes, url, init ?? {});
     if (handler === undefined) {
       throw new Error(`Unexpected request: ${url.pathname}`);
     }

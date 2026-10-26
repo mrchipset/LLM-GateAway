@@ -158,22 +158,27 @@ describe('usage panel', () => {
     }
   });
 
-  it('moves tab focus and selection with ArrowRight, Home, and End', async () => {
+  it('moves tab focus and selection with ArrowRight, Home, and End across three tabs', async () => {
     installFetchMock();
     const user = userEvent.setup();
     renderApp();
 
     const modelsTab = screen.getByRole('tab', { name: 'Models' });
     const usageTab = screen.getByRole('tab', { name: 'Usage' });
+    const accessTab = screen.getByRole('tab', { name: 'Access' });
     const modelsPanel = document.getElementById('models-panel');
     const usagePanel = document.getElementById('usage-panel');
+    const accessPanel = document.getElementById('access-panel');
 
     expect(modelsPanel).not.toBeNull();
     expect(usagePanel).not.toBeNull();
+    expect(accessPanel).not.toBeNull();
     expect(modelsTab).toHaveAttribute('aria-selected', 'true');
     expect(usageTab).toHaveAttribute('aria-selected', 'false');
+    expect(accessTab).toHaveAttribute('aria-selected', 'false');
     expect(modelsPanel).not.toHaveAttribute('hidden');
     expect(usagePanel).toHaveAttribute('hidden');
+    expect(accessPanel).toHaveAttribute('hidden');
 
     modelsTab.focus();
     await user.keyboard('{ArrowRight}');
@@ -184,16 +189,23 @@ describe('usage panel', () => {
     expect(usagePanel).not.toHaveAttribute('hidden');
     expect(modelsPanel).toHaveAttribute('hidden');
 
+    await user.keyboard('{ArrowRight}');
+    expect(document.activeElement).toBe(accessTab);
+    expect(accessTab).toHaveAttribute('aria-selected', 'true');
+    expect(usageTab).toHaveAttribute('aria-selected', 'false');
+    expect(accessPanel).not.toHaveAttribute('hidden');
+    expect(usagePanel).toHaveAttribute('hidden');
+
     await user.keyboard('{Home}');
     expect(document.activeElement).toBe(modelsTab);
     expect(modelsTab).toHaveAttribute('aria-selected', 'true');
     expect(modelsPanel).not.toHaveAttribute('hidden');
-    expect(usagePanel).toHaveAttribute('hidden');
+    expect(accessPanel).toHaveAttribute('hidden');
 
     await user.keyboard('{End}');
-    expect(document.activeElement).toBe(usageTab);
-    expect(usageTab).toHaveAttribute('aria-selected', 'true');
-    expect(usagePanel).not.toHaveAttribute('hidden');
+    expect(document.activeElement).toBe(accessTab);
+    expect(accessTab).toHaveAttribute('aria-selected', 'true');
+    expect(accessPanel).not.toHaveAttribute('hidden');
     expect(modelsPanel).toHaveAttribute('hidden');
   });
 
@@ -560,7 +572,8 @@ describe('usage panel', () => {
 
     await openUsage(user);
 
-    expect(await screen.findByText('Showing 2 of 150 tenants')).toBeInTheDocument();
+    const usageRegion = screen.getByRole('region', { name: 'Usage' });
+    expect(await within(usageRegion).findByText('Showing 2 of 150 tenants')).toBeInTheDocument();
   });
 
   it('removes usage data on disconnect, returns to the connect prompt, and keeps storage empty', async () => {
