@@ -17,6 +17,8 @@ export const queryKeys = {
   usageByKey: (tenantId: string | null, since: string, limit: number) =>
     [...usageByKeyPrefix, tenantId, since, limit] as const,
   keys: keysPrefix,
+  keyPage: (tenantId: string | null, limit: number, offset: number) =>
+    [...keysPrefix, { tenantId, limit, offset }] as const,
 };
 
 export const adminQueryPrefixes = [

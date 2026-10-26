@@ -9,6 +9,9 @@ export interface Routes {
   '/api/v1/tenants'?: RouteHandler;
   'POST /api/v1/tenants'?: RouteHandler;
   'PATCH /api/v1/tenants/:id'?: RouteHandler;
+  '/api/v1/keys'?: RouteHandler;
+  'POST /api/v1/keys'?: RouteHandler;
+  'DELETE /api/v1/keys/:id'?: RouteHandler;
   '/api/v1/usage/summary'?: RouteHandler;
   '/api/v1/usage/series'?: RouteHandler;
   '/api/v1/usage/by-key'?: RouteHandler;
@@ -42,6 +45,14 @@ const defaultRoutes: Record<keyof Routes, RouteHandler> = {
   'PATCH /api/v1/tenants/:id': () => {
     throw new Error('Unexpected request: PATCH /api/v1/tenants/:id');
   },
+  '/api/v1/keys': () =>
+    jsonResponse({ items: [], total: 0, limit: 20, offset: 0, tenant_id: null }),
+  'POST /api/v1/keys': () => {
+    throw new Error('Unexpected request: POST /api/v1/keys');
+  },
+  'DELETE /api/v1/keys/:id': () => {
+    throw new Error('Unexpected request: DELETE /api/v1/keys/:id');
+  },
   '/api/v1/usage/summary': () =>
     jsonResponse({
       prompt_tokens: 0,
@@ -60,6 +71,11 @@ function resolveHandler(routes: Routes, url: URL, init: RequestInit): RouteHandl
 
   if (method === 'PATCH' && url.pathname.startsWith('/api/v1/tenants/')) {
     const handler = routes['PATCH /api/v1/tenants/:id'];
+    if (handler !== undefined) return handler;
+  }
+
+  if (method === 'DELETE' && url.pathname.startsWith('/api/v1/keys/')) {
+    const handler = routes['DELETE /api/v1/keys/:id'];
     if (handler !== undefined) return handler;
   }
 

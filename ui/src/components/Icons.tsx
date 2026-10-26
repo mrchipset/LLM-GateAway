@@ -113,3 +113,23 @@ export function CloseIcon({ className }: IconProps) {
     </svg>
   );
 }
+
+export function CopyIcon({ className }: IconProps) {
+  return (
+    <svg {...iconProps} className={className}>
+      <rect x="5.4" y="5.4" width="8.1" height="8.1" rx="1.4" />
+      <path d="M10.7 5.4V3.9c0-.7-.6-1.3-1.3-1.3H3.9c-.7 0-1.3.6-1.3 1.3v5.5c0 .7.6 1.3 1.3 1.3h1.5" />
+    </svg>
+  );
+}
+
+export function TrashIcon({ className }: IconProps) {
+  return (
+    <svg {...iconProps} className={className}>
+      <path d="M2.8 4.2h10.4" />
+      <path d="M6 4.2V2.9c0-.5.4-.9.9-.9h2.2c.5 0 .9.4.9.9v1.3" />
+      <path d="m4.3 4.2.6 8.5c0 .6.5 1.1 1.1 1.1h4c.6 0 1.1-.5 1.1-1.1l.6-8.5" />
+      <path d="M6.8 6.8v4.4M9.2 6.8v4.4" />
+    </svg>
+  );
+}

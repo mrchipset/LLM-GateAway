@@ -45,6 +45,47 @@ export interface TenantPageOptions {
   offset?: number;
 }
 
+export interface ApiKeySummary {
+  id: string;
+  tenant_id: string;
+  name: string;
+  key_prefix: string;
+  created_at: string;
+  expires_at: string | null;
+  revoked_at: string | null;
+  last_used_at: string | null;
+}
+
+export interface ApiKeyListResponse {
+  items: ApiKeySummary[];
+  total: number;
+  limit: number;
+  offset: number;
+  tenant_id: string | null;
+}
+
+export interface ApiKeyPageOptions {
+  tenantId?: string | null;
+  limit?: number;
+  offset?: number;
+}
+
+export interface CreatedApiKey {
+  id: string;
+  tenant_id: string;
+  name: string;
+  key: string;
+  key_prefix: string;
+  created_at: string;
+  expires_at: string | null;
+}
+
+export interface CreateApiKeyInput {
+  name: string;
+  tenant_id: string;
+  expires_at?: string;
+}
+
 export interface CreateTenantInput {
   name: string;
 }
@@ -157,6 +198,37 @@ function isTenantSummary(value: unknown): value is TenantSummary {
     typeof value.created_at === 'string' &&
     isNullableCount(value.monthly_token_quota) &&
     isNullableCount(value.requests_per_minute)
+  );
+}
+
+function isNullableString(value: unknown): value is string | null {
+  return value === null || typeof value === 'string';
+}
+
+function isApiKeySummary(value: unknown): value is ApiKeySummary {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.id === 'string' &&
+    typeof value.tenant_id === 'string' &&
+    typeof value.name === 'string' &&
+    typeof value.key_prefix === 'string' &&
+    typeof value.created_at === 'string' &&
+    isNullableString(value.expires_at) &&
+    isNullableString(value.revoked_at) &&
+    isNullableString(value.last_used_at)
+  );
+}
+
+function isCreatedApiKey(value: unknown): value is CreatedApiKey {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.id === 'string' &&
+    typeof value.tenant_id === 'string' &&
+    typeof value.name === 'string' &&
+    typeof value.key === 'string' &&
+    typeof value.key_prefix === 'string' &&
+    typeof value.created_at === 'string' &&
+    isNullableString(value.expires_at)
   );
 }
 
@@ -273,6 +345,23 @@ async function sendAdminJson(
       Authorization: `Bearer ${masterKey}`,
     },
     body: JSON.stringify(body),
+  });
+  if (!response.ok) throw await toRequestError(response);
+  return response;
+}
+
+async function sendAdminDelete(
+  path: string,
+  masterKey: string,
+  signal?: AbortSignal,
+): Promise<Response> {
+  const response = await send(path, {
+    method: 'DELETE',
+    signal,
+    headers: {
+      Accept: 'application/json',
+      Authorization: `Bearer ${masterKey}`,
+    },
   });
   if (!response.ok) throw await toRequestError(response);
   return response;
@@ -430,6 +519,65 @@ export async function updateTenantLimits(
   const path = `/api/v1/tenants/${encodeURIComponent(tenantId)}`;
   const response = await sendAdminJson(path, masterKey, 'PATCH', patch, signal);
   return readTenant(response, path);
+}
+
+export async function listKeys(
+  masterKey: string,
+  signal?: AbortSignal,
+  options: ApiKeyPageOptions = {},
+): Promise<ApiKeyListResponse> {
+  const limit = options.limit ?? 20;
+  const offset = options.offset ?? 0;
+  const params = new URLSearchParams();
+  if (options.tenantId !== undefined && options.tenantId !== null && options.tenantId !== '') {
+    params.set('tenant_id', options.tenantId);
+  }
+  params.set('limit', String(limit));
+  params.set('offset', String(offset));
+
+  const response = await sendAdmin(`/api/v1/keys?${params.toString()}`, masterKey, signal);
+  const payload = await readJson(response, '/api/v1/keys');
+  if (
+    !isRecord(payload) ||
+    !Array.isArray(payload.items) ||
+    !payload.items.every(isApiKeySummary) ||
+    !isCount(payload.total) ||
+    !isCount(payload.limit) ||
+    !isCount(payload.offset) ||
+    !isNullableString(payload.tenant_id)
+  ) {
+    throw unexpectedPayload(response, 'API key list');
+  }
+
+  return {
+    items: payload.items,
+    total: payload.total,
+    limit: payload.limit,
+    offset: payload.offset,
+    tenant_id: payload.tenant_id,
+  };
+}
+
+export async function createKey(
+  masterKey: string,
+  input: CreateApiKeyInput,
+  signal?: AbortSignal,
+): Promise<CreatedApiKey> {
+  const response = await sendAdminJson('/api/v1/keys', masterKey, 'POST', input, signal);
+  const payload = await readJson(response, '/api/v1/keys');
+  if (!isCreatedApiKey(payload)) {
+    throw unexpectedPayload(response, 'created API key');
+  }
+  return payload;
+}
+
+export async function revokeKey(
+  masterKey: string,
+  keyId: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const path = `/api/v1/keys/${encodeURIComponent(keyId)}`;
+  await sendAdminDelete(path, masterKey, signal);
 }
 
 export async function getUsageSummary(

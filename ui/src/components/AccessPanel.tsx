@@ -1,3 +1,4 @@
+import { KeysPanel } from './KeysPanel';
 import { TenantsPanel } from './TenantsPanel';
 
 interface AccessPanelProps {
@@ -8,6 +9,7 @@ export function AccessPanel({ masterKey }: AccessPanelProps) {
   return (
     <div className="space-y-5">
       <TenantsPanel masterKey={masterKey} />
+      <KeysPanel masterKey={masterKey} />
     </div>
   );
 }
