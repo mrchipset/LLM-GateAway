@@ -1,13 +1,16 @@
+name: llm-gateaway
+
 services:
   postgres:
     image: postgres:16-alpine
     container_name: llm-gateaway-postgres
     environment:
       POSTGRES_USER: gateway
-      POSTGRES_PASSWORD: gateway
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-gateway}
       POSTGRES_DB: gateway
     ports:
-      - "127.0.0.1:5432:5432"
+      # Local development/debugging only. Remove this mapping behind a firewall.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -15,6 +18,11 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    restart: unless-stopped
+    logging: &default-logging
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   redis:
     image: redis:7-alpine
@@ -27,6 +35,83 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    restart: unless-stopped
+    logging: *default-logging
+
+  migrate:
+    image: llm-gateaway-backend:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    profiles: ["app"]
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      GATEWAY_DATABASE_URL: postgresql+asyncpg://gateway:${POSTGRES_PASSWORD:-gateway}@postgres:5432/gateway
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    logging: *default-logging
+
+  backend:
+    image: llm-gateaway-backend:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    profiles: ["app"]
+    environment:
+      GATEWAY_ENVIRONMENT: ${GATEWAY_ENVIRONMENT:-production}
+      GATEWAY_MASTER_KEY: ${GATEWAY_MASTER_KEY:-}
+      GATEWAY_LOG_LEVEL: ${GATEWAY_LOG_LEVEL:-INFO}
+      GATEWAY_STORAGE_BACKEND: postgres
+      GATEWAY_DATABASE_URL: postgresql+asyncpg://gateway:${POSTGRES_PASSWORD:-gateway}@postgres:5432/gateway
+      GATEWAY_OPENAI_API_KEY: ${GATEWAY_OPENAI_API_KEY:-}
+      GATEWAY_OPENAI_BASE_URL: ${GATEWAY_OPENAI_BASE_URL:-https://api.openai.com/v1}
+      GATEWAY_DEEPSEEK_API_KEY: ${GATEWAY_DEEPSEEK_API_KEY:-}
+      GATEWAY_DEEPSEEK_BASE_URL: ${GATEWAY_DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      GATEWAY_FAKE_PROVIDER_ENABLED: ${GATEWAY_FAKE_PROVIDER_ENABLED:-false}
+      GATEWAY_REQUEST_TIMEOUT_SECONDS: ${GATEWAY_REQUEST_TIMEOUT_SECONDS:-60}
+      GATEWAY_CONNECT_TIMEOUT_SECONDS: ${GATEWAY_CONNECT_TIMEOUT_SECONDS:-10}
+      GATEWAY_MAX_RETRIES: ${GATEWAY_MAX_RETRIES:-2}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/healthz', timeout=2)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    restart: unless-stopped
+    logging: *default-logging
+
+  ui:
+    image: llm-gateaway-ui:local
+    build:
+      context: ./ui
+      dockerfile: Dockerfile
+    profiles: ["app"]
+    ports:
+      - "${GATEWAY_UI_PORT:-8080}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+    logging: *default-logging
 
 volumes:
   pgdata:
