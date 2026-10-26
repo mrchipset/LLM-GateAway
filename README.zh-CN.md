@@ -472,6 +472,7 @@ design.md            LLM-GateAway 设计建议
 - [`docs/verification.md`](docs/verification.md)：DeepSeek、租户 key 与网关调用的逐步验证
 - [`docs/tenant-key-model.md`](docs/tenant-key-model.md)：租户创建、API key 生成、模型注册与 DeepSeek 实测的聚焦记录
 - [`docs/docker.md`](docs/docker.md)：Docker Compose 部署、配置、升级与备份
+- [`TODO.md`](TODO.md)：管理台租户/key 管理与提示词审计的后续计划
 
 ## Agent skill
 

@@ -472,6 +472,7 @@ design.md            LLM-GateAway design guidance
 - [`docs/verification.md`](docs/verification.md): step-by-step verification for DeepSeek, tenant keys, and gateway calls
 - [`docs/tenant-key-model.md`](docs/tenant-key-model.md): focused runbook for creating a tenant, API key, and model registration, with a verified DeepSeek call
 - [`docs/docker.md`](docs/docker.md): Docker Compose deployment, configuration, upgrades, and backups
+- [`TODO.md`](TODO.md): upcoming admin-console tenant/key management and prompt audit work
 
 ## Agent skill
 
