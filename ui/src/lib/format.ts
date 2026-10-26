@@ -8,6 +8,20 @@ const createdAtFormatter = new Intl.DateTimeFormat('en-US', {
   hour12: false,
 });
 
+const createdAtDateFormatter = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'UTC',
+  year: 'numeric',
+  month: 'short',
+  day: '2-digit',
+});
+
+const createdAtTimeFormatter = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'UTC',
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false,
+});
+
 const updatedAtFormatter = new Intl.DateTimeFormat('en-US', {
   timeZone: 'UTC',
   hour: '2-digit',
@@ -40,6 +54,18 @@ export function formatCreatedAt(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return 'Invalid date';
   return `${createdAtFormatter.format(date)} UTC`;
+}
+
+export function formatCreatedDate(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Invalid date';
+  return createdAtDateFormatter.format(date);
+}
+
+export function formatCreatedTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Invalid time';
+  return createdAtTimeFormatter.format(date);
 }
 
 export function formatUpdatedAt(epochMs: number): string {

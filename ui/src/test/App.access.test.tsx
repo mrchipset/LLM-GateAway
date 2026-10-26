@@ -169,8 +169,13 @@ describe('tenant management', () => {
     expect(within(table).getByText('Solo')).toBeInTheDocument();
     expect(within(table).getByText('11111111…')).toBeInTheDocument();
     expect(within(table).getByText('Sep 01, 2026, 00:00 UTC')).toBeInTheDocument();
-    expect(within(table).getByText('1,000,000 tokens/month')).toBeInTheDocument();
-    expect(within(table).getByText('60 req/min')).toBeInTheDocument();
+    expect(within(table).getByText('1,000,000/mo')).toBeInTheDocument();
+    expect(within(table).getByText('60/min')).toBeInTheDocument();
+    expect(within(table).getByText('Tokens')).toBeInTheDocument();
+    expect(within(table).getByText('Rate')).toBeInTheDocument();
+    expect(within(table).getByText('1,000,000 tokens per month')).toBeInTheDocument();
+    expect(within(table).getByText('60 requests per minute')).toBeInTheDocument();
+    expect(within(table).queryByText('1,000,000 tokens/month')).not.toBeInTheDocument();
     expect(within(table).getByText('No limits')).toBeInTheDocument();
   });
 
@@ -501,8 +506,8 @@ describe('tenant management', () => {
     await waitFor(() => {
       const updatedTable = within(region).getByRole('table', { name: 'Tenants' });
       const row = within(updatedTable).getByRole('row', { name: /Acme/ });
-      expect(within(row).getByText('120 req/min')).toBeInTheDocument();
-      expect(within(row).getByText('1,000,000 tokens/month')).toBeInTheDocument();
+      expect(within(row).getByText('120/min')).toBeInTheDocument();
+      expect(within(row).getByText('1,000,000/mo')).toBeInTheDocument();
     });
 
     expect(localStorage.length).toBe(0);

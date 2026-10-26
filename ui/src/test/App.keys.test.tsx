@@ -311,17 +311,18 @@ describe('API key management', () => {
 
     const table = await screen.findByRole('table', { name: 'API keys' });
     for (const label of [
-      'Name',
-      'Prefix',
+      'Key',
       'Tenant',
       'Created (UTC)',
       'Expires (UTC)',
-      'Status',
-      'Last used (UTC)',
+      'Status / last used',
       'Action',
     ]) {
       expect(within(table).getByRole('columnheader', { name: label })).toBeInTheDocument();
     }
+    expect(
+      within(table).queryByRole('columnheader', { name: 'Last used (UTC)' }),
+    ).not.toBeInTheDocument();
 
     expect(within(table).getByText('Production')).toBeInTheDocument();
     expect(within(table).getByText('lgw_live_prod')).toBeInTheDocument();
@@ -339,13 +340,21 @@ describe('API key management', () => {
     expect(within(table).getAllByText('Active')).toHaveLength(2);
     expect(within(table).getByText('Revoked')).toBeInTheDocument();
     expect(within(table).getByText('Expired')).toBeInTheDocument();
+    expect(within(table).getAllByText('Last used')).toHaveLength(4);
 
     const productionRow = within(table).getByRole('row', { name: /Production/ });
     expect(within(productionRow).getAllByText('—')).toHaveLength(2);
 
     expect(within(table).getAllByRole('button', { name: /^Revoke / })).toHaveLength(3);
+    expect(within(table).getByRole('button', { name: 'Revoke Production' })).toBeInTheDocument();
+    expect(within(table).getByRole('button', { name: 'Revoke Legacy' })).toBeInTheDocument();
     const revokedRow = within(table).getByRole('row', { name: /Old staging/ });
     expect(within(revokedRow).queryByRole('button', { name: /^Revoke / })).not.toBeInTheDocument();
+
+    const cards = screen.getByRole('list', { name: 'API key cards' });
+    expect(within(cards).getByText('lgw_live_prod')).toBeInTheDocument();
+    expect(within(cards).getAllByText('Active')).toHaveLength(2);
+    expect(within(cards).getAllByRole('button', { name: /^Revoke / })).toHaveLength(3);
   });
 
   it('advances an expiring key to Expired while the page stays open', async () => {

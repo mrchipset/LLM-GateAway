@@ -1,5 +1,10 @@
 import type { ApiKeySummary } from '../api/client';
-import { formatCreatedAt, formatExactNumber } from '../lib/format';
+import {
+  formatCreatedAt,
+  formatCreatedDate,
+  formatCreatedTime,
+  formatExactNumber,
+} from '../lib/format';
 import { apiKeyStatus, type KeyStatus } from '../lib/keys';
 import { Button } from './Button';
 import { TrashIcon } from './Icons';
@@ -10,16 +15,31 @@ const STATUS_CLASSES: Record<KeyStatus, string> = {
   Expired: 'border-warn/30 bg-warn-soft text-warn',
 };
 
-function tenantLabel(tenantId: string, tenantNames: ReadonlyMap<string, string>): string {
-  const name = tenantNames.get(tenantId);
-  if (name !== undefined) return name;
+function shortTenantId(tenantId: string): string {
   return `${tenantId.slice(0, 8)}…`;
+}
+
+function tenantLabel(tenantId: string, tenantNames: ReadonlyMap<string, string>): string {
+  return tenantNames.get(tenantId) ?? shortTenantId(tenantId);
+}
+
+function StackedTimestamp({ value, className }: { value: string; className: string }) {
+  return (
+    <time
+      dateTime={value}
+      title={formatCreatedAt(value)}
+      className={`block whitespace-nowrap font-mono tabular-nums ${className}`}
+    >
+      {formatCreatedDate(value)}, <br />
+      {formatCreatedTime(value)} UTC
+    </time>
+  );
 }
 
 function StatusBadge({ status }: { status: KeyStatus }) {
   return (
     <span
-      className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 font-mono text-[10.5px] font-medium ${STATUS_CLASSES[status]}`}
+      className={`inline-flex items-center gap-1 whitespace-nowrap rounded border px-1.5 py-0.5 font-mono text-[10.5px] font-medium ${STATUS_CLASSES[status]}`}
     >
       <span aria-hidden="true" className="size-1.5 rounded-full bg-current" />
       {status}
@@ -58,36 +78,32 @@ interface KeysTableProps {
 export function KeysTable({ keys, tenantNames, now, onRevoke }: KeysTableProps) {
   return (
     <>
-      <div className="hidden overflow-x-auto md:block">
-        <table className="w-full min-w-[44rem] table-fixed border-collapse text-left text-[12.5px]">
+      <div className="hidden md:block">
+        <table className="w-full table-fixed border-collapse text-left text-[12.5px]">
           <caption className="sr-only">API keys</caption>
           <colgroup>
-            <col className="w-[16%]" />
-            <col className="w-[13%]" />
-            <col className="w-[13%]" />
+            <col className="w-[21%]" />
             <col className="w-[15%]" />
-            <col className="w-[15%]" />
-            <col className="w-[9%]" />
-            <col className="w-[12%]" />
+            <col className="w-[17%]" />
+            <col className="w-[17%]" />
+            <col className="w-[23%]" />
             <col className="w-[7%]" />
           </colgroup>
           <thead>
             <tr className="border-b border-line">
               {[
-                'Name',
-                'Prefix',
+                'Key',
                 'Tenant',
                 'Created (UTC)',
                 'Expires (UTC)',
-                'Status',
-                'Last used (UTC)',
+                'Status / last used',
                 'Action',
               ].map((label, index) => (
                 <th
                   key={label}
                   scope="col"
-                  className={`py-2 pr-2.5 font-mono text-[10px] font-medium uppercase tracking-[0.1em] text-ink-muted last:pr-0 ${
-                    index === 7 ? 'text-right' : 'text-left'
+                  className={`py-2 pr-3 font-mono text-[10px] font-medium uppercase tracking-[0.1em] text-ink-muted last:pr-0 ${
+                    index === 5 ? 'text-right' : 'text-left'
                   }`}
                 >
                   {label}
@@ -98,50 +114,70 @@ export function KeysTable({ keys, tenantNames, now, onRevoke }: KeysTableProps) 
           <tbody className="divide-y divide-line">
             {keys.map((apiKey) => {
               const status = apiKeyStatus(apiKey, now);
+              const tenantName = tenantNames.get(apiKey.tenant_id);
+              const shortId = shortTenantId(apiKey.tenant_id);
               return (
                 <tr key={apiKey.id} className="transition-colors hover:bg-surface-sunken/40">
-                  <th
-                    scope="row"
-                    className="break-words py-2.5 pr-2.5 align-top font-medium text-ink"
-                  >
-                    {apiKey.name}
-                  </th>
-                  <td className="py-2.5 pr-2.5 align-top">
+                  <th scope="row" className="py-3 pr-3 align-top">
+                    <span className="block break-words font-medium leading-snug text-ink">
+                      {apiKey.name}
+                    </span>
                     <span
-                      className="select-all break-all font-mono text-[11px] text-ink"
+                      className="mt-0.5 block select-all break-all font-mono text-[10.5px] text-ink-muted"
                       title={apiKey.key_prefix}
                     >
                       {apiKey.key_prefix}
                     </span>
+                  </th>
+                  <td className="py-3 pr-3 align-top">
+                    {tenantName !== undefined ? (
+                      <>
+                        <span className="block break-words text-[12px] text-ink">{tenantName}</span>
+                        <span
+                          className="mt-0.5 block select-all font-mono text-[10.5px] text-ink-muted"
+                          title={apiKey.tenant_id}
+                        >
+                          {shortId}
+                        </span>
+                      </>
+                    ) : (
+                      <span
+                        className="block select-all break-all font-mono text-[11px] text-ink"
+                        title={apiKey.tenant_id}
+                      >
+                        {shortId}
+                      </span>
+                    )}
                   </td>
-                  <td className="py-2.5 pr-2.5 align-top">
-                    <span className="break-words" title={apiKey.tenant_id}>
-                      {tenantLabel(apiKey.tenant_id, tenantNames)}
-                    </span>
+                  <td className="py-3 pr-3 align-top">
+                    <StackedTimestamp
+                      value={apiKey.created_at}
+                      className="text-[10.5px] text-ink"
+                    />
                   </td>
-                  <td className="py-2.5 pr-2.5 align-top font-mono text-[11px] tabular-nums">
-                    <time dateTime={apiKey.created_at}>{formatCreatedAt(apiKey.created_at)}</time>
-                  </td>
-                  <td className="py-2.5 pr-2.5 align-top font-mono text-[11px] tabular-nums">
+                  <td className="py-3 pr-3 align-top">
                     {apiKey.expires_at === null ? (
-                      '—'
+                      <span className="font-mono text-[10.5px] text-ink-muted">—</span>
                     ) : (
-                      <time dateTime={apiKey.expires_at}>{formatCreatedAt(apiKey.expires_at)}</time>
+                      <StackedTimestamp
+                        value={apiKey.expires_at}
+                        className="text-[10.5px] text-ink"
+                      />
                     )}
                   </td>
-                  <td className="py-2.5 pr-2.5 align-top">
+                  <td className="py-3 pr-3 align-top">
                     <StatusBadge status={status} />
-                  </td>
-                  <td className="py-2.5 pr-2.5 align-top font-mono text-[11px] tabular-nums">
+                    <p className="mt-1.5 text-[10px] text-ink-muted">Last used</p>
                     {apiKey.last_used_at === null ? (
-                      '—'
+                      <span className="font-mono text-[10.5px] text-ink-muted">—</span>
                     ) : (
-                      <time dateTime={apiKey.last_used_at}>
-                        {formatCreatedAt(apiKey.last_used_at)}
-                      </time>
+                      <StackedTimestamp
+                        value={apiKey.last_used_at}
+                        className="text-[10.5px] text-ink-muted"
+                      />
                     )}
                   </td>
-                  <td className="py-2.5 text-right align-top">
+                  <td className="py-3 text-right align-top">
                     {status !== 'Revoked' && <RevokeButton apiKey={apiKey} onRevoke={onRevoke} />}
                   </td>
                 </tr>

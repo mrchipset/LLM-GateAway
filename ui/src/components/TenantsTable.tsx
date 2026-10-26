@@ -78,7 +78,7 @@ export function TenantsTable({ tenants, onEdit }: TenantsTableProps) {
                   <time dateTime={tenant.created_at}>{formatCreatedAt(tenant.created_at)}</time>
                 </td>
                 <td className="py-2.5 pr-3 align-top">
-                  <TenantLimitFacts tenant={tenant} />
+                  <TenantLimitFacts tenant={tenant} variant="compact" />
                 </td>
                 <td className="py-2.5 text-right align-top">
                   <EditLimitButton tenant={tenant} onEdit={onEdit} />
@@ -109,7 +109,7 @@ export function TenantsTable({ tenants, onEdit }: TenantsTableProps) {
               </dd>
               <dt className="text-ink-muted">Limits</dt>
               <dd>
-                <TenantLimitFacts tenant={tenant} />
+                <TenantLimitFacts tenant={tenant} variant="compact" />
               </dd>
             </dl>
           </li>
