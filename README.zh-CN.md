@@ -324,7 +324,7 @@ GATEWAY_STORAGE_BACKEND=postgres
 GATEWAY_DATABASE_URL=postgresql+asyncpg://gateway:gateway@127.0.0.1:5432/gateway
 ```
 
-迁移只读取 `GATEWAY_DATABASE_URL`，不需要 master key。服务启动时不会自动迁移，部署时必须单独执行迁移步骤。
+迁移只读取 `GATEWAY_DATABASE_URL`，不需要 master key。本地 `uv` 运行不会自动迁移；Compose 由一次性 `migrate` 服务执行，应用进程本身不会迁移。
 
 Redis 为后续限流与缓存预留，可用 profile 启动：
 
@@ -347,6 +347,7 @@ Invoke-RestMethod http://127.0.0.1:8080/healthz
 - OpenAI 兼容 API base：`http://127.0.0.1:8080/v1`
 - 一次性 `migrate` 服务会在后端启动前执行 `alembic upgrade head`；迁移失败会阻止后台上线。
 - PostgreSQL 数据保存在 `pgdata` 数据卷；`down -v` 会删除数据。
+- 如果 8080 已被占用，为 Compose 命令设置 `GATEWAY_UI_PORT`（例如 `$env:GATEWAY_UI_PORT='8090'`），并用该端口访问管理台/API。
 
 配置表、升级、备份、排错与生产加固见 [`docs/docker.md`](docs/docker.md)。只启动基础设施（后端用 `uv`、前端用 Vite）：`docker compose up -d postgres`。
 
@@ -401,7 +402,7 @@ Access 标签用于管理租户与 API key：
 - 按租户创建 key，可设置过期时间。明文只展示一次、可复制，且不会写入浏览器存储、URL 或查询缓存；未复制就关闭时会二次确认。
 - 吊销 key 需要确认；已吊销/已过期的 key 会显示状态，只有未吊销的 key 提供吊销操作。
 
-master key 只保存在当前页面的内存中，不会写入 localStorage、sessionStorage、cookie 或 URL；断开连接会清除所有查询缓存。
+master key 只保存在当前页面的内存中，不会写入 localStorage、sessionStorage、cookie 或 URL；断开连接会清除所有管理/用量查询缓存。
 
 前端检查：
 
@@ -468,7 +469,7 @@ design.md            LLM-GateAway 设计建议
 - `/v1/models` 最多返回 1000 条；管理 API 使用 offset 分页。
 - 每个已认证推理请求都会写一次 `last_used_at`，高并发下需要改为采样或批处理。
 - 管理台不提供模型注册或提示词审计 UI；用量面板只读、固定日粒度，按 key 与租户各最多展示 100 条，最后一根柱为今日至今。没有租户删除/重命名接口。
-- 迁移需要手动执行，未提供服务启动时自动迁移。
+- 本地 `uv` 运行需手动迁移；Compose 由 `migrate` 服务自动执行，应用进程本身不会迁移。
 
 ## 相关文档
 

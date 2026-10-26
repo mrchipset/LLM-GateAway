@@ -43,5 +43,8 @@ Thumbs.db
 .vscode/
 *.swp
 
+# Browser automation artifacts
+.playwright-mcp/
+
 # Deepwork local state
 .slim/deepwork/

@@ -461,3 +461,17 @@ docker compose stop postgres
 - `.env` 不在 git 中（`.gitignore` 已覆盖）。
 - 不要把 DeepSeek key、master key 或 `sk-gw-...` 粘贴到 issue、文档或提交。
 - 内存模式下停止服务即清空验证数据；PostgreSQL 模式需要手动清理表或使用专用库。
+
+## 9. 管理台 Access 真机验收（可选）
+
+完整栈启动后（端口若被占用，按 README 设置 `GATEWAY_UI_PORT`，下文以 8080 为例）：
+
+1. 打开 `http://127.0.0.1:8080`，填入 master key，进入 `Access` 标签。
+2. 创建一个唯一名称的租户（例如 `ui-verify-<时间戳>`），确认出现在租户目录。
+3. 编辑限额：填写 `1000000` 与 `60`，保存后确认显示 `Tokens 1,000,000/mo` 与 `Rate 60/min`；留空并保存可清除限制。
+4. 点击 `Create API key`，选择该租户并填写名称；创建后在一次弹窗中复制明文，调用 `GET /v1/models`（`Authorization: Bearer <key>`）确认 200。
+5. 关闭弹窗；确认页面不再出现明文，DevTools 的 localStorage/sessionStorage/cookie/URL 中也没有 key，列表只显示前缀。
+6. 对该 key 执行 `Revoke` 并确认；再次调用 `/v1/models` 应返回 401 `invalid_api_key`。
+7. 清理测试数据：吊销 key 后，由于没有租户删除 API，使用 SQL 删除该租户的 usage/rate/api_keys/tenant 行（或使用专用测试库）。
+
+注意：不要截图一次性密钥弹窗，不要把 key 粘贴到文档或 issue。自动化覆盖见 `ui/src/test/App.access.test.tsx`、`App.keys.test.tsx`；本节是真实浏览器的手动回归清单。

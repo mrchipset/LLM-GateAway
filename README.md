@@ -347,6 +347,7 @@ Invoke-RestMethod http://127.0.0.1:8080/healthz
 - OpenAI-compatible base URL: `http://127.0.0.1:8080/v1`
 - The one-shot `migrate` service runs `alembic upgrade head` before the backend starts; a failed migration blocks the backend.
 - PostgreSQL data lives in the `pgdata` volume; `down -v` deletes it.
+- If port 8080 is already in use, set `GATEWAY_UI_PORT` for the Compose command (for example `$env:GATEWAY_UI_PORT='8090'`) and use that port for the console and API base URL.
 
 See [`docs/docker.md`](docs/docker.md) for the configuration table, upgrades, backups, troubleshooting, and production hardening. Infrastructure only (backend via `uv`, console via Vite): `docker compose up -d postgres`.
 
@@ -401,7 +402,7 @@ The Access tab manages tenants and API keys:
 - Create keys per tenant with an optional expiry. The plaintext is shown once, can be copied, and is never written to storage, the URL, or the query cache; closing an uncopied dialog asks for confirmation.
 - Revoke keys with confirmation. Revoked and expired keys are labeled, and only non-revoked keys offer the revoke action.
 
-The master key stays in page memory only; it is never written to localStorage, sessionStorage, cookies, or the URL. Disconnecting clears all query caches.
+The master key stays in page memory only; it is never written to localStorage, sessionStorage, cookies, or the URL. Disconnecting clears all admin and usage query caches.
 
 Frontend checks:
 
@@ -468,7 +469,7 @@ design.md            LLM-GateAway design guidance
 - `/v1/models` returns at most 1000 entries; the management API uses offset pagination.
 - Every authenticated inference request writes `last_used_at`; high-throughput deployments should sample or batch it.
 - The console does not register models or provide a prompt-audit UI; the usage panel is read-only with daily granularity, caps keys and tenants at 100 each, and labels the final bar as today so far. Tenant delete/rename is not available.
-- Migrations are manual; there is no automatic migration on startup.
+- Local `uv` runs require a manual `alembic upgrade head`; Compose runs it through the one-shot `migrate` service, and the application process itself never migrates.
 
 ## Related documents
 
