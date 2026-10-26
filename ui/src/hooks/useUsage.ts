@@ -1,11 +1,12 @@
 import { useQuery } from '@tanstack/react-query';
 
 import { getUsageByKey, getUsageSeries, getUsageSummary, type UsageWindow } from '../api/client';
+import { queryKeys } from '../lib/queryKeys';
 import { USAGE_BY_KEY_LIMIT } from '../lib/usage';
 
 export function useUsageSummary(masterKey: string | null, window: UsageWindow) {
   return useQuery({
-    queryKey: ['usage-summary', window.tenantId, window.since],
+    queryKey: queryKeys.usageSummary(window.tenantId, window.since),
     queryFn: ({ signal }) => {
       if (masterKey === null) {
         throw new Error('The usage summary query started without a master key.');
@@ -19,7 +20,7 @@ export function useUsageSummary(masterKey: string | null, window: UsageWindow) {
 
 export function useUsageSeries(masterKey: string | null, window: UsageWindow) {
   return useQuery({
-    queryKey: ['usage-series', window.tenantId, window.since],
+    queryKey: queryKeys.usageSeries(window.tenantId, window.since),
     queryFn: ({ signal }) => {
       if (masterKey === null) {
         throw new Error('The usage series query started without a master key.');
@@ -37,7 +38,7 @@ export function useUsageByKey(
   limit = USAGE_BY_KEY_LIMIT,
 ) {
   return useQuery({
-    queryKey: ['usage-by-key', window.tenantId, window.since, limit],
+    queryKey: queryKeys.usageByKey(window.tenantId, window.since, limit),
     queryFn: ({ signal }) => {
       if (masterKey === null) {
         throw new Error('The usage by key query started without a master key.');

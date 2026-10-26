@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 
 import { listTenants } from '../api/client';
+import { queryKeys } from '../lib/queryKeys';
 
 export const TENANT_SELECTOR_LIMIT = 100;
 
@@ -11,7 +12,7 @@ export interface TenantPage {
 
 export function useTenants(masterKey: string | null) {
   return useQuery({
-    queryKey: ['admin-tenants', { limit: TENANT_SELECTOR_LIMIT, offset: 0 }],
+    queryKey: queryKeys.tenantPage(TENANT_SELECTOR_LIMIT, 0),
     queryFn: ({ signal }) => {
       if (masterKey === null) {
         throw new Error('The tenants query started without a master key.');
@@ -25,7 +26,7 @@ export function useTenants(masterKey: string | null) {
 
 export function useTenantPage(masterKey: string | null, page: TenantPage) {
   return useQuery({
-    queryKey: ['admin-tenants', { limit: page.limit, offset: page.offset }],
+    queryKey: queryKeys.tenantPage(page.limit, page.offset),
     queryFn: ({ signal }) => {
       if (masterKey === null) {
         throw new Error('The tenant page query started without a master key.');

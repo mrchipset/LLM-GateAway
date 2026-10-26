@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { ApiRequestError } from './api/client';
 import { ConnectionPanel } from './components/ConnectionPanel';
@@ -7,14 +7,9 @@ import { Header } from './components/Header';
 import { Workspace } from './components/Workspace';
 import { useBackendStatus } from './hooks/useBackendStatus';
 import { useModels } from './hooks/useModels';
+import { adminQueryPrefixes } from './lib/queryKeys';
 
-const ADMIN_QUERY_PREFIXES = [
-  ['admin-models'],
-  ['admin-tenants'],
-  ['usage-summary'],
-  ['usage-series'],
-  ['usage-by-key'],
-];
+const ADMIN_QUERY_PREFIXES = adminQueryPrefixes;
 
 export default function App() {
   const [masterKey, setMasterKey] = useState<string | null>(null);
@@ -28,12 +23,16 @@ export default function App() {
     modelsQuery.error instanceof ApiRequestError &&
     modelsQuery.error.status === 401;
 
-  const handleDisconnect = () => {
-    setMasterKey(null);
+  useEffect(() => {
+    if (masterKey !== null) return;
     for (const queryKey of ADMIN_QUERY_PREFIXES) {
       void queryClient.cancelQueries({ queryKey });
       queryClient.removeQueries({ queryKey });
     }
+  }, [masterKey, queryClient]);
+
+  const handleDisconnect = () => {
+    setMasterKey(null);
   };
 
   return (

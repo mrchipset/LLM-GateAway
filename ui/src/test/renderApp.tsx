@@ -14,9 +14,11 @@ export function renderApp() {
     },
   });
 
-  return render(
+  const result = render(
     <QueryClientProvider client={queryClient}>
       <App />
     </QueryClientProvider>,
   );
+
+  return { ...result, queryClient };
 }

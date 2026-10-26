@@ -6,8 +6,7 @@ import {
   type CreateTenantInput,
   type TenantLimitsPatch,
 } from '../api/client';
-
-const TENANTS_QUERY_PREFIX = ['admin-tenants'];
+import { queryKeys } from '../lib/queryKeys';
 
 export function useCreateTenant(masterKey: string) {
   const queryClient = useQueryClient();
@@ -15,7 +14,7 @@ export function useCreateTenant(masterKey: string) {
   return useMutation({
     mutationFn: (input: CreateTenantInput) => createTenant(masterKey, input),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: TENANTS_QUERY_PREFIX });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.tenants });
     },
   });
 }
@@ -27,7 +26,7 @@ export function useUpdateTenantLimits(masterKey: string) {
     mutationFn: (args: { tenantId: string; patch: TenantLimitsPatch }) =>
       updateTenantLimits(masterKey, args.tenantId, args.patch),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: TENANTS_QUERY_PREFIX });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.tenants });
     },
   });
 }

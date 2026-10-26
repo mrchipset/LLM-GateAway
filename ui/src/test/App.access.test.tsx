@@ -140,6 +140,7 @@ describe('tenant management', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    document.body.style.overflow = '';
   });
 
   it('does not request tenants before connecting and shows the connect prompt', async () => {
@@ -508,6 +509,28 @@ describe('tenant management', () => {
     expect(sessionStorage.length).toBe(0);
     expect(document.cookie).toBe('');
     expect(document.body.textContent).not.toContain('mk_test_123');
+  });
+
+  it('refreshes the Usage tenant selector after editing limits in Access', async () => {
+    const { patchBodies } = installEditableTenants(TENANTS);
+    const user = userEvent.setup();
+    renderApp();
+
+    await openAccess(user);
+    const table = await screen.findByRole('table', { name: 'Tenants' });
+
+    await user.click(within(table).getByRole('button', { name: 'Edit limits for Acme' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Edit tenant limits' });
+    const rateInput = within(dialog).getByLabelText('Requests per minute');
+
+    await user.clear(rateInput);
+    await user.type(rateInput, '120');
+    await user.click(within(dialog).getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+    expect(patchBodies).toEqual([{ requests_per_minute: 120 }]);
 
     await user.click(screen.getByRole('tab', { name: 'Usage' }));
     const tenantSelect = await screen.findByLabelText('Tenant');
@@ -661,5 +684,92 @@ describe('tenant management', () => {
     await waitFor(() => {
       expect(document.activeElement).toBe(editButton);
     });
+  });
+
+  it('keeps the edit dialog open and ignores Escape while saving', async () => {
+    let resolvePatch: (response: Response) => void = () => {};
+    const pendingPatch = new Promise<Response>((resolve) => {
+      resolvePatch = resolve;
+    });
+    installFetchMock({
+      '/api/v1/tenants': (url) => pageResponse(TENANTS, url),
+      'PATCH /api/v1/tenants/:id': () => pendingPatch,
+    });
+    const user = userEvent.setup();
+    renderApp();
+
+    await openAccess(user);
+    const table = await screen.findByRole('table', { name: 'Tenants' });
+
+    await user.click(within(table).getByRole('button', { name: 'Edit limits for Acme' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Edit tenant limits' });
+    const rateInput = within(dialog).getByLabelText('Requests per minute');
+    const save = within(dialog).getByRole('button', { name: 'Save changes' });
+    const close = within(dialog).getByRole('button', { name: 'Close edit limits dialog' });
+    const cancel = within(dialog).getByRole('button', { name: 'Cancel' });
+
+    await user.clear(rateInput);
+    await user.type(rateInput, '120');
+    await user.click(save);
+
+    await waitFor(() => {
+      expect(save).toBeDisabled();
+    });
+    expect(close).toBeDisabled();
+    expect(cancel).toBeDisabled();
+
+    await user.keyboard('{Escape}');
+    expect(screen.getByRole('dialog', { name: 'Edit tenant limits' })).toBeInTheDocument();
+
+    await act(async () => {
+      resolvePatch(jsonResponse({ ...ACME, requests_per_minute: 120 }));
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+  });
+
+  it('wraps focus inside the edit dialog with Tab and Shift+Tab', async () => {
+    installAccessMock();
+    const user = userEvent.setup();
+    renderApp();
+
+    await openAccess(user);
+    const table = await screen.findByRole('table', { name: 'Tenants' });
+
+    await user.click(within(table).getByRole('button', { name: 'Edit limits for Acme' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Edit tenant limits' });
+    const close = within(dialog).getByRole('button', { name: 'Close edit limits dialog' });
+    const cancel = within(dialog).getByRole('button', { name: 'Cancel' });
+
+    cancel.focus();
+    await user.keyboard('{Tab}');
+    expect(document.activeElement).toBe(close);
+
+    close.focus();
+    await user.keyboard('{Shift>}{Tab}{/Shift}');
+    expect(document.activeElement).toBe(cancel);
+  });
+
+  it('locks body scrolling while the edit dialog is open and restores the previous value', async () => {
+    document.body.style.overflow = 'scroll';
+    installAccessMock();
+    const user = userEvent.setup();
+    renderApp();
+
+    await openAccess(user);
+    const table = await screen.findByRole('table', { name: 'Tenants' });
+
+    await user.click(within(table).getByRole('button', { name: 'Edit limits for Acme' }));
+    await screen.findByRole('dialog', { name: 'Edit tenant limits' });
+    expect(document.body.style.overflow).toBe('hidden');
+
+    await user.keyboard('{Escape}');
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+    expect(document.body.style.overflow).toBe('scroll');
   });
 });

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 
 import type { TenantSummary } from '../api/client';
 import { useTenantPage, type TenantPageQuery } from '../hooks/useTenants';
@@ -45,15 +45,8 @@ function ConnectedTenantsPanel({ masterKey }: { masterKey: string }) {
   const [offset, setOffset] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
   const [editingTenant, setEditingTenant] = useState<TenantSummary | null>(null);
-  const returnFocusRef = useRef<HTMLButtonElement | null>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
   const pageQuery = useTenantPage(masterKey, { limit: TENANT_PAGE_SIZE, offset });
-
-  useEffect(() => {
-    if (editingTenant !== null || returnFocusRef.current === null) return;
-    const trigger = returnFocusRef.current;
-    returnFocusRef.current = null;
-    trigger.focus();
-  }, [editingTenant]);
 
   const count =
     pageQuery.status === 'success'
@@ -148,6 +141,7 @@ function ConnectedTenantsPanel({ masterKey }: { masterKey: string }) {
         <TenantEditDialog
           masterKey={masterKey}
           tenant={editingTenant}
+          returnFocusRef={returnFocusRef}
           onClose={() => setEditingTenant(null)}
           onSaved={handleSaved}
         />
