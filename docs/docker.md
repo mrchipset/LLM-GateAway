@@ -118,6 +118,34 @@ Invoke-RestMethod http://127.0.0.1:8080/readyz
 - 修改 `.env.docker` 后，执行的仍是同一份 Compose 文件；重建容器才会让环境变量生效：
   `docker compose --env-file .env.docker --profile app up -d --force-recreate`
 - 如果密码已经初始化过数据卷，再改 `POSTGRES_PASSWORD` 不会自动修改数据库里的密码。需要进入 `psql` 执行 `ALTER USER`，或删除数据卷重建（会丢数据）。
+
+### 已有数据卷的密码不一致
+
+`POSTGRES_PASSWORD` 只在数据目录**首次初始化**时生效。如果 `pgdata` 卷已经存在且密码不同，`migrate` 会报：
+
+```text
+password authentication failed for user "gateway"
+```
+
+无损修复（推荐密码只含字母、数字、`-`、`_`）：
+
+```powershell
+$line = Get-Content .env.docker | Where-Object { $_ -match '^POSTGRES_PASSWORD=' } | Select-Object -First 1
+$pw = $line.Substring('POSTGRES_PASSWORD='.Length)
+$sql = "ALTER USER gateway PASSWORD '$pw';"
+
+docker compose --env-file .env.docker --profile app exec -T postgres psql -U gateway -d gateway -c $sql
+docker compose --env-file .env.docker --profile app up -d
+```
+
+`migrate` 随后应显示 `Exited (0)`，`backend` 才会启动。如果不再需要旧数据，也可以：
+
+```powershell
+docker compose --env-file .env.docker --profile app down -v
+docker compose --env-file .env.docker --profile app up -d --build
+```
+
+`-v` 会删除数据库数据卷，请先确认不需要里面的数据。密码包含单引号等特殊字符时，请改用 `psql` 交互式执行，或直接重建数据卷。
 - 只想本地起 PostgreSQL（后端用 `uv`、前端用 Vite）：`docker compose up -d postgres`。不加 `--profile app` 不会启动后端和管理台。
 
 ## 迁移与升级
@@ -178,7 +206,7 @@ Get-Content backup.sql -Raw | docker compose --env-file .env.docker --profile ap
 | 现象 | 原因 | 处理 |
 |---|---|---|
 | `backend` 反复重启，日志提示 master key 无效 | `GATEWAY_MASTER_KEY` 为空、过短或仍是占位值 | 填 32+ 随机值后重新 `up -d` |
-| `migrate` 失败，`backend` 不启动 | 数据库密码错误、DSN 不可达或迁移冲突 | 看 `logs migrate`；确认 `POSTGRES_PASSWORD` 与数据卷一致 |
+| `migrate` 失败，`backend` 不启动 | 数据库密码错误、DSN 不可达或迁移冲突 | 看 `logs migrate`；若报 `password authentication failed`，按上文“已有数据卷的密码不一致”修复 |
 | 管理台能打开，但 API 502 | `backend` 未 healthy | `ps` + `logs backend`；确认 `migrate` 已成功 |
 | 5432 / 8080 被占用 | 本机已有服务 | 改 `POSTGRES_PORT` / `GATEWAY_UI_PORT` |
 | 生产环境注册 fake 模型返回 400 | production 禁止 fake provider | 用 development + fake 做本地冒烟；生产配置真实 provider |
