@@ -39,6 +39,7 @@ class ApiErrorCode(StrEnum):
     UPSTREAM_UNAVAILABLE = "upstream_unavailable"
     UPSTREAM_REJECTED = "upstream_rejected"
     UPSTREAM_INVALID_RESPONSE = "upstream_invalid_response"
+    INVALID_SESSION_ID = "invalid_session_id"
     INTERNAL_ERROR = "internal_error"
 
 
