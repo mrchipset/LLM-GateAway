@@ -202,6 +202,41 @@ def test_max_retries_out_of_range_fails() -> None:
         )
 
 
+def test_audit_settings_defaults() -> None:
+    settings = Settings(
+        **{
+            "_env_file": None,
+            "environment": Environment.TEST,
+            "master_key": MASTER_KEY,
+        }
+    )
+
+    assert settings.audit_enabled is False
+    assert settings.audit_max_content_bytes == 262144
+    assert settings.audit_write_timeout_seconds == 2.0
+
+
+def test_audit_limits_reject_invalid_values() -> None:
+    with pytest.raises(ValidationError):
+        Settings(
+            **{
+                "_env_file": None,
+                "environment": Environment.TEST,
+                "master_key": MASTER_KEY,
+                "audit_max_content_bytes": 1023,
+            }
+        )
+    with pytest.raises(ValidationError):
+        Settings(
+            **{
+                "_env_file": None,
+                "environment": Environment.TEST,
+                "master_key": MASTER_KEY,
+                "audit_write_timeout_seconds": 0,
+            }
+        )
+
+
 def test_master_key_is_not_exposed_in_repr() -> None:
     settings = Settings(
         **{

@@ -33,6 +33,7 @@ def _detail(tenant: Tenant) -> TenantDetail:
         created_at=tenant.created_at,
         monthly_token_quota=tenant.monthly_token_quota,
         requests_per_minute=tenant.requests_per_minute,
+        audit_enabled=tenant.audit_enabled,
     )
 
 
@@ -57,6 +58,7 @@ async def create_tenant(
         created_at=container.clock.now(),
         monthly_token_quota=payload.monthly_token_quota,
         requests_per_minute=payload.requests_per_minute,
+        audit_enabled=payload.audit_enabled,
     )
     try:
         created = await container.tenants.create_tenant(tenant)
@@ -81,8 +83,10 @@ async def update_tenant_limits(
     patch = TenantLimitPatch(
         monthly_token_quota=payload.monthly_token_quota,
         requests_per_minute=payload.requests_per_minute,
+        audit_enabled=payload.audit_enabled,
         set_monthly_token_quota="monthly_token_quota" in provided,
         set_requests_per_minute="requests_per_minute" in provided,
+        set_audit_enabled=payload.audit_enabled is not None,
     )
     updated = await container.tenants.set_tenant_limits(tenant_id, patch=patch)
     if updated is None:

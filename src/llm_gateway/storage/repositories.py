@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
-from typing import Protocol
+from typing import Any, Literal, Protocol
 from uuid import UUID
 
 from llm_gateway.providers.base import ProviderName
@@ -47,6 +47,18 @@ def _require_optional_positive_int(value: object, field: str) -> None:
         raise ValueError(f"{field} must be a positive integer or None")
 
 
+def _require_optional_non_negative_int(value: object, field: str) -> None:
+    if value is None:
+        return
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ValueError(f"{field} must be a non-negative integer or None")
+
+
+def _require_optional_aware(value: datetime | None, field: str) -> None:
+    if value is not None:
+        _require_aware(value, field)
+
+
 @dataclass(frozen=True, slots=True)
 class Tenant:
     """An organizational label that owns API keys."""
@@ -56,6 +68,7 @@ class Tenant:
     created_at: datetime
     monthly_token_quota: int | None = None
     requests_per_minute: int | None = None
+    audit_enabled: bool = False
 
     def __post_init__(self) -> None:
         _require_uuid(self.id, "id")
@@ -261,8 +274,10 @@ class TenantLimitPatch:
 
     monthly_token_quota: int | None = None
     requests_per_minute: int | None = None
+    audit_enabled: bool | None = None
     set_monthly_token_quota: bool = False
     set_requests_per_minute: bool = False
+    set_audit_enabled: bool = False
 
 
 class TenantRepository(Protocol):
@@ -342,3 +357,276 @@ class ApiKeyRepository(Protocol):
     async def revoke_key(self, key_id: UUID, revoked_at: datetime) -> bool: ...
 
     async def touch_last_used(self, key_id: UUID, used_at: datetime) -> None: ...
+
+
+AuditMatchMethod = Literal["explicit", "prefix", "new"]
+
+
+def _require_non_blank_limited(value: str, field: str, *, max_length: int) -> None:
+    _require_non_blank(value, field)
+    if len(value) > max_length:
+        raise ValueError(f"{field} must be at most {max_length} characters")
+
+
+@dataclass(frozen=True, slots=True)
+class AuditSessionRecord:
+    """A logical conversation grouping one or more audited requests."""
+
+    id: UUID
+    tenant_id: UUID
+    external_session_id: str | None
+    api_key_id: UUID
+    api_key_prefix: str
+    root_request_id: str
+    model_id: str
+    provider: str
+    title_preview: str
+    created_at: datetime
+    last_seen_at: datetime
+    request_count: int
+    total_tokens: int
+
+    def __post_init__(self) -> None:
+        _require_uuid(self.id, "id")
+        _require_uuid(self.tenant_id, "tenant_id")
+        _require_uuid(self.api_key_id, "api_key_id")
+        if self.external_session_id is not None:
+            _require_non_blank_limited(
+                self.external_session_id, "external_session_id", max_length=64
+            )
+        _require_non_blank_limited(self.api_key_prefix, "api_key_prefix", max_length=16)
+        _require_non_blank_limited(self.root_request_id, "root_request_id", max_length=64)
+        _require_non_blank(self.model_id, "model_id")
+        _require_non_blank(self.provider, "provider")
+        _require_aware(self.created_at, "created_at")
+        _require_aware(self.last_seen_at, "last_seen_at")
+        _require_non_negative_int(self.request_count, "request_count")
+        _require_non_negative_int(self.total_tokens, "total_tokens")
+
+
+@dataclass(frozen=True, slots=True)
+class AuditRequestRecord:
+    """One audited inference turn, independent from the usage ledger."""
+
+    request_id: str
+    session_id: UUID
+    parent_request_id: str | None
+    tenant_id: UUID
+    api_key_id: UUID
+    turn_index: int
+    match_method: AuditMatchMethod
+    change_type: str
+    model_id: str
+    provider: str
+    is_stream: bool
+    request_messages: list[dict[str, Any]]
+    message_hashes: list[str]
+    request_params: dict[str, Any]
+    response_content: str | None
+    response_tool_calls: list[dict[str, Any]] | None
+    response_content_hash: str | None
+    finish_reason: str | None
+    status: str
+    prompt_tokens: int | None
+    completion_tokens: int | None
+    cached_tokens: int | None
+    total_tokens: int | None
+    truncated: bool
+    created_at: datetime
+
+    def __post_init__(self) -> None:
+        _require_non_blank_limited(self.request_id, "request_id", max_length=64)
+        _require_uuid(self.session_id, "session_id")
+        _require_uuid(self.tenant_id, "tenant_id")
+        _require_uuid(self.api_key_id, "api_key_id")
+        if self.parent_request_id is not None:
+            _require_non_blank_limited(self.parent_request_id, "parent_request_id", max_length=64)
+        _require_non_negative_int(self.turn_index, "turn_index")
+        if self.match_method not in ("explicit", "prefix", "new"):
+            raise ValueError("match_method must be one of 'explicit', 'prefix', 'new'")
+        _require_non_blank(self.change_type, "change_type")
+        _require_non_blank(self.model_id, "model_id")
+        _require_non_blank(self.provider, "provider")
+        _require_non_blank(self.status, "status")
+        for field in ("prompt_tokens", "completion_tokens", "cached_tokens", "total_tokens"):
+            _require_optional_non_negative_int(getattr(self, field), field)
+        _require_aware(self.created_at, "created_at")
+
+
+@dataclass(frozen=True, slots=True)
+class AuditRequestSummary:
+    """Timeline projection of a turn without message/response bodies."""
+
+    request_id: str
+    session_id: UUID
+    parent_request_id: str | None
+    tenant_id: UUID
+    api_key_id: UUID
+    turn_index: int
+    match_method: AuditMatchMethod
+    change_type: str
+    model_id: str
+    provider: str
+    is_stream: bool
+    finish_reason: str | None
+    status: str
+    prompt_tokens: int | None
+    completion_tokens: int | None
+    cached_tokens: int | None
+    total_tokens: int | None
+    truncated: bool
+    created_at: datetime
+    request_message_count: int
+
+    def __post_init__(self) -> None:
+        _require_non_blank_limited(self.request_id, "request_id", max_length=64)
+        _require_uuid(self.session_id, "session_id")
+        _require_uuid(self.tenant_id, "tenant_id")
+        _require_uuid(self.api_key_id, "api_key_id")
+        if self.parent_request_id is not None:
+            _require_non_blank_limited(self.parent_request_id, "parent_request_id", max_length=64)
+        _require_non_negative_int(self.turn_index, "turn_index")
+        if self.match_method not in ("explicit", "prefix", "new"):
+            raise ValueError("match_method must be one of 'explicit', 'prefix', 'new'")
+        _require_non_blank(self.change_type, "change_type")
+        _require_non_blank(self.model_id, "model_id")
+        _require_non_blank(self.provider, "provider")
+        _require_non_blank(self.status, "status")
+        for field in ("prompt_tokens", "completion_tokens", "cached_tokens", "total_tokens"):
+            _require_optional_non_negative_int(getattr(self, field), field)
+        _require_non_negative_int(self.request_message_count, "request_message_count")
+        _require_aware(self.created_at, "created_at")
+
+
+@dataclass(frozen=True, slots=True)
+class AuditTurnDiffRecord:
+    """Structural difference between a turn and its predecessor."""
+
+    request_id: str
+    previous_request_id: str | None
+    change_type: str
+    common_prefix: int
+    added_messages: list[dict[str, Any]]
+    modified_messages: list[dict[str, Any]]
+    removed_messages: list[dict[str, Any]]
+    parameter_changes: dict[str, Any]
+    usage_delta: dict[str, Any]
+    response_change: dict[str, Any]
+    created_at: datetime
+
+    def __post_init__(self) -> None:
+        _require_non_blank_limited(self.request_id, "request_id", max_length=64)
+        if self.previous_request_id is not None:
+            _require_non_blank_limited(
+                self.previous_request_id, "previous_request_id", max_length=64
+            )
+        _require_non_blank(self.change_type, "change_type")
+        _require_non_negative_int(self.common_prefix, "common_prefix")
+        _require_aware(self.created_at, "created_at")
+
+
+@dataclass(frozen=True, slots=True)
+class AuditSessionFilters:
+    """Query filters for listing audit sessions; the window is half-open."""
+
+    tenant_id: UUID | None = None
+    api_key_id: UUID | None = None
+    model_id: str | None = None
+    since: datetime | None = None
+    until: datetime | None = None
+    q: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.tenant_id is not None:
+            _require_uuid(self.tenant_id, "tenant_id")
+        if self.api_key_id is not None:
+            _require_uuid(self.api_key_id, "api_key_id")
+        _require_optional_aware(self.since, "since")
+        _require_optional_aware(self.until, "until")
+        if self.since is not None and self.until is not None and self.since >= self.until:
+            raise ValueError("since must be before until")
+
+
+@dataclass(frozen=True, slots=True)
+class AuditSessionPage:
+    items: list[AuditSessionRecord]
+    total: int
+
+    def __post_init__(self) -> None:
+        _require_non_negative_int(self.total, "total")
+
+
+@dataclass(frozen=True, slots=True)
+class AuditPrefixRecord:
+    """Hash-only view of an auditable request used for session prefix matching.
+
+    Deliberately excludes message/params/response payloads so the fallback query
+    never loads full snapshots for every recent request.
+    """
+
+    request_id: str
+    session_id: UUID
+    turn_index: int
+    message_hashes: list[str]
+    created_at: datetime
+
+    def __post_init__(self) -> None:
+        _require_non_blank_limited(self.request_id, "request_id", max_length=64)
+        _require_uuid(self.session_id, "session_id")
+        _require_non_negative_int(self.turn_index, "turn_index")
+        if not self.message_hashes:
+            raise ValueError("message_hashes must contain at least one hash")
+        for digest in self.message_hashes:
+            _require_non_blank(digest, "message_hashes")
+        _require_aware(self.created_at, "created_at")
+
+
+class AuditRepository(Protocol):
+    async def record_turn(
+        self,
+        *,
+        session: AuditSessionRecord,
+        request: AuditRequestRecord,
+        diff: AuditTurnDiffRecord | None,
+    ) -> None: ...
+
+    async def get_session_by_external_id(
+        self, *, tenant_id: UUID, external_session_id: str
+    ) -> AuditSessionRecord | None: ...
+
+    async def ensure_session(self, *, session: AuditSessionRecord) -> AuditSessionRecord:
+        """Return the stored session, inserting it when absent.
+
+        Looks up by id first, then by ``(tenant_id, external_session_id)`` when
+        the external id is set, so concurrent first requests converge on one row.
+        The insert path persists the caller's stats exactly as provided.
+        """
+        ...
+
+    async def get_latest_request(self, *, session_id: UUID) -> AuditRequestRecord | None: ...
+
+    async def recent_prefix_requests(
+        self, *, tenant_id: UUID, api_key_id: UUID, since: datetime, limit: int
+    ) -> list[AuditPrefixRecord]:
+        """Newest-first hash-only view of recent requests for prefix matching."""
+        ...
+
+    async def list_sessions(
+        self, *, filters: AuditSessionFilters, limit: int, offset: int
+    ) -> AuditSessionPage: ...
+
+    async def get_session(self, *, session_id: UUID) -> AuditSessionRecord | None: ...
+
+    async def list_session_requests(self, *, session_id: UUID) -> list[AuditRequestRecord]: ...
+
+    async def list_session_request_summaries(
+        self, *, session_id: UUID
+    ) -> list[AuditRequestSummary]:
+        """Timeline view ordered by ``turn_index, created_at, request_id``."""
+        ...
+
+    async def get_diffs(self, *, request_ids: Sequence[str]) -> dict[str, AuditTurnDiffRecord]: ...
+
+    async def get_request(self, *, request_id: str) -> AuditRequestRecord | None: ...
+
+    async def get_diff(self, *, request_id: str) -> AuditTurnDiffRecord | None: ...

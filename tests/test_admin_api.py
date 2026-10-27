@@ -577,7 +577,9 @@ async def test_create_tenant_returns_detail_and_rejects_duplicates(
         "created_at",
         "monthly_token_quota",
         "requests_per_minute",
+        "audit_enabled",
     }
+    assert body["audit_enabled"] is False
     assert body["name"] == "acme"
     assert UUID(body["id"])
     assert body["created_at"]
@@ -900,3 +902,53 @@ async def test_patch_tenant_limits_validates_target_and_values(
     for response in (zero, negative):
         assert response.status_code == 400
         assert _error(response)["code"] == "invalid_request_body"
+
+
+async def test_tenant_audit_flag_defaults_false_and_patch_toggles_it(
+    make_container: Callable[..., Container],
+    make_client: Callable[..., Any],
+    settings: Settings,
+) -> None:
+    container = make_container(settings, clock=SteppingClock())
+    master = _auth(_master(settings))
+
+    async with make_client(settings, container) as client:
+        default_created = await client.post(
+            "/api/v1/tenants",
+            json={"name": "audit-default"},
+            headers=master,
+        )
+        enabled_created = await client.post(
+            "/api/v1/tenants",
+            json={"name": "audit-enabled", "audit_enabled": True},
+            headers=master,
+        )
+        tenant_id = enabled_created.json()["id"]
+
+        disabled = await client.patch(
+            f"/api/v1/tenants/{tenant_id}",
+            json={"audit_enabled": False},
+            headers=master,
+        )
+        omitted_after_disable = await client.patch(
+            f"/api/v1/tenants/{tenant_id}",
+            json={"monthly_token_quota": 10},
+            headers=master,
+        )
+        reenabled = await client.patch(
+            f"/api/v1/tenants/{tenant_id}",
+            json={"audit_enabled": True},
+            headers=master,
+        )
+        omitted_after_enable = await client.patch(
+            f"/api/v1/tenants/{tenant_id}",
+            json={"requests_per_minute": 2},
+            headers=master,
+        )
+
+    assert default_created.json()["audit_enabled"] is False
+    assert enabled_created.json()["audit_enabled"] is True
+    assert disabled.json()["audit_enabled"] is False
+    assert omitted_after_disable.json()["audit_enabled"] is False
+    assert reenabled.json()["audit_enabled"] is True
+    assert omitted_after_enable.json()["audit_enabled"] is True

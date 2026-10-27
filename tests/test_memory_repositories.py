@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -9,11 +11,17 @@ import pytest
 from llm_gateway.providers.base import ProviderName
 from llm_gateway.storage.memory import (
     InMemoryApiKeyRepository,
+    InMemoryAuditRepository,
     InMemoryModelRepository,
     InMemoryTenantRepository,
 )
 from llm_gateway.storage.repositories import (
     ApiKeyRecord,
+    AuditPrefixRecord,
+    AuditRequestRecord,
+    AuditSessionFilters,
+    AuditSessionRecord,
+    AuditTurnDiffRecord,
     DuplicateApiKeyError,
     DuplicateModelError,
     DuplicateTenantError,
@@ -327,3 +335,544 @@ async def test_api_key_list_filters_by_tenant_before_pagination() -> None:
 
     assert filtered_total == 2
     assert [item.name for item in page] == ["key-0"]
+
+
+def _audit_session(
+    index: int,
+    *,
+    tenant_id: UUID = TENANT_ID,
+    api_key_id: UUID | None = None,
+    external_session_id: str | None = None,
+    model_id: str = "model-1",
+    title_preview: str | None = None,
+    created_at: datetime | None = None,
+    last_seen_at: datetime | None = None,
+    request_count: int = 1,
+    total_tokens: int = 0,
+) -> AuditSessionRecord:
+    created = created_at if created_at is not None else BASE + timedelta(seconds=index)
+    return AuditSessionRecord(
+        id=uuid4(),
+        tenant_id=tenant_id,
+        external_session_id=external_session_id,
+        api_key_id=api_key_id if api_key_id is not None else uuid4(),
+        api_key_prefix="sk-gw-audit",
+        root_request_id=f"root-{index}",
+        model_id=model_id,
+        provider="fake",
+        title_preview=title_preview if title_preview is not None else f"title-{index}",
+        created_at=created,
+        last_seen_at=last_seen_at if last_seen_at is not None else created,
+        request_count=request_count,
+        total_tokens=total_tokens,
+    )
+
+
+def _audit_request(
+    index: int,
+    *,
+    session_id: UUID,
+    tenant_id: UUID = TENANT_ID,
+    api_key_id: UUID | None = None,
+    created_at: datetime | None = None,
+    turn_index: int | None = None,
+    total_tokens: int = 15,
+    request_id: str | None = None,
+) -> AuditRequestRecord:
+    return AuditRequestRecord(
+        request_id=request_id if request_id is not None else f"req-{index}",
+        session_id=session_id,
+        parent_request_id=None,
+        tenant_id=tenant_id,
+        api_key_id=api_key_id if api_key_id is not None else uuid4(),
+        turn_index=turn_index if turn_index is not None else index,
+        match_method="new",
+        change_type="new_turn",
+        model_id="model-1",
+        provider="fake",
+        is_stream=False,
+        request_messages=[{"role": "user", "content": f"hi-{index}"}],
+        message_hashes=[_hash(f"msg-{index}")],
+        request_params={"temperature": 0.2},
+        response_content=f"answer-{index}",
+        response_tool_calls=None,
+        response_content_hash=_hash(f"answer-{index}"),
+        finish_reason="stop",
+        status="success",
+        prompt_tokens=10,
+        completion_tokens=5,
+        cached_tokens=0,
+        total_tokens=total_tokens,
+        truncated=False,
+        created_at=created_at if created_at is not None else BASE + timedelta(seconds=index),
+    )
+
+
+def _audit_diff(
+    index: int,
+    *,
+    request_id: str,
+    previous_request_id: str | None = None,
+) -> AuditTurnDiffRecord:
+    return AuditTurnDiffRecord(
+        request_id=request_id,
+        previous_request_id=previous_request_id,
+        change_type="new_turn",
+        common_prefix=0,
+        added_messages=[{"role": "user", "content": f"hi-{index}"}],
+        modified_messages=[],
+        removed_messages=[],
+        parameter_changes={"temperature": {"from": None, "to": 0.2}},
+        usage_delta={"total_tokens": 15},
+        response_change={"content_changed": True},
+        created_at=BASE + timedelta(seconds=index),
+    )
+
+
+async def test_audit_record_turn_inserts_then_increments_session_stats() -> None:
+    repository = InMemoryAuditRepository()
+    session = _audit_session(0, request_count=1, total_tokens=15)
+    first = _audit_request(0, session_id=session.id)
+    diff = _audit_diff(0, request_id=first.request_id)
+
+    await repository.record_turn(session=session, request=first, diff=diff)
+
+    stored = await repository.get_session(session_id=session.id)
+    assert stored == session
+    assert await repository.get_request(request_id=first.request_id) == first
+    assert await repository.get_diff(request_id=first.request_id) == diff
+
+    later = _audit_request(
+        1,
+        session_id=session.id,
+        created_at=BASE + timedelta(seconds=30),
+        total_tokens=7,
+    )
+    await repository.record_turn(session=session, request=later, diff=None)
+
+    updated = await repository.get_session(session_id=session.id)
+    assert updated is not None
+    assert updated.request_count == 2
+    assert updated.total_tokens == 22
+    assert updated.last_seen_at == BASE + timedelta(seconds=30)
+    assert updated.created_at == session.created_at
+    assert updated.root_request_id == session.root_request_id
+    assert updated.model_id == session.model_id
+    assert updated.provider == session.provider
+    assert updated.title_preview == session.title_preview
+
+
+async def test_audit_external_session_id_is_unique_per_tenant() -> None:
+    repository = InMemoryAuditRepository()
+    session = _audit_session(0, tenant_id=TENANT_ID, external_session_id="ext-1")
+    await repository.record_turn(
+        session=session,
+        request=_audit_request(0, session_id=session.id),
+        diff=None,
+    )
+
+    found = await repository.get_session_by_external_id(
+        tenant_id=TENANT_ID, external_session_id="ext-1"
+    )
+    assert found == session
+
+    other = _audit_session(1, tenant_id=OTHER_TENANT_ID, external_session_id="ext-1")
+    await repository.record_turn(
+        session=other,
+        request=_audit_request(1, session_id=other.id, tenant_id=OTHER_TENANT_ID),
+        diff=None,
+    )
+
+    duplicate = _audit_session(2, tenant_id=TENANT_ID, external_session_id="ext-1")
+    with pytest.raises(ValueError, match="external session"):
+        await repository.record_turn(
+            session=duplicate,
+            request=_audit_request(2, session_id=duplicate.id),
+            diff=None,
+        )
+
+    assert await repository.get_session(session_id=duplicate.id) is None
+
+
+async def test_audit_list_sessions_filters_q_and_pagination() -> None:
+    repository = InMemoryAuditRepository()
+    sessions = [
+        _audit_session(
+            0,
+            tenant_id=TENANT_ID,
+            model_id="model-a",
+            title_preview="Alpha prompt",
+            last_seen_at=BASE,
+        ),
+        _audit_session(
+            1,
+            tenant_id=TENANT_ID,
+            model_id="model-b",
+            title_preview="beta prompt",
+            last_seen_at=BASE + timedelta(minutes=1),
+        ),
+        _audit_session(
+            2,
+            tenant_id=OTHER_TENANT_ID,
+            model_id="model-a",
+            title_preview="gamma prompt",
+            last_seen_at=BASE + timedelta(minutes=2),
+        ),
+    ]
+    for index, session in enumerate(sessions):
+        await repository.record_turn(
+            session=session,
+            request=_audit_request(index, session_id=session.id, tenant_id=session.tenant_id),
+            diff=None,
+        )
+
+    page = await repository.list_sessions(
+        filters=AuditSessionFilters(tenant_id=TENANT_ID), limit=10, offset=0
+    )
+    assert page.total == 2
+    assert [item.id for item in page.items] == [sessions[1].id, sessions[0].id]
+
+    by_model = await repository.list_sessions(
+        filters=AuditSessionFilters(tenant_id=TENANT_ID, model_id="model-a"),
+        limit=10,
+        offset=0,
+    )
+    assert [item.id for item in by_model.items] == [sessions[0].id]
+
+    by_title = await repository.list_sessions(
+        filters=AuditSessionFilters(tenant_id=None, q="ALPHA"), limit=10, offset=0
+    )
+    assert [item.id for item in by_title.items] == [sessions[0].id]
+
+    by_root = await repository.list_sessions(
+        filters=AuditSessionFilters(tenant_id=None, q="root-2"), limit=10, offset=0
+    )
+    assert [item.id for item in by_root.items] == [sessions[2].id]
+
+    by_id = await repository.list_sessions(
+        filters=AuditSessionFilters(tenant_id=None, q=str(sessions[1].id)[:8]),
+        limit=10,
+        offset=0,
+    )
+    assert [item.id for item in by_id.items] == [sessions[1].id]
+
+    windowed = await repository.list_sessions(
+        filters=AuditSessionFilters(
+            tenant_id=None, since=BASE + timedelta(seconds=30), until=BASE + timedelta(minutes=2)
+        ),
+        limit=10,
+        offset=0,
+    )
+    assert [item.id for item in windowed.items] == [sessions[1].id]
+
+    second_page = await repository.list_sessions(
+        filters=AuditSessionFilters(tenant_id=None), limit=1, offset=1
+    )
+    assert second_page.total == 3
+    assert [item.id for item in second_page.items] == [sessions[1].id]
+
+
+async def test_audit_list_session_requests_and_latest_request() -> None:
+    repository = InMemoryAuditRepository()
+    session = _audit_session(0)
+    first = _audit_request(0, session_id=session.id, api_key_id=session.api_key_id, turn_index=0)
+    second = _audit_request(
+        1,
+        session_id=session.id,
+        api_key_id=session.api_key_id,
+        turn_index=1,
+        created_at=BASE + timedelta(seconds=5),
+    )
+    await repository.record_turn(session=session, request=first, diff=None)
+    await repository.record_turn(session=session, request=second, diff=None)
+
+    requests = await repository.list_session_requests(session_id=session.id)
+
+    assert [item.request_id for item in requests] == [first.request_id, second.request_id]
+    latest = await repository.get_latest_request(session_id=session.id)
+    assert latest == second
+    recent = await repository.recent_prefix_requests(
+        tenant_id=TENANT_ID,
+        api_key_id=session.api_key_id,
+        since=BASE,
+        limit=1,
+    )
+    assert recent == [
+        AuditPrefixRecord(
+            request_id=second.request_id,
+            session_id=session.id,
+            turn_index=second.turn_index,
+            message_hashes=second.message_hashes,
+            created_at=second.created_at,
+        )
+    ]
+
+
+async def test_audit_get_diffs_round_trips_and_unknown_returns_none() -> None:
+    repository = InMemoryAuditRepository()
+    session = _audit_session(0)
+    first = _audit_request(0, session_id=session.id, turn_index=0)
+    second = _audit_request(1, session_id=session.id, turn_index=1)
+    first_diff = _audit_diff(0, request_id=first.request_id)
+    second_diff = _audit_diff(1, request_id=second.request_id, previous_request_id=first.request_id)
+    await repository.record_turn(session=session, request=first, diff=first_diff)
+    await repository.record_turn(session=session, request=second, diff=second_diff)
+
+    diffs = await repository.get_diffs(request_ids=[first.request_id, second.request_id, "missing"])
+    assert diffs == {first.request_id: first_diff, second.request_id: second_diff}
+    assert await repository.get_diffs(request_ids=[]) == {}
+
+    assert await repository.get_session(session_id=uuid4()) is None
+    assert await repository.get_request(request_id="missing") is None
+    assert await repository.get_diff(request_id="missing") is None
+    assert await repository.get_latest_request(session_id=uuid4()) is None
+    assert (
+        await repository.get_session_by_external_id(
+            tenant_id=TENANT_ID, external_session_id="missing"
+        )
+        is None
+    )
+
+
+async def test_audit_recent_prefix_requests_filters_tenant_and_api_key() -> None:
+    repository = InMemoryAuditRepository()
+    key_a = uuid4()
+    key_b = uuid4()
+    session_a = _audit_session(0, api_key_id=key_a)
+    session_b = _audit_session(1, api_key_id=key_b)
+    session_other = _audit_session(2, tenant_id=OTHER_TENANT_ID, api_key_id=key_a)
+    first = _audit_request(
+        0, session_id=session_a.id, api_key_id=key_a, created_at=BASE, request_id="req-a-0"
+    )
+    second = _audit_request(
+        1,
+        session_id=session_a.id,
+        api_key_id=key_a,
+        created_at=BASE + timedelta(seconds=2),
+        request_id="req-a-1",
+    )
+    other_key = _audit_request(2, session_id=session_b.id, api_key_id=key_b)
+    other_tenant = _audit_request(
+        3, session_id=session_other.id, tenant_id=OTHER_TENANT_ID, api_key_id=key_a
+    )
+    for session, request in (
+        (session_a, first),
+        (session_a, second),
+        (session_b, other_key),
+        (session_other, other_tenant),
+    ):
+        await repository.record_turn(session=session, request=request, diff=None)
+
+    records = await repository.recent_prefix_requests(
+        tenant_id=TENANT_ID, api_key_id=key_a, since=BASE, limit=10
+    )
+
+    assert [record.request_id for record in records] == ["req-a-1", "req-a-0"]
+    assert records[0].session_id == session_a.id
+    assert records[0].message_hashes == second.message_hashes
+    assert all(isinstance(record, AuditPrefixRecord) for record in records)
+
+    limited = await repository.recent_prefix_requests(
+        tenant_id=TENANT_ID, api_key_id=key_a, since=BASE, limit=1
+    )
+    assert [record.request_id for record in limited] == ["req-a-1"]
+
+    with pytest.raises(ValueError, match="limit must be >= 1"):
+        await repository.recent_prefix_requests(
+            tenant_id=TENANT_ID, api_key_id=key_a, since=BASE, limit=0
+        )
+
+
+async def test_audit_ensure_session_is_idempotent_and_converges() -> None:
+    repository = InMemoryAuditRepository()
+    session = _audit_session(0, external_session_id="ext-1")
+
+    first = await repository.ensure_session(session=session)
+    second = await repository.ensure_session(session=session)
+
+    assert first == session
+    assert second == session
+    assert await repository.get_session(session_id=session.id) == session
+
+    conflicting = _audit_session(1, external_session_id="ext-1")
+    converged = await repository.ensure_session(session=conflicting)
+
+    assert converged.id == session.id
+    assert await repository.get_session(session_id=conflicting.id) is None
+
+    racers = [_audit_session(index + 10, external_session_id="race") for index in range(5)]
+    results = await asyncio.gather(*(repository.ensure_session(session=racer) for racer in racers))
+
+    assert len({record.id for record in results}) == 1
+    assert (
+        await repository.get_session_by_external_id(tenant_id=TENANT_ID, external_session_id="race")
+        == results[0]
+    )
+
+
+async def test_audit_q_matches_non_root_request_id_prefix() -> None:
+    repository = InMemoryAuditRepository()
+    session = _audit_session(0, title_preview="no match title")
+    root = _audit_request(0, session_id=session.id, turn_index=0, request_id="root-0")
+    branch = _audit_request(
+        1,
+        session_id=session.id,
+        turn_index=1,
+        created_at=BASE + timedelta(seconds=5),
+        request_id="branch-abc",
+    )
+    await repository.record_turn(session=session, request=root, diff=None)
+    await repository.record_turn(session=session, request=branch, diff=None)
+
+    page = await repository.list_sessions(
+        filters=AuditSessionFilters(tenant_id=TENANT_ID, q="branch"), limit=10, offset=0
+    )
+
+    assert [item.id for item in page.items] == [session.id]
+    assert page.total == 1
+
+
+async def test_audit_list_session_requests_tiebreaks_branch_order() -> None:
+    repository = InMemoryAuditRepository()
+    session = _audit_session(0)
+    root = _audit_request(0, session_id=session.id, turn_index=0, request_id="root-0")
+    shared_time = BASE + timedelta(seconds=5)
+    later_id = _audit_request(
+        1,
+        session_id=session.id,
+        turn_index=1,
+        created_at=shared_time,
+        request_id="req-b",
+    )
+    earlier_id = _audit_request(
+        2,
+        session_id=session.id,
+        turn_index=1,
+        created_at=shared_time,
+        request_id="req-a",
+    )
+    await repository.record_turn(session=session, request=root, diff=None)
+    await repository.record_turn(session=session, request=later_id, diff=None)
+    await repository.record_turn(session=session, request=earlier_id, diff=None)
+
+    ordered = await repository.list_session_requests(session_id=session.id)
+
+    assert [request.request_id for request in ordered] == [
+        "root-0",
+        "req-a",
+        "req-b",
+    ]
+
+
+async def test_audit_record_turn_reconciles_placeholder_metadata() -> None:
+    repository = InMemoryAuditRepository()
+    placeholder = _audit_session(
+        0,
+        model_id="failed-model",
+        title_preview="failed title",
+        created_at=BASE,
+        last_seen_at=BASE,
+        request_count=0,
+        total_tokens=0,
+    )
+    await repository.ensure_session(session=placeholder)
+
+    succeeded_at = BASE + timedelta(seconds=30)
+    incoming = replace(
+        placeholder,
+        root_request_id="root-succeeded",
+        model_id="model-succeeded",
+        provider="openai",
+        title_preview="succeeded title",
+        created_at=succeeded_at,
+        last_seen_at=succeeded_at,
+    )
+    request = _audit_request(
+        0,
+        session_id=placeholder.id,
+        created_at=succeeded_at,
+        total_tokens=9,
+    )
+
+    await repository.record_turn(session=incoming, request=request, diff=None)
+
+    stored = await repository.get_session(session_id=placeholder.id)
+    assert stored is not None
+    assert stored.request_count == 1
+    assert stored.total_tokens == 9
+    assert stored.root_request_id == "root-succeeded"
+    assert stored.model_id == "model-succeeded"
+    assert stored.provider == "openai"
+    assert stored.title_preview == "succeeded title"
+    assert stored.created_at == succeeded_at
+    assert stored.last_seen_at == succeeded_at
+
+
+async def test_audit_list_sessions_hides_placeholder_until_first_turn() -> None:
+    repository = InMemoryAuditRepository()
+    placeholder = _audit_session(0, request_count=0)
+    await repository.ensure_session(session=placeholder)
+
+    empty = await repository.list_sessions(filters=AuditSessionFilters(), limit=10, offset=0)
+
+    assert empty.items == []
+    assert empty.total == 0
+
+    request = _audit_request(0, session_id=placeholder.id)
+    await repository.record_turn(session=placeholder, request=request, diff=None)
+
+    listed = await repository.list_sessions(filters=AuditSessionFilters(), limit=10, offset=0)
+
+    assert [item.id for item in listed.items] == [placeholder.id]
+    assert listed.total == 1
+
+
+async def test_audit_list_session_request_summaries_orders_without_content() -> None:
+    repository = InMemoryAuditRepository()
+    session = _audit_session(0)
+    root = _audit_request(0, session_id=session.id, turn_index=0, request_id="root-0")
+    shared_time = BASE + timedelta(seconds=5)
+    later_id = _audit_request(
+        1,
+        session_id=session.id,
+        turn_index=1,
+        created_at=shared_time,
+        request_id="req-b",
+    )
+    earlier_id = _audit_request(
+        2,
+        session_id=session.id,
+        turn_index=1,
+        created_at=shared_time,
+        request_id="req-a",
+    )
+    empty_messages = replace(
+        _audit_request(
+            3,
+            session_id=session.id,
+            turn_index=2,
+            created_at=BASE + timedelta(seconds=10),
+            request_id="req-c",
+        ),
+        request_messages=[],
+        message_hashes=[],
+    )
+    for request in (root, later_id, earlier_id, empty_messages):
+        await repository.record_turn(session=session, request=request, diff=None)
+
+    summaries = await repository.list_session_request_summaries(session_id=session.id)
+
+    assert [summary.request_id for summary in summaries] == [
+        "root-0",
+        "req-a",
+        "req-b",
+        "req-c",
+    ]
+    assert [summary.request_message_count for summary in summaries] == [1, 1, 1, 0]
+    assert summaries[0].created_at == root.created_at
+    assert summaries[0].parent_request_id is None
+    assert summaries[0].status == root.status
+    assert not hasattr(summaries[0], "request_messages")
+    assert not hasattr(summaries[0], "request_params")
+    assert not hasattr(summaries[0], "response_content")
+    assert await repository.list_session_request_summaries(session_id=uuid4()) == []

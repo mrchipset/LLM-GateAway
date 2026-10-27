@@ -1,13 +1,25 @@
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from llm_gateway.auth.keys import generate_api_key
 from llm_gateway.container import Container
 from llm_gateway.providers.base import ProviderName
-from llm_gateway.storage.memory import InMemoryUsageRepository
-from llm_gateway.storage.repositories import ModelConfig, Tenant, UsageRecord
+from llm_gateway.storage.memory import InMemoryAuditRepository, InMemoryUsageRepository
+from llm_gateway.storage.repositories import (
+    AuditPrefixRecord,
+    AuditRequestRecord,
+    AuditSessionFilters,
+    AuditSessionPage,
+    AuditSessionRecord,
+    AuditTurnDiffRecord,
+    ModelConfig,
+    Tenant,
+    UsageRecord,
+)
 
 FROZEN_NOW = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
 TEST_TENANT_NAME = "test-tenant"
@@ -51,6 +63,7 @@ async def seed_tenant(
     created_at: datetime | None = None,
     monthly_token_quota: int | None = None,
     requests_per_minute: int | None = None,
+    audit_enabled: bool = False,
 ) -> Tenant:
     tenant = Tenant(
         id=tenant_id if tenant_id is not None else uuid4(),
@@ -58,6 +71,7 @@ async def seed_tenant(
         created_at=created_at if created_at is not None else container.clock.now(),
         monthly_token_quota=monthly_token_quota,
         requests_per_minute=requests_per_minute,
+        audit_enabled=audit_enabled,
     )
     return await container.tenants.create_tenant(tenant)
 
@@ -104,6 +118,93 @@ class CapturingUsageRepository(InMemoryUsageRepository):
 class FailingUsageRepository(InMemoryUsageRepository):
     async def record(self, record: UsageRecord) -> None:
         raise RuntimeError("usage storage unavailable")
+
+
+class CapturingAuditRepository(InMemoryAuditRepository):
+    """In-memory audit store that exposes the turns written during a test."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.record_turn_calls = 0
+        self.sessions: list[AuditSessionRecord] = []
+        self.requests: list[AuditRequestRecord] = []
+        self.diffs: list[AuditTurnDiffRecord | None] = []
+
+    async def record_turn(
+        self,
+        *,
+        session: AuditSessionRecord,
+        request: AuditRequestRecord,
+        diff: AuditTurnDiffRecord | None,
+    ) -> None:
+        self.record_turn_calls += 1
+        self.sessions.append(session)
+        self.requests.append(request)
+        self.diffs.append(diff)
+        await super().record_turn(session=session, request=request, diff=diff)
+
+
+class FailingAuditRepository(InMemoryAuditRepository):
+    """Audit store whose reads and writes always fail."""
+
+    async def record_turn(
+        self,
+        *,
+        session: AuditSessionRecord,
+        request: AuditRequestRecord,
+        diff: AuditTurnDiffRecord | None,
+    ) -> None:
+        raise RuntimeError("audit storage unavailable")
+
+    async def get_session_by_external_id(
+        self, *, tenant_id: UUID, external_session_id: str
+    ) -> AuditSessionRecord | None:
+        raise RuntimeError("audit storage unavailable")
+
+    async def ensure_session(self, *, session: AuditSessionRecord) -> AuditSessionRecord:
+        raise RuntimeError("audit storage unavailable")
+
+    async def get_latest_request(self, *, session_id: UUID) -> AuditRequestRecord | None:
+        raise RuntimeError("audit storage unavailable")
+
+    async def recent_prefix_requests(
+        self, *, tenant_id: UUID, api_key_id: UUID, since: datetime, limit: int
+    ) -> list[AuditPrefixRecord]:
+        raise RuntimeError("audit storage unavailable")
+
+    async def list_sessions(
+        self, *, filters: AuditSessionFilters, limit: int, offset: int
+    ) -> AuditSessionPage:
+        raise RuntimeError("audit storage unavailable")
+
+    async def get_session(self, *, session_id: UUID) -> AuditSessionRecord | None:
+        raise RuntimeError("audit storage unavailable")
+
+    async def list_session_requests(self, *, session_id: UUID) -> list[AuditRequestRecord]:
+        raise RuntimeError("audit storage unavailable")
+
+    async def get_diffs(self, *, request_ids: Sequence[str]) -> dict[str, AuditTurnDiffRecord]:
+        raise RuntimeError("audit storage unavailable")
+
+    async def get_request(self, *, request_id: str) -> AuditRequestRecord | None:
+        raise RuntimeError("audit storage unavailable")
+
+    async def get_diff(self, *, request_id: str) -> AuditTurnDiffRecord | None:
+        raise RuntimeError("audit storage unavailable")
+
+
+class SlowAuditRepository(CapturingAuditRepository):
+    """Audit store whose writes outlive a short configured timeout."""
+
+    async def record_turn(
+        self,
+        *,
+        session: AuditSessionRecord,
+        request: AuditRequestRecord,
+        diff: AuditTurnDiffRecord | None,
+    ) -> None:
+        await asyncio.sleep(1)
+        await super().record_turn(session=session, request=request, diff=diff)
 
 
 async def seed_usage(

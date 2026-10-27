@@ -79,6 +79,7 @@ class CreateTenantRequest(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     monthly_token_quota: int | None = Field(default=None, ge=1)
     requests_per_minute: int | None = Field(default=None, ge=1)
+    audit_enabled: bool = False
 
     @field_validator("name", mode="before")
     @classmethod
@@ -98,6 +99,7 @@ class UpdateTenantLimitsRequest(BaseModel):
 
     monthly_token_quota: int | None = Field(default=None, ge=1)
     requests_per_minute: int | None = Field(default=None, ge=1)
+    audit_enabled: bool | None = None
 
 
 class TenantDetail(BaseModel):
@@ -108,6 +110,7 @@ class TenantDetail(BaseModel):
     created_at: datetime
     monthly_token_quota: int | None = None
     requests_per_minute: int | None = None
+    audit_enabled: bool = False
 
 
 class TenantListResponse(BaseModel):

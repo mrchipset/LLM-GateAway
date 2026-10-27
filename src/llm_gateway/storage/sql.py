@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import datetime
-from typing import cast
+from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import delete, func, literal, select, update
+from sqlalchemy import String, delete, func, literal, or_, select, text, update
+from sqlalchemy import cast as sa_cast
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -14,6 +16,13 @@ from sqlalchemy.sql.elements import ColumnElement
 from llm_gateway.providers.base import ProviderName
 from llm_gateway.storage.repositories import (
     ApiKeyRecord,
+    AuditPrefixRecord,
+    AuditRequestRecord,
+    AuditRequestSummary,
+    AuditSessionFilters,
+    AuditSessionPage,
+    AuditSessionRecord,
+    AuditTurnDiffRecord,
     DuplicateApiKeyError,
     DuplicateModelError,
     DuplicateTenantError,
@@ -27,7 +36,15 @@ from llm_gateway.storage.repositories import (
     UsagePoint,
     UsageRecord,
 )
-from llm_gateway.storage.tables import ApiKeyRow, ModelRow, TenantRow, UsageRow
+from llm_gateway.storage.tables import (
+    ApiKeyRow,
+    AuditRequestRow,
+    AuditSessionRow,
+    AuditTurnDiffRow,
+    ModelRow,
+    TenantRow,
+    UsageRow,
+)
 
 _UNIQUE_VIOLATION_SQLSTATE = "23505"
 _FOREIGN_KEY_VIOLATION_SQLSTATE = "23503"
@@ -112,6 +129,7 @@ def _to_tenant(row: TenantRow) -> Tenant:
         created_at=row.created_at,
         monthly_token_quota=row.monthly_token_quota,
         requests_per_minute=row.requests_per_minute,
+        audit_enabled=row.audit_enabled,
     )
 
 
@@ -202,6 +220,7 @@ class SqlAlchemyTenantRepository:
             created_at=tenant.created_at,
             monthly_token_quota=tenant.monthly_token_quota,
             requests_per_minute=tenant.requests_per_minute,
+            audit_enabled=tenant.audit_enabled,
         )
         try:
             async with self._session_factory() as session, session.begin():
@@ -238,11 +257,13 @@ class SqlAlchemyTenantRepository:
         *,
         patch: TenantLimitPatch,
     ) -> Tenant | None:
-        values: dict[str, int | None] = {}
+        values: dict[str, int | bool | None] = {}
         if patch.set_monthly_token_quota:
             values["monthly_token_quota"] = patch.monthly_token_quota
         if patch.set_requests_per_minute:
             values["requests_per_minute"] = patch.requests_per_minute
+        if patch.set_audit_enabled and patch.audit_enabled is not None:
+            values["audit_enabled"] = patch.audit_enabled
         async with self._session_factory() as session, session.begin():
             if not values:
                 row = await session.get(TenantRow, tenant_id)
@@ -511,3 +532,474 @@ def _parse_provider(value: str) -> ProviderName:
         return ProviderName(value)
     except ValueError as exc:
         raise ValueError(f"stored usage record has unknown provider {value!r}") from exc
+
+
+def _escape_like(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _to_audit_session(row: AuditSessionRow) -> AuditSessionRecord:
+    return AuditSessionRecord(
+        id=row.id,
+        tenant_id=row.tenant_id,
+        external_session_id=row.external_session_id,
+        api_key_id=row.api_key_id,
+        api_key_prefix=row.api_key_prefix,
+        root_request_id=row.root_request_id,
+        model_id=row.model_id,
+        provider=row.provider,
+        title_preview=row.title_preview,
+        created_at=row.created_at,
+        last_seen_at=row.last_seen_at,
+        request_count=row.request_count,
+        total_tokens=row.total_tokens,
+    )
+
+
+def _to_audit_request(row: AuditRequestRow) -> AuditRequestRecord:
+    match_method = row.match_method
+    if match_method not in ("explicit", "prefix", "new"):
+        raise ValueError(f"stored audit request has unknown match_method {match_method!r}")
+    return AuditRequestRecord(
+        request_id=row.request_id,
+        session_id=row.session_id,
+        parent_request_id=row.parent_request_id,
+        tenant_id=row.tenant_id,
+        api_key_id=row.api_key_id,
+        turn_index=row.turn_index,
+        match_method=match_method,
+        change_type=row.change_type,
+        model_id=row.model_id,
+        provider=row.provider,
+        is_stream=row.is_stream,
+        request_messages=row.request_messages,
+        message_hashes=row.message_hashes,
+        request_params=row.request_params,
+        response_content=row.response_content,
+        response_tool_calls=row.response_tool_calls,
+        response_content_hash=row.response_content_hash,
+        finish_reason=row.finish_reason,
+        status=row.status,
+        prompt_tokens=row.prompt_tokens,
+        completion_tokens=row.completion_tokens,
+        cached_tokens=row.cached_tokens,
+        total_tokens=row.total_tokens,
+        truncated=row.truncated,
+        created_at=row.created_at,
+    )
+
+
+def _to_audit_summary(row: Any) -> AuditRequestSummary:
+    values = row._mapping
+    match_method = values[AuditRequestRow.match_method]
+    if match_method not in ("explicit", "prefix", "new"):
+        raise ValueError(f"stored audit request has unknown match_method {match_method!r}")
+    return AuditRequestSummary(
+        request_id=values[AuditRequestRow.request_id],
+        session_id=values[AuditRequestRow.session_id],
+        parent_request_id=values[AuditRequestRow.parent_request_id],
+        tenant_id=values[AuditRequestRow.tenant_id],
+        api_key_id=values[AuditRequestRow.api_key_id],
+        turn_index=values[AuditRequestRow.turn_index],
+        match_method=match_method,
+        change_type=values[AuditRequestRow.change_type],
+        model_id=values[AuditRequestRow.model_id],
+        provider=values[AuditRequestRow.provider],
+        is_stream=values[AuditRequestRow.is_stream],
+        finish_reason=values[AuditRequestRow.finish_reason],
+        status=values[AuditRequestRow.status],
+        prompt_tokens=values[AuditRequestRow.prompt_tokens],
+        completion_tokens=values[AuditRequestRow.completion_tokens],
+        cached_tokens=values[AuditRequestRow.cached_tokens],
+        total_tokens=values[AuditRequestRow.total_tokens],
+        truncated=values[AuditRequestRow.truncated],
+        created_at=values[AuditRequestRow.created_at],
+        request_message_count=values["request_message_count"],
+    )
+
+
+def _to_audit_diff(row: AuditTurnDiffRow) -> AuditTurnDiffRecord:
+    return AuditTurnDiffRecord(
+        request_id=row.request_id,
+        previous_request_id=row.previous_request_id,
+        change_type=row.change_type,
+        common_prefix=row.common_prefix,
+        added_messages=row.added_messages,
+        modified_messages=row.modified_messages,
+        removed_messages=row.removed_messages,
+        parameter_changes=row.parameter_changes,
+        usage_delta=row.usage_delta,
+        response_change=row.response_change,
+        created_at=row.created_at,
+    )
+
+
+def _audit_session_filters(
+    filters: AuditSessionFilters,
+) -> tuple[ColumnElement[bool], ...]:
+    conditions: list[ColumnElement[bool]] = []
+    if filters.tenant_id is not None:
+        conditions.append(AuditSessionRow.tenant_id == filters.tenant_id)
+    if filters.api_key_id is not None:
+        conditions.append(AuditSessionRow.api_key_id == filters.api_key_id)
+    if filters.model_id is not None:
+        conditions.append(AuditSessionRow.model_id == filters.model_id)
+    if filters.since is not None:
+        conditions.append(AuditSessionRow.last_seen_at >= filters.since)
+    if filters.until is not None:
+        conditions.append(AuditSessionRow.last_seen_at < filters.until)
+    if filters.q is not None:
+        escaped = _escape_like(filters.q)
+        request_id_matches = (
+            select(AuditRequestRow.request_id)
+            .where(
+                AuditRequestRow.session_id == AuditSessionRow.id,
+                AuditRequestRow.request_id.like(f"{escaped}%", escape="\\"),
+            )
+            .exists()
+        )
+        conditions.append(
+            or_(
+                sa_cast(AuditSessionRow.id, String).like(f"{escaped}%", escape="\\"),
+                AuditSessionRow.root_request_id.like(f"{escaped}%", escape="\\"),
+                request_id_matches,
+                AuditSessionRow.title_preview.ilike(f"%{escaped}%", escape="\\"),
+            )
+        )
+    return tuple(conditions)
+
+
+def _audit_session_values(session: AuditSessionRecord) -> dict[str, object]:
+    return {
+        "id": session.id,
+        "tenant_id": session.tenant_id,
+        "external_session_id": session.external_session_id,
+        "api_key_id": session.api_key_id,
+        "api_key_prefix": session.api_key_prefix,
+        "root_request_id": session.root_request_id,
+        "model_id": session.model_id,
+        "provider": session.provider,
+        "title_preview": session.title_preview,
+        "created_at": session.created_at,
+        "last_seen_at": session.last_seen_at,
+        "request_count": session.request_count,
+        "total_tokens": session.total_tokens,
+    }
+
+
+def _to_audit_prefix(row: Any) -> AuditPrefixRecord:
+    values = row._mapping
+    return AuditPrefixRecord(
+        request_id=values[AuditRequestRow.request_id],
+        session_id=values[AuditRequestRow.session_id],
+        turn_index=values[AuditRequestRow.turn_index],
+        message_hashes=values[AuditRequestRow.message_hashes],
+        created_at=values[AuditRequestRow.created_at],
+    )
+
+
+class SqlAlchemyAuditRepository:
+    def __init__(self, *, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        self._session_factory = session_factory
+
+    async def record_turn(
+        self,
+        *,
+        session: AuditSessionRecord,
+        request: AuditRequestRecord,
+        diff: AuditTurnDiffRecord | None,
+    ) -> None:
+        async with self._session_factory() as db, db.begin():
+            existing = await db.get(AuditSessionRow, session.id)
+            if existing is None:
+                db.add(
+                    AuditSessionRow(
+                        id=session.id,
+                        tenant_id=session.tenant_id,
+                        external_session_id=session.external_session_id,
+                        api_key_id=session.api_key_id,
+                        api_key_prefix=session.api_key_prefix,
+                        root_request_id=session.root_request_id,
+                        model_id=session.model_id,
+                        provider=session.provider,
+                        title_preview=session.title_preview,
+                        created_at=session.created_at,
+                        last_seen_at=session.last_seen_at,
+                        request_count=session.request_count,
+                        total_tokens=session.total_tokens,
+                    )
+                )
+            else:
+                values: dict[str, object] = {
+                    "request_count": AuditSessionRow.request_count + 1,
+                    "total_tokens": AuditSessionRow.total_tokens + (request.total_tokens or 0),
+                    "last_seen_at": func.greatest(AuditSessionRow.last_seen_at, request.created_at),
+                }
+                # A session pre-created by ensure_session points at the first
+                # attempted turn. Reconcile it with the turn that actually
+                # persists so a failed attempt cannot leak its metadata.
+                if existing.request_count == 0:
+                    values.update(
+                        {
+                            "root_request_id": session.root_request_id,
+                            "model_id": session.model_id,
+                            "provider": session.provider,
+                            "title_preview": session.title_preview,
+                            "created_at": session.created_at,
+                        }
+                    )
+                await db.execute(
+                    update(AuditSessionRow).where(AuditSessionRow.id == session.id).values(**values)
+                )
+            # The unit of work has no relationship between these tables, so
+            # flush the session row before the request that references it.
+            await db.flush()
+            db.add(
+                AuditRequestRow(
+                    request_id=request.request_id,
+                    session_id=request.session_id,
+                    parent_request_id=request.parent_request_id,
+                    tenant_id=request.tenant_id,
+                    api_key_id=request.api_key_id,
+                    turn_index=request.turn_index,
+                    match_method=request.match_method,
+                    change_type=request.change_type,
+                    model_id=request.model_id,
+                    provider=request.provider,
+                    is_stream=request.is_stream,
+                    request_messages=request.request_messages,
+                    message_hashes=request.message_hashes,
+                    request_params=request.request_params,
+                    response_content=request.response_content,
+                    response_tool_calls=request.response_tool_calls,
+                    response_content_hash=request.response_content_hash,
+                    finish_reason=request.finish_reason,
+                    status=request.status,
+                    prompt_tokens=request.prompt_tokens,
+                    completion_tokens=request.completion_tokens,
+                    cached_tokens=request.cached_tokens,
+                    total_tokens=request.total_tokens,
+                    truncated=request.truncated,
+                    created_at=request.created_at,
+                )
+            )
+            if diff is not None:
+                db.add(
+                    AuditTurnDiffRow(
+                        request_id=diff.request_id,
+                        previous_request_id=diff.previous_request_id,
+                        change_type=diff.change_type,
+                        common_prefix=diff.common_prefix,
+                        added_messages=diff.added_messages,
+                        modified_messages=diff.modified_messages,
+                        removed_messages=diff.removed_messages,
+                        parameter_changes=diff.parameter_changes,
+                        usage_delta=diff.usage_delta,
+                        response_change=diff.response_change,
+                        created_at=diff.created_at,
+                    )
+                )
+
+    async def get_session_by_external_id(
+        self, *, tenant_id: UUID, external_session_id: str
+    ) -> AuditSessionRecord | None:
+        async with self._session_factory() as db, db.begin():
+            row = await db.scalar(
+                select(AuditSessionRow).where(
+                    AuditSessionRow.tenant_id == tenant_id,
+                    AuditSessionRow.external_session_id == external_session_id,
+                )
+            )
+            return _to_audit_session(row) if row is not None else None
+
+    async def ensure_session(self, *, session: AuditSessionRecord) -> AuditSessionRecord:
+        async with self._session_factory() as db, db.begin():
+            existing = await db.get(AuditSessionRow, session.id)
+            if existing is not None:
+                return _to_audit_session(existing)
+
+            values = _audit_session_values(session)
+            if session.external_session_id is not None:
+                statement = (
+                    pg_insert(AuditSessionRow)
+                    .values(**values)
+                    .on_conflict_do_nothing(
+                        index_elements=[
+                            AuditSessionRow.tenant_id,
+                            AuditSessionRow.external_session_id,
+                        ],
+                        index_where=text("external_session_id IS NOT NULL"),
+                    )
+                )
+                await db.execute(statement)
+                row = await db.scalar(
+                    select(AuditSessionRow).where(
+                        AuditSessionRow.tenant_id == session.tenant_id,
+                        AuditSessionRow.external_session_id == session.external_session_id,
+                    )
+                )
+            else:
+                statement = (
+                    pg_insert(AuditSessionRow)
+                    .values(**values)
+                    .on_conflict_do_nothing(
+                        index_elements=[AuditSessionRow.id],
+                    )
+                )
+                await db.execute(statement)
+                row = await db.get(AuditSessionRow, session.id)
+
+            if row is None:
+                raise RuntimeError("audit session insert did not persist")
+            return _to_audit_session(row)
+
+    async def get_latest_request(self, *, session_id: UUID) -> AuditRequestRecord | None:
+        async with self._session_factory() as db, db.begin():
+            row = await db.scalar(
+                select(AuditRequestRow)
+                .where(AuditRequestRow.session_id == session_id)
+                .order_by(
+                    AuditRequestRow.turn_index.desc(),
+                    AuditRequestRow.created_at.desc(),
+                    AuditRequestRow.request_id.desc(),
+                )
+                .limit(1)
+            )
+            return _to_audit_request(row) if row is not None else None
+
+    async def recent_prefix_requests(
+        self, *, tenant_id: UUID, api_key_id: UUID, since: datetime, limit: int
+    ) -> list[AuditPrefixRecord]:
+        if limit < 1:
+            raise ValueError("limit must be >= 1")
+        async with self._session_factory() as db, db.begin():
+            rows = (
+                await db.execute(
+                    select(
+                        AuditRequestRow.request_id,
+                        AuditRequestRow.session_id,
+                        AuditRequestRow.turn_index,
+                        AuditRequestRow.message_hashes,
+                        AuditRequestRow.created_at,
+                    )
+                    .where(
+                        AuditRequestRow.tenant_id == tenant_id,
+                        AuditRequestRow.api_key_id == api_key_id,
+                        AuditRequestRow.created_at >= since,
+                    )
+                    .order_by(
+                        AuditRequestRow.created_at.desc(),
+                        AuditRequestRow.request_id.desc(),
+                    )
+                    .limit(limit)
+                )
+            ).all()
+            return [_to_audit_prefix(row) for row in rows]
+
+    async def list_sessions(
+        self, *, filters: AuditSessionFilters, limit: int, offset: int
+    ) -> AuditSessionPage:
+        _validate_page(limit=limit, offset=offset)
+        conditions = (*_audit_session_filters(filters), AuditSessionRow.request_count > 0)
+        async with self._session_factory() as db, db.begin():
+            rows = (
+                await db.scalars(
+                    select(AuditSessionRow)
+                    .where(*conditions)
+                    .order_by(
+                        AuditSessionRow.last_seen_at.desc(),
+                        AuditSessionRow.id.desc(),
+                    )
+                    .limit(limit)
+                    .offset(offset)
+                )
+            ).all()
+            total = await db.scalar(
+                select(func.count()).select_from(AuditSessionRow).where(*conditions)
+            )
+            return AuditSessionPage(
+                items=[_to_audit_session(row) for row in rows],
+                total=total or 0,
+            )
+
+    async def get_session(self, *, session_id: UUID) -> AuditSessionRecord | None:
+        async with self._session_factory() as db, db.begin():
+            row = await db.get(AuditSessionRow, session_id)
+            return _to_audit_session(row) if row is not None else None
+
+    async def list_session_requests(self, *, session_id: UUID) -> list[AuditRequestRecord]:
+        async with self._session_factory() as db, db.begin():
+            rows = (
+                await db.scalars(
+                    select(AuditRequestRow)
+                    .where(AuditRequestRow.session_id == session_id)
+                    .order_by(
+                        AuditRequestRow.turn_index.asc(),
+                        AuditRequestRow.created_at.asc(),
+                        AuditRequestRow.request_id.asc(),
+                    )
+                )
+            ).all()
+            return [_to_audit_request(row) for row in rows]
+
+    async def list_session_request_summaries(
+        self, *, session_id: UUID
+    ) -> list[AuditRequestSummary]:
+        message_count = func.jsonb_array_length(AuditRequestRow.request_messages).label(
+            "request_message_count"
+        )
+        async with self._session_factory() as db, db.begin():
+            rows = (
+                await db.execute(
+                    select(
+                        AuditRequestRow.request_id,
+                        AuditRequestRow.session_id,
+                        AuditRequestRow.parent_request_id,
+                        AuditRequestRow.tenant_id,
+                        AuditRequestRow.api_key_id,
+                        AuditRequestRow.turn_index,
+                        AuditRequestRow.match_method,
+                        AuditRequestRow.change_type,
+                        AuditRequestRow.model_id,
+                        AuditRequestRow.provider,
+                        AuditRequestRow.is_stream,
+                        AuditRequestRow.finish_reason,
+                        AuditRequestRow.status,
+                        AuditRequestRow.prompt_tokens,
+                        AuditRequestRow.completion_tokens,
+                        AuditRequestRow.cached_tokens,
+                        AuditRequestRow.total_tokens,
+                        AuditRequestRow.truncated,
+                        AuditRequestRow.created_at,
+                        message_count,
+                    )
+                    .where(AuditRequestRow.session_id == session_id)
+                    .order_by(
+                        AuditRequestRow.turn_index.asc(),
+                        AuditRequestRow.created_at.asc(),
+                        AuditRequestRow.request_id.asc(),
+                    )
+                )
+            ).all()
+            return [_to_audit_summary(row) for row in rows]
+
+    async def get_diffs(self, *, request_ids: Sequence[str]) -> dict[str, AuditTurnDiffRecord]:
+        if not request_ids:
+            return {}
+        async with self._session_factory() as db, db.begin():
+            rows = (
+                await db.scalars(
+                    select(AuditTurnDiffRow).where(AuditTurnDiffRow.request_id.in_(request_ids))
+                )
+            ).all()
+            return {row.request_id: _to_audit_diff(row) for row in rows}
+
+    async def get_request(self, *, request_id: str) -> AuditRequestRecord | None:
+        async with self._session_factory() as db, db.begin():
+            row = await db.get(AuditRequestRow, request_id)
+            return _to_audit_request(row) if row is not None else None
+
+    async def get_diff(self, *, request_id: str) -> AuditTurnDiffRecord | None:
+        async with self._session_factory() as db, db.begin():
+            row = await db.get(AuditTurnDiffRow, request_id)
+            return _to_audit_diff(row) if row is not None else None

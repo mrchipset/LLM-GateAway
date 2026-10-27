@@ -42,6 +42,9 @@ class Settings(BaseSettings):
     request_timeout_seconds: float = Field(default=60.0, gt=0)
     connect_timeout_seconds: float = Field(default=10.0, gt=0)
     max_retries: int = Field(default=2, ge=0, le=5)
+    audit_enabled: bool = False
+    audit_max_content_bytes: int = Field(default=262144, ge=1024)
+    audit_write_timeout_seconds: float = Field(default=2.0, gt=0)
 
     @field_validator("log_level")
     @classmethod

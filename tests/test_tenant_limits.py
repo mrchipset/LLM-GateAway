@@ -189,3 +189,30 @@ async def test_memory_set_tenant_limits_without_flags_is_a_noop() -> None:
 
     assert result == tenant
     assert await repository.get_tenant(tenant.id) == tenant
+
+
+async def test_memory_set_tenant_limits_toggles_audit_flag() -> None:
+    repository = InMemoryTenantRepository()
+    tenant = _tenant()
+    await repository.create_tenant(tenant)
+
+    enabled = await repository.set_tenant_limits(
+        tenant.id,
+        patch=TenantLimitPatch(audit_enabled=True, set_audit_enabled=True),
+    )
+    assert enabled is not None
+    assert enabled.audit_enabled is True
+
+    unchanged = await repository.set_tenant_limits(
+        tenant.id,
+        patch=TenantLimitPatch(monthly_token_quota=10, set_monthly_token_quota=True),
+    )
+    assert unchanged is not None
+    assert unchanged.audit_enabled is True
+
+    disabled = await repository.set_tenant_limits(
+        tenant.id,
+        patch=TenantLimitPatch(audit_enabled=False, set_audit_enabled=True),
+    )
+    assert disabled is not None
+    assert disabled.audit_enabled is False

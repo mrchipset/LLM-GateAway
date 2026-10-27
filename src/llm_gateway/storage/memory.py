@@ -8,6 +8,13 @@ from uuid import UUID
 
 from llm_gateway.storage.repositories import (
     ApiKeyRecord,
+    AuditPrefixRecord,
+    AuditRequestRecord,
+    AuditRequestSummary,
+    AuditSessionFilters,
+    AuditSessionPage,
+    AuditSessionRecord,
+    AuditTurnDiffRecord,
     DuplicateApiKeyError,
     DuplicateModelError,
     DuplicateTenantError,
@@ -113,6 +120,8 @@ class InMemoryTenantRepository:
                 changes["monthly_token_quota"] = patch.monthly_token_quota
             if patch.set_requests_per_minute:
                 changes["requests_per_minute"] = patch.requests_per_minute
+            if patch.set_audit_enabled and patch.audit_enabled is not None:
+                changes["audit_enabled"] = patch.audit_enabled
             if not changes:
                 return tenant
             updated = replace(tenant, **changes)  # pyright: ignore[reportArgumentType]
@@ -368,3 +377,215 @@ def _bucket_start(created_at: datetime, bucket: TimeBucket) -> datetime:
     if bucket is TimeBucket.HOUR:
         return utc.replace(minute=0, second=0, microsecond=0)
     return utc.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+class InMemoryAuditRepository:
+    """Process-local request audit store with the same caveats as the others."""
+
+    def __init__(self) -> None:
+        self._sessions: dict[UUID, AuditSessionRecord] = {}
+        self._external_ids: dict[tuple[UUID, str], UUID] = {}
+        self._requests: dict[str, AuditRequestRecord] = {}
+        self._diffs: dict[str, AuditTurnDiffRecord] = {}
+        self._lock = asyncio.Lock()
+
+    async def record_turn(
+        self,
+        *,
+        session: AuditSessionRecord,
+        request: AuditRequestRecord,
+        diff: AuditTurnDiffRecord | None,
+    ) -> None:
+        async with self._lock:
+            existing = self._sessions.get(session.id)
+            if existing is None:
+                if session.external_session_id is not None:
+                    key = (session.tenant_id, session.external_session_id)
+                    if key in self._external_ids:
+                        raise ValueError("external session id already exists for this tenant")
+                    self._external_ids[key] = session.id
+                self._sessions[session.id] = session
+            else:
+                changes: dict[str, object] = {
+                    "request_count": existing.request_count + 1,
+                    "total_tokens": existing.total_tokens + (request.total_tokens or 0),
+                    "last_seen_at": max(existing.last_seen_at, request.created_at),
+                }
+                if existing.request_count == 0:
+                    changes.update(
+                        {
+                            "root_request_id": session.root_request_id,
+                            "model_id": session.model_id,
+                            "provider": session.provider,
+                            "title_preview": session.title_preview,
+                            "created_at": session.created_at,
+                        }
+                    )
+                self._sessions[session.id] = replace(existing, **changes)  # pyright: ignore[reportArgumentType]
+            self._requests[request.request_id] = request
+            if diff is not None:
+                self._diffs[diff.request_id] = diff
+
+    async def get_session_by_external_id(
+        self, *, tenant_id: UUID, external_session_id: str
+    ) -> AuditSessionRecord | None:
+        session_id = self._external_ids.get((tenant_id, external_session_id))
+        if session_id is None:
+            return None
+        return self._sessions.get(session_id)
+
+    async def ensure_session(self, *, session: AuditSessionRecord) -> AuditSessionRecord:
+        async with self._lock:
+            existing = self._sessions.get(session.id)
+            if existing is not None:
+                return existing
+            if session.external_session_id is not None:
+                key = (session.tenant_id, session.external_session_id)
+                existing_id = self._external_ids.get(key)
+                if existing_id is not None:
+                    return self._sessions[existing_id]
+                self._external_ids[key] = session.id
+            self._sessions[session.id] = session
+            return session
+
+    async def get_latest_request(self, *, session_id: UUID) -> AuditRequestRecord | None:
+        candidates = [
+            request for request in self._requests.values() if request.session_id == session_id
+        ]
+        if not candidates:
+            return None
+        return max(
+            candidates,
+            key=lambda item: (item.turn_index, item.created_at, item.request_id),
+        )
+
+    async def recent_prefix_requests(
+        self, *, tenant_id: UUID, api_key_id: UUID, since: datetime, limit: int
+    ) -> list[AuditPrefixRecord]:
+        if limit < 1:
+            raise ValueError("limit must be >= 1")
+        candidates = [
+            AuditPrefixRecord(
+                request_id=request.request_id,
+                session_id=request.session_id,
+                turn_index=request.turn_index,
+                message_hashes=request.message_hashes,
+                created_at=request.created_at,
+            )
+            for request in self._requests.values()
+            if request.tenant_id == tenant_id
+            and request.api_key_id == api_key_id
+            and request.created_at >= since
+        ]
+        ordered = sorted(
+            candidates,
+            key=lambda item: (item.created_at, item.request_id),
+            reverse=True,
+        )
+        return ordered[:limit]
+
+    async def list_sessions(
+        self, *, filters: AuditSessionFilters, limit: int, offset: int
+    ) -> AuditSessionPage:
+        _validate_page(limit=limit, offset=offset)
+        matched = [
+            session
+            for session in self._sessions.values()
+            if session.request_count > 0
+            and _audit_session_matches(session, filters, self._requests)
+        ]
+        ordered = sorted(
+            matched,
+            key=lambda item: (item.last_seen_at, str(item.id)),
+            reverse=True,
+        )
+        return AuditSessionPage(
+            items=ordered[offset : offset + limit],
+            total=len(ordered),
+        )
+
+    async def get_session(self, *, session_id: UUID) -> AuditSessionRecord | None:
+        return self._sessions.get(session_id)
+
+    async def list_session_requests(self, *, session_id: UUID) -> list[AuditRequestRecord]:
+        candidates = [
+            request for request in self._requests.values() if request.session_id == session_id
+        ]
+        return sorted(
+            candidates,
+            key=lambda item: (item.turn_index, item.created_at, item.request_id),
+        )
+
+    async def list_session_request_summaries(
+        self, *, session_id: UUID
+    ) -> list[AuditRequestSummary]:
+        requests = await self.list_session_requests(session_id=session_id)
+        return [
+            AuditRequestSummary(
+                request_id=request.request_id,
+                session_id=request.session_id,
+                parent_request_id=request.parent_request_id,
+                tenant_id=request.tenant_id,
+                api_key_id=request.api_key_id,
+                turn_index=request.turn_index,
+                match_method=request.match_method,
+                change_type=request.change_type,
+                model_id=request.model_id,
+                provider=request.provider,
+                is_stream=request.is_stream,
+                finish_reason=request.finish_reason,
+                status=request.status,
+                prompt_tokens=request.prompt_tokens,
+                completion_tokens=request.completion_tokens,
+                cached_tokens=request.cached_tokens,
+                total_tokens=request.total_tokens,
+                truncated=request.truncated,
+                created_at=request.created_at,
+                request_message_count=len(request.request_messages),
+            )
+            for request in requests
+        ]
+
+    async def get_diffs(self, *, request_ids: Sequence[str]) -> dict[str, AuditTurnDiffRecord]:
+        return {
+            request_id: self._diffs[request_id]
+            for request_id in request_ids
+            if request_id in self._diffs
+        }
+
+    async def get_request(self, *, request_id: str) -> AuditRequestRecord | None:
+        return self._requests.get(request_id)
+
+    async def get_diff(self, *, request_id: str) -> AuditTurnDiffRecord | None:
+        return self._diffs.get(request_id)
+
+
+def _audit_session_matches(
+    session: AuditSessionRecord,
+    filters: AuditSessionFilters,
+    requests: dict[str, AuditRequestRecord],
+) -> bool:
+    if filters.tenant_id is not None and session.tenant_id != filters.tenant_id:
+        return False
+    if filters.api_key_id is not None and session.api_key_id != filters.api_key_id:
+        return False
+    if filters.model_id is not None and session.model_id != filters.model_id:
+        return False
+    if filters.since is not None and session.last_seen_at < filters.since:
+        return False
+    if filters.until is not None and session.last_seen_at >= filters.until:
+        return False
+    if filters.q is not None:
+        query = filters.q
+        request_id_matches = any(
+            request.session_id == session.id and request.request_id.startswith(query)
+            for request in requests.values()
+        )
+        if not (
+            str(session.id).startswith(query)
+            or session.root_request_id.startswith(query)
+            or request_id_matches
+            or query.lower() in session.title_preview.lower()
+        ):
+            return False
+    return True

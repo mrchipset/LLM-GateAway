@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from fastapi import Request
 
@@ -13,6 +13,7 @@ from llm_gateway.providers.registry import ProviderRegistry
 from llm_gateway.storage.db import Database
 from llm_gateway.storage.memory import (
     InMemoryApiKeyRepository,
+    InMemoryAuditRepository,
     InMemoryModelRepository,
     InMemoryTenantRepository,
     InMemoryUsageRepository,
@@ -20,6 +21,7 @@ from llm_gateway.storage.memory import (
 from llm_gateway.storage.rate_limits import InMemoryRateLimiter, RateLimiter
 from llm_gateway.storage.repositories import (
     ApiKeyRepository,
+    AuditRepository,
     ModelRepository,
     TenantRepository,
     UsageRepository,
@@ -52,6 +54,7 @@ class Container:
     providers: ProviderRegistry
     readiness_checks: tuple[ReadinessCheck, ...] = ()
     database: Database | None = None
+    audit: AuditRepository = field(default_factory=InMemoryAuditRepository)
 
     def __post_init__(self) -> None:
         seen: set[str] = set()
@@ -106,6 +109,7 @@ def build_container(settings: Settings) -> Container:
             models=database.models,
             tenants=database.tenants,
             usage=database.usage,
+            audit=database.audit,
             rate_limiter=database.rate_limiter,
             providers=providers,
             readiness_checks=(ReadinessCheck(name="database", check=database.ping),),
@@ -119,6 +123,7 @@ def build_container(settings: Settings) -> Container:
         models=InMemoryModelRepository(),
         tenants=InMemoryTenantRepository(),
         usage=InMemoryUsageRepository(),
+        audit=InMemoryAuditRepository(),
         rate_limiter=InMemoryRateLimiter(),
         providers=providers,
     )
