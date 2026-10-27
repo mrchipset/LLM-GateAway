@@ -17,6 +17,7 @@ const ACME: TenantSummary = {
   created_at: '2026-09-01T00:00:00Z',
   monthly_token_quota: 1_000_000,
   requests_per_minute: 60,
+  audit_enabled: false,
 };
 
 const SOLO: TenantSummary = {
@@ -25,6 +26,7 @@ const SOLO: TenantSummary = {
   created_at: '2026-09-02T00:00:00Z',
   monthly_token_quota: null,
   requests_per_minute: null,
+  audit_enabled: false,
 };
 
 const TENANTS = [ACME, SOLO];

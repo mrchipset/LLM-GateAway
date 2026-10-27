@@ -13,6 +13,25 @@ function shortId(tenant: TenantSummary): string {
   return `${tenant.id.slice(0, 8)}…`;
 }
 
+function AuditStatusBadge({ enabled }: { enabled: boolean }) {
+  return (
+    <span
+      title={enabled ? 'Audit collection is on' : 'Audit collection is off'}
+      className={`inline-flex items-center gap-1 whitespace-nowrap rounded border px-1.5 py-0.5 font-mono text-[10.5px] font-medium ${
+        enabled
+          ? 'border-ok/25 bg-ok-soft text-ok'
+          : 'border-line-strong bg-surface-sunken text-ink-muted'
+      }`}
+    >
+      <span
+        aria-hidden="true"
+        className={`size-1.5 rounded-full ${enabled ? 'bg-ok' : 'border border-ink-muted'}`}
+      />
+      {enabled ? 'On' : 'Off'}
+    </span>
+  );
+}
+
 function EditLimitButton({
   tenant,
   onEdit,
@@ -42,20 +61,21 @@ export function TenantsTable({ tenants, onEdit }: TenantsTableProps) {
         <table className="w-full table-fixed border-collapse text-left text-[13px]">
           <caption className="sr-only">Tenants</caption>
           <colgroup>
-            <col className="w-[26%]" />
-            <col className="w-[15%]" />
-            <col className="w-[24%]" />
             <col className="w-[23%]" />
+            <col className="w-[13%]" />
+            <col className="w-[19%]" />
+            <col className="w-[20%]" />
+            <col className="w-[13%]" />
             <col className="w-[12%]" />
           </colgroup>
           <thead>
             <tr className="border-b border-line">
-              {['Name', 'ID', 'Created (UTC)', 'Limits', 'Actions'].map((label, index) => (
+              {['Name', 'ID', 'Created (UTC)', 'Limits', 'Audit', 'Actions'].map((label, index) => (
                 <th
                   key={label}
                   scope="col"
                   className={`py-2 pr-3 font-mono text-[10px] font-medium uppercase tracking-[0.1em] text-ink-muted last:pr-0 ${
-                    index === 4 ? 'text-right' : 'text-left'
+                    index === 5 ? 'text-right' : 'text-left'
                   }`}
                 >
                   {label}
@@ -79,6 +99,9 @@ export function TenantsTable({ tenants, onEdit }: TenantsTableProps) {
                 </td>
                 <td className="py-2.5 pr-3 align-top">
                   <TenantLimitFacts tenant={tenant} variant="compact" />
+                </td>
+                <td className="py-2.5 pr-3 align-top">
+                  <AuditStatusBadge enabled={tenant.audit_enabled} />
                 </td>
                 <td className="py-2.5 text-right align-top">
                   <EditLimitButton tenant={tenant} onEdit={onEdit} />
@@ -110,6 +133,10 @@ export function TenantsTable({ tenants, onEdit }: TenantsTableProps) {
               <dt className="text-ink-muted">Limits</dt>
               <dd>
                 <TenantLimitFacts tenant={tenant} variant="compact" />
+              </dd>
+              <dt className="text-ink-muted">Audit</dt>
+              <dd>
+                <AuditStatusBadge enabled={tenant.audit_enabled} />
               </dd>
             </dl>
           </li>

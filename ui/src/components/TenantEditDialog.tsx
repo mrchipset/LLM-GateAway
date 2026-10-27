@@ -56,10 +56,13 @@ export function TenantEditDialog({
   const originalRate = limitToInput(tenant.requests_per_minute);
   const [quota, setQuota] = useState(originalQuota);
   const [rate, setRate] = useState(originalRate);
+  const [auditEnabled, setAuditEnabled] = useState(tenant.audit_enabled);
   const [fieldErrors, setFieldErrors] = useState<LimitFieldErrors>({});
   const titleId = useId();
   const quotaId = useId();
   const rateId = useId();
+  const auditLabelId = useId();
+  const auditHintId = useId();
   const hintId = useId();
   const quotaErrorId = useId();
   const rateErrorId = useId();
@@ -68,7 +71,9 @@ export function TenantEditDialog({
 
   const quotaDirty = quota.trim() !== originalQuota;
   const rateDirty = rate.trim() !== originalRate;
-  const hasChanges = quotaDirty || rateDirty;
+  const auditDirty = auditEnabled !== tenant.audit_enabled;
+  const limitsDirty = quotaDirty || rateDirty;
+  const hasChanges = limitsDirty || auditDirty;
 
   const clearing: string[] = [];
   if (quotaDirty && quota.trim() === '') clearing.push('monthly token quota');
@@ -88,13 +93,18 @@ export function TenantEditDialog({
     const patch: TenantLimitsPatch = {};
     if (quotaResult.status === 'set') patch.monthly_token_quota = quotaResult.value;
     if (rateResult.status === 'set') patch.requests_per_minute = rateResult.value;
+    if (auditDirty) patch.audit_enabled = auditEnabled;
     if (Object.keys(patch).length === 0) return;
 
     updateMutation.mutate(
       { tenantId: tenant.id, patch },
       {
         onSuccess: (updated) => {
-          onSaved(`Limits updated for ${updated.name}.`);
+          onSaved(
+            limitsDirty
+              ? `Limits updated for ${updated.name}.`
+              : `Audit collection updated for ${updated.name}.`,
+          );
         },
       },
     );
@@ -210,6 +220,48 @@ export function TenantEditDialog({
             Will clear: {clearing.join(' and ')}.
           </p>
         )}
+
+        <div className="mt-4 border-t border-line pt-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p id={auditLabelId} className="text-[12px] font-medium text-ink">
+                Audit collection
+              </p>
+              <p id={auditHintId} className="mt-0.5 text-[11.5px] leading-4 text-ink-muted">
+                Stores request/response content for this tenant. Off by default.
+              </p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={auditEnabled}
+              aria-labelledby={auditLabelId}
+              aria-describedby={auditHintId}
+              disabled={updateMutation.isPending}
+              onClick={() => {
+                setAuditEnabled((current) => !current);
+                if (updateMutation.isError) updateMutation.reset();
+              }}
+              className="inline-flex shrink-0 items-center gap-2 rounded focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <span
+                aria-hidden="true"
+                className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                  auditEnabled ? 'bg-accent' : 'bg-line-strong'
+                }`}
+              >
+                <span
+                  className={`absolute top-0.5 size-4 rounded-full bg-white shadow-sm transition-transform ${
+                    auditEnabled ? 'translate-x-[1.125rem]' : 'translate-x-0.5'
+                  }`}
+                />
+              </span>
+              <span className="w-6 font-mono text-[10.5px] uppercase tracking-[0.08em] text-ink-muted">
+                {auditEnabled ? 'On' : 'Off'}
+              </span>
+            </button>
+          </div>
+        </div>
 
         {updateMutation.isError && updateMutation.error !== null && (
           <div className="mt-3">

@@ -16,6 +16,7 @@ const ACME: TenantSummary = {
   created_at: '2026-09-01T00:00:00Z',
   monthly_token_quota: 1_000_000,
   requests_per_minute: 60,
+  audit_enabled: false,
 };
 
 const SOLO: TenantSummary = {
@@ -24,6 +25,7 @@ const SOLO: TenantSummary = {
   created_at: '2026-09-02T00:00:00Z',
   monthly_token_quota: null,
   requests_per_minute: null,
+  audit_enabled: false,
 };
 
 const TENANTS = [ACME, SOLO];
@@ -34,6 +36,7 @@ const MANY_TENANTS: TenantSummary[] = Array.from({ length: 105 }, (_, index) => 
   created_at: '2026-09-01T00:00:00Z',
   monthly_token_quota: null,
   requests_per_minute: null,
+  audit_enabled: false,
 }));
 
 function pageResponse(tenants: TenantSummary[], url: URL): Response {
@@ -93,6 +96,9 @@ function installEditableTenants(
       }
       if (body.requests_per_minute !== undefined) {
         updated.requests_per_minute = body.requests_per_minute;
+      }
+      if (body.audit_enabled !== undefined) {
+        updated.audit_enabled = body.audit_enabled;
       }
       tenants = tenants.map((tenant) => (tenant.id === id ? updated : tenant));
       return jsonResponse(updated);
@@ -290,6 +296,7 @@ describe('tenant management', () => {
           created_at: '2026-10-25T12:00:00Z',
           monthly_token_quota: null,
           requests_per_minute: null,
+          audit_enabled: false,
         };
         tenants = [created, ...tenants];
         return jsonResponse(created, 201);
@@ -419,6 +426,7 @@ describe('tenant management', () => {
             created_at: '2026-10-25T12:00:00Z',
             monthly_token_quota: null,
             requests_per_minute: null,
+            audit_enabled: false,
           },
           201,
         ),

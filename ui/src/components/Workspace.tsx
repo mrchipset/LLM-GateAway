@@ -5,8 +5,9 @@ import { useTenants } from '../hooks/useTenants';
 import { useUsageByKey, useUsageSeries, useUsageSummary } from '../hooks/useUsage';
 import { formatUpdatedAt } from '../lib/format';
 import { DEFAULT_USAGE_RANGE_DAYS, usageRangeSinceIso, type UsageRangeDays } from '../lib/usage';
-import { AccessIcon, ModelsIcon, UsageIcon } from './Icons';
+import { AccessIcon, AuditIcon, ModelsIcon, UsageIcon } from './Icons';
 import { AccessPanel } from './AccessPanel';
+import { AuditPanel } from './AuditPanel';
 import { ModelsPanel } from './ModelsPanel';
 import { UsagePanel } from './UsagePanel';
 
@@ -14,6 +15,7 @@ const TABS = [
   { id: 'models', label: 'Models', Icon: ModelsIcon },
   { id: 'usage', label: 'Usage', Icon: UsageIcon },
   { id: 'access', label: 'Access', Icon: AccessIcon },
+  { id: 'audit', label: 'Audit', Icon: AuditIcon },
 ] as const;
 
 type WorkspaceTab = (typeof TABS)[number]['id'];
@@ -186,6 +188,16 @@ export function Workspace({ masterKey, modelsQuery }: WorkspaceProps) {
         className="min-w-0"
       >
         <AccessPanel masterKey={masterKey} />
+      </div>
+
+      <div
+        role="tabpanel"
+        id="audit-panel"
+        aria-labelledby="audit-tab"
+        hidden={tab !== 'audit'}
+        className="min-w-0"
+      >
+        <AuditPanel masterKey={masterKey} />
       </div>
     </div>
   );

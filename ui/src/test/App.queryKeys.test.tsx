@@ -14,9 +14,14 @@ const EXPECTED_ADMIN_PREFIXES = [
   'usage-series',
   'usage-by-key',
   'admin-keys',
+  'audit-sessions',
+  'audit-session',
+  'audit-request',
 ];
 
-const LOADED_ADMIN_PREFIXES = EXPECTED_ADMIN_PREFIXES.filter((prefix) => prefix !== 'admin-keys');
+const LOADED_ADMIN_PREFIXES = EXPECTED_ADMIN_PREFIXES.filter(
+  (prefix) => prefix !== 'admin-keys' && prefix !== 'audit-session' && prefix !== 'audit-request',
+);
 
 describe('admin query keys', () => {
   it('clears every admin query prefix on disconnect and restores connect prompts', async () => {
@@ -59,5 +64,10 @@ describe('admin query keys', () => {
 
     await user.click(screen.getByRole('tab', { name: 'Access' }));
     expect(await screen.findByText('Connect a master key to manage tenants.')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('tab', { name: 'Audit' }));
+    expect(
+      await screen.findByText('Connect a master key to view the audit log.'),
+    ).toBeInTheDocument();
   });
 });

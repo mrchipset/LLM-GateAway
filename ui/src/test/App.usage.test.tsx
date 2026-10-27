@@ -21,6 +21,7 @@ const TENANTS = [
     created_at: '2026-09-01T00:00:00Z',
     monthly_token_quota: 1_000_000,
     requests_per_minute: 60,
+    audit_enabled: false,
   },
   {
     id: 'tenant-b',
@@ -28,6 +29,7 @@ const TENANTS = [
     created_at: '2026-09-02T00:00:00Z',
     monthly_token_quota: null,
     requests_per_minute: null,
+    audit_enabled: false,
   },
 ];
 
@@ -158,7 +160,7 @@ describe('usage panel', () => {
     }
   });
 
-  it('moves tab focus and selection with ArrowRight, Home, and End across three tabs', async () => {
+  it('moves tab focus and selection with ArrowRight, Home, and End across four tabs', async () => {
     installFetchMock();
     const user = userEvent.setup();
     renderApp();
@@ -166,19 +168,24 @@ describe('usage panel', () => {
     const modelsTab = screen.getByRole('tab', { name: 'Models' });
     const usageTab = screen.getByRole('tab', { name: 'Usage' });
     const accessTab = screen.getByRole('tab', { name: 'Access' });
+    const auditTab = screen.getByRole('tab', { name: 'Audit' });
     const modelsPanel = document.getElementById('models-panel');
     const usagePanel = document.getElementById('usage-panel');
     const accessPanel = document.getElementById('access-panel');
+    const auditPanel = document.getElementById('audit-panel');
 
     expect(modelsPanel).not.toBeNull();
     expect(usagePanel).not.toBeNull();
     expect(accessPanel).not.toBeNull();
+    expect(auditPanel).not.toBeNull();
     expect(modelsTab).toHaveAttribute('aria-selected', 'true');
     expect(usageTab).toHaveAttribute('aria-selected', 'false');
     expect(accessTab).toHaveAttribute('aria-selected', 'false');
+    expect(auditTab).toHaveAttribute('aria-selected', 'false');
     expect(modelsPanel).not.toHaveAttribute('hidden');
     expect(usagePanel).toHaveAttribute('hidden');
     expect(accessPanel).toHaveAttribute('hidden');
+    expect(auditPanel).toHaveAttribute('hidden');
 
     modelsTab.focus();
     await user.keyboard('{ArrowRight}');
@@ -196,16 +203,23 @@ describe('usage panel', () => {
     expect(accessPanel).not.toHaveAttribute('hidden');
     expect(usagePanel).toHaveAttribute('hidden');
 
+    await user.keyboard('{ArrowRight}');
+    expect(document.activeElement).toBe(auditTab);
+    expect(auditTab).toHaveAttribute('aria-selected', 'true');
+    expect(accessTab).toHaveAttribute('aria-selected', 'false');
+    expect(auditPanel).not.toHaveAttribute('hidden');
+    expect(accessPanel).toHaveAttribute('hidden');
+
     await user.keyboard('{Home}');
     expect(document.activeElement).toBe(modelsTab);
     expect(modelsTab).toHaveAttribute('aria-selected', 'true');
     expect(modelsPanel).not.toHaveAttribute('hidden');
-    expect(accessPanel).toHaveAttribute('hidden');
+    expect(auditPanel).toHaveAttribute('hidden');
 
     await user.keyboard('{End}');
-    expect(document.activeElement).toBe(accessTab);
-    expect(accessTab).toHaveAttribute('aria-selected', 'true');
-    expect(accessPanel).not.toHaveAttribute('hidden');
+    expect(document.activeElement).toBe(auditTab);
+    expect(auditTab).toHaveAttribute('aria-selected', 'true');
+    expect(auditPanel).not.toHaveAttribute('hidden');
     expect(modelsPanel).toHaveAttribute('hidden');
   });
 

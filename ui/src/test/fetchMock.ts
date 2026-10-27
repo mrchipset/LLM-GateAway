@@ -15,6 +15,9 @@ export interface Routes {
   '/api/v1/usage/summary'?: RouteHandler;
   '/api/v1/usage/series'?: RouteHandler;
   '/api/v1/usage/by-key'?: RouteHandler;
+  '/api/v1/audit/sessions'?: RouteHandler;
+  'GET /api/v1/audit/sessions/:id'?: RouteHandler;
+  'GET /api/v1/audit/requests/:id'?: RouteHandler;
 }
 
 export function toUrl(input: RequestInfo | URL): URL {
@@ -64,6 +67,41 @@ const defaultRoutes: Record<keyof Routes, RouteHandler> = {
     }),
   '/api/v1/usage/series': () => jsonResponse({ bucket: 'day', points: [] }),
   '/api/v1/usage/by-key': () => jsonResponse({ limit: 100, items: [] }),
+  '/api/v1/audit/sessions': (url) =>
+    jsonResponse({
+      items: [],
+      total: 0,
+      limit: Number(url.searchParams.get('limit') ?? '20'),
+      offset: Number(url.searchParams.get('offset') ?? '0'),
+    }),
+  'GET /api/v1/audit/sessions/:id': () =>
+    jsonResponse(
+      {
+        error: {
+          message: 'Audit session was not found',
+          type: 'invalid_request_error',
+          param: 'session_id',
+          code: 'audit_session_not_found',
+          request_id: 'req_audit_session_not_found',
+        },
+      },
+      404,
+      { 'x-request-id': 'req_audit_session_not_found' },
+    ),
+  'GET /api/v1/audit/requests/:id': () =>
+    jsonResponse(
+      {
+        error: {
+          message: 'Audit request was not found',
+          type: 'invalid_request_error',
+          param: 'request_id',
+          code: 'audit_request_not_found',
+          request_id: 'req_audit_request_not_found',
+        },
+      },
+      404,
+      { 'x-request-id': 'req_audit_request_not_found' },
+    ),
 };
 
 function resolveHandler(routes: Routes, url: URL, init: RequestInit): RouteHandler | undefined {
@@ -79,6 +117,16 @@ function resolveHandler(routes: Routes, url: URL, init: RequestInit): RouteHandl
     if (handler !== undefined) return handler;
   }
 
+  if (method === 'GET' && url.pathname.startsWith('/api/v1/audit/sessions/')) {
+    const handler = routes['GET /api/v1/audit/sessions/:id'];
+    if (handler !== undefined) return handler;
+  }
+
+  if (method === 'GET' && url.pathname.startsWith('/api/v1/audit/requests/')) {
+    const handler = routes['GET /api/v1/audit/requests/:id'];
+    if (handler !== undefined) return handler;
+  }
+
   const methodKey = `${method} ${url.pathname}` as keyof Routes;
   const methodHandler = routes[methodKey];
   if (methodHandler !== undefined) return methodHandler;
@@ -90,11 +138,32 @@ export function installFetchMock(overrides: Routes = {}): Mock<typeof fetch> {
   const routes = { ...defaultRoutes, ...overrides };
   const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
     const url = toUrl(input);
-    const handler = resolveHandler(routes, url, init ?? {});
+    const requestInit = init ?? {};
+    const handler = resolveHandler(routes, url, requestInit);
     if (handler === undefined) {
       throw new Error(`Unexpected request: ${url.pathname}`);
     }
-    return handler(url, init ?? {});
+
+    if (url.pathname.startsWith('/api/v1/')) {
+      const authorization = new Headers(requestInit.headers).get('Authorization');
+      if (authorization === null) {
+        return jsonResponse(
+          {
+            error: {
+              message: 'A master key is required',
+              type: 'authentication_error',
+              param: null,
+              code: 'invalid_api_key',
+              request_id: 'req_mock_unauthorized',
+            },
+          },
+          401,
+          { 'x-request-id': 'req_mock_unauthorized' },
+        );
+      }
+    }
+
+    return handler(url, requestInit);
   });
   vi.stubGlobal('fetch', fetchMock);
   return fetchMock;
