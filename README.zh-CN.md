@@ -2,7 +2,7 @@
 
 [English](README.md) | **简体中文**
 
-自托管、多 provider 的 OpenAI 兼容 LLM 网关。当前状态：可运行的后端、OpenAI / DeepSeek（OpenAI 兼容）/ Fake provider、租户化 API key、模型注册表、PostgreSQL 持久化、Token 用量统计、租户配额与限流，以及带用量面板的管理台。
+自托管、多 provider 的 OpenAI 兼容 LLM 网关。当前状态：可运行的后端、OpenAI / DeepSeek（OpenAI 兼容）/ Fake provider、租户化 API key、模型注册表、PostgreSQL 持久化、Token 用量统计、租户配额与限流、可选的请求/会话审计与确定性轮次 diff，以及带用量、Access 与 Audit 面板的管理台。
 
 ## 当前能力
 
@@ -12,10 +12,10 @@
 - API key 认证：只存 SHA-256 哈希，支持过期与吊销，并归属到一个租户
 - Token 用量记录与汇总：输入、输出、缓存命中，按租户、key、模型归属
 - 租户级月度 token 配额与每分钟请求限流（429 + `Retry-After`）
-- 管理 API：`/api/v1/keys`、`/api/v1/models`、`/api/v1/tenants`、`/api/v1/usage/{summary,by-key,series}`，由 master key 保护
+- 管理 API：`/api/v1/keys`、`/api/v1/models`、`/api/v1/tenants`、`/api/v1/usage/{summary,by-key,series}`、`/api/v1/audit/*`，由 master key 保护
 - PostgreSQL 持久化（SQLAlchemy 2 async + Alembic），默认也可用内存模式本地开发
 - 结构化 JSON 日志、request id、`/healthz` 与 `/readyz`
-- React + Vite + TypeScript 管理台：健康状态、模型列表、用量面板、租户管理与一次性 API key 发放
+- React + Vite + TypeScript 管理台：健康状态、模型列表、用量面板、租户管理与一次性 API key 发放、请求审计时间线/diff，以及按租户的审计开关
 
 不在本次范围：预算与计费、guardrail、MCP/Agent、租户级权限模型与 SSO/JWT/OAuth、Redis 限流/缓存、高级路由与 fallback、完整 Dashboard。
 
@@ -281,6 +281,18 @@ Invoke-RestMethod -Method Patch `
 - 限流只作用于 `POST /v1/chat/completions`；`/v1/models`、健康检查与管理 API 不受租户限流。
 - PostgreSQL 后端使用单行原子计数，支持多 worker；内存后端仅用于本地开发与测试。
 
+## 请求审计
+
+请求审计需要双重开启：设置 `GATEWAY_AUDIT_ENABLED=true`，并为租户开启 `audit_enabled`（管理台 Access → Tenants，或 `PATCH /api/v1/tenants/{id}`）。任一开关关闭时零采集。
+
+- 客户端可发送 `x-llm-gateway-session-id`（1..64 字符，`[A-Za-z0-9._:-]`）用于分组；没有 header 时，网关在最近 24 小时、最多 200 条同租户同 key 的请求中做前缀匹配。只共享 system prompt 的对话不会合并。
+- 请求内容按预算（默认 256 KiB）截断并记录确定性轮次 diff（`new_session`、`continuation`、`regeneration`、`edit`、`truncation`）。hash 与 diff 基于截断前原文，截断时显式记录 `truncated=true`。
+- 只读 API：`GET /api/v1/audit/sessions`、`GET /api/v1/audit/sessions/{id}?include_content=`、`GET /api/v1/audit/requests/{request_id}`，仅 master key。
+- Audit 标签展示会话时间线、有界预览、参数/用量/响应变化，并按需加载完整内容。审计内容不写入浏览器存储或 URL。
+- 审计写入为隔离的 best-effort；失败只记录不含内容的 `audit_record_failed`，不影响推理响应。
+
+保留期清理、导出/删除、metrics 与分区尚未实现。启用步骤、隐私边界与手工保留见 [`docs/audit.md`](docs/audit.md)，设计取舍见 [`docs/adr/0001-request-audit.md`](docs/adr/0001-request-audit.md)。
+
 ## 配置项
 
 | 变量 | 说明 |
@@ -299,6 +311,9 @@ Invoke-RestMethod -Method Patch `
 | `GATEWAY_REQUEST_TIMEOUT_SECONDS` | 上游请求总超时，默认 60 |
 | `GATEWAY_CONNECT_TIMEOUT_SECONDS` | 连接超时，默认 10 |
 | `GATEWAY_MAX_RETRIES` | 首个字节前的最大重试次数，默认 2（上限 5） |
+| `GATEWAY_AUDIT_ENABLED` | 请求审计全局开关，默认 `false` |
+| `GATEWAY_AUDIT_MAX_CONTENT_BYTES` | 单请求/响应的审计内容预算，默认 262144 |
+| `GATEWAY_AUDIT_WRITE_TIMEOUT_SECONDS` | 审计写入超时；失败不影响推理，默认 2 |
 
 `production` 会强制要求 `postgres` 后端、禁用 fake provider，并拒绝占位或过短的 master key，避免误用示例配置上线。
 
@@ -387,9 +402,9 @@ $env:VITE_PROXY_TARGET = "http://127.0.0.1:4000"
 npm run dev
 ```
 
-在页面中填入 master key 后即可查看后端健康状态、模型列表、用量面板与 Access 标签。用量面板支持：
+在页面中填入 master key 后即可查看后端健康状态、模型列表、用量面板、Access 与 Audit 标签。用量面板支持：
 
-- `Models / Usage / Access` 标签切换
+- `Models / Usage / Access / Audit` 标签切换
 - 租户筛选（含“全部租户”），选中租户时只读显示其配额与限流；租户列表最多 100 个，超出会显示提示
 - 7 / 30 / 90 天滚动范围，`since` 对齐到 UTC 零点；最后一根柱是“今日至今”的部分桶
 - 请求数、输入/输出/缓存/总 token 汇总（缓存按上游上报值展示，标记为输入的子集）
@@ -401,6 +416,14 @@ Access 标签用于管理租户与 API key：
 - 创建租户，编辑月度 token 配额与每分钟请求数；留空表示清除限制。
 - 按租户创建 key，可设置过期时间。明文只展示一次、可复制，且不会写入浏览器存储、URL 或查询缓存；未复制就关闭时会二次确认。
 - 吊销 key 需要确认；已吊销/已过期的 key 会显示状态，只有未吊销的 key 提供吊销操作。
+- 租户编辑对话框提供 `Audit collection` 开关（默认关闭），表格显示 On/Off；开启后才开始采集该租户的请求。
+
+Audit 标签用于只读查看审计：
+
+- 按租户、API key、模型、时间和标题/session/request id 检索会话，分页按最后活动倒序。
+- 会话详情展示轮次时间线、change_type、状态、消息增删改数量、参数变化、usage 差值与响应变化；diff 预览最多 160 字符。
+- `Show full content` 打开后才请求完整 messages/params/response；关闭时参数变化只显示 hash。内容模式响应超出预算时返回 413，可先隐藏全文、再逐条打开请求；未开启内容时若仍 413，本版本不提供分段渲染，可凭 request id 调用请求端点，或在网关侧调大 `GATEWAY_AUDIT_MAX_CONTENT_BYTES`（需重启）。
+- 审计内容不写入 localStorage、sessionStorage、cookie 或 URL；断开连接会清空审计查询缓存。
 
 master key 只保存在当前页面的内存中，不会写入 localStorage、sessionStorage、cookie 或 URL；断开连接会清除所有管理/用量查询缓存。
 
@@ -468,7 +491,7 @@ design.md            LLM-GateAway 设计建议
 - 模型配置只有创建、列出、删除，没有更新接口；修改需删除后重建。
 - `/v1/models` 最多返回 1000 条；管理 API 使用 offset 分页。
 - 每个已认证推理请求都会写一次 `last_used_at`，高并发下需要改为采样或批处理。
-- 管理台不提供模型注册或提示词审计 UI；用量面板只读、固定日粒度，按 key 与租户各最多展示 100 条，最后一根柱为今日至今。没有租户删除/重命名接口。
+- 管理台不提供模型注册；Audit 面板只读，没有导出/删除与保留期 UI，内容预算为全局环境变量。用量面板只读、固定日粒度，按 key 与租户各最多展示 100 条，最后一根柱为今日至今。没有租户删除/重命名接口。
 - 本地 `uv` 运行需手动迁移；Compose 由 `migrate` 服务自动执行，应用进程本身不会迁移。
 
 ## 相关文档
@@ -479,7 +502,7 @@ design.md            LLM-GateAway 设计建议
 - [`docs/verification.md`](docs/verification.md)：DeepSeek、租户 key 与网关调用的逐步验证
 - [`docs/tenant-key-model.md`](docs/tenant-key-model.md)：租户创建、API key 生成、模型注册与 DeepSeek 实测的聚焦记录
 - [`docs/docker.md`](docs/docker.md)：Docker Compose 部署、配置、升级与备份
-- [`TODO.md`](TODO.md)：后续的提示词审计与 P2 计划
+- [`TODO.md`](TODO.md)：P2 计划与 P1e 审计遗留项
 
 ## Agent skill
 

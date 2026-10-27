@@ -2,7 +2,7 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-A self-hosted, multi-provider, OpenAI-compatible LLM gateway. Current state: a runnable backend, OpenAI / DeepSeek (OpenAI-compatible) / Fake providers, tenant-scoped API keys, a model registry, PostgreSQL persistence, token usage accounting, tenant quotas and rate limiting, and an admin console with a usage panel.
+A self-hosted, multi-provider, OpenAI-compatible LLM gateway. Current state: a runnable backend, OpenAI / DeepSeek (OpenAI-compatible) / Fake providers, tenant-scoped API keys, a model registry, PostgreSQL persistence, token usage accounting, tenant quotas and rate limiting, opt-in request/session auditing with deterministic turn diffs, and an admin console with usage, access, and audit panels.
 
 ## Current capabilities
 
@@ -12,10 +12,10 @@ A self-hosted, multi-provider, OpenAI-compatible LLM gateway. Current state: a r
 - API key auth: only SHA-256 hashes are stored; keys support expiry, revocation, and tenant ownership
 - Token usage records and aggregates: input, output, and cache-hit tokens, attributed to tenant, key, and model
 - Tenant-level monthly token quotas and per-minute request limits (429 + `Retry-After`)
-- Management API: `/api/v1/keys`, `/api/v1/models`, `/api/v1/tenants`, `/api/v1/usage/{summary,by-key,series}`, protected by the master key
+- Management API: `/api/v1/keys`, `/api/v1/models`, `/api/v1/tenants`, `/api/v1/usage/{summary,by-key,series}`, `/api/v1/audit/*`, protected by the master key
 - PostgreSQL persistence (SQLAlchemy 2 async + Alembic), with an in-memory mode for local development
 - Structured JSON logs, request ids, `/healthz`, and `/readyz`
-- React + Vite + TypeScript admin console: health, models, usage, tenant management, and one-time API key issuance
+- React + Vite + TypeScript admin console: health, models, usage, tenant management, one-time API key issuance, request audit timeline/diffs, and a per-tenant audit opt-in
 
 Out of scope: budgets and billing, guardrails, MCP/agents, tenant-level authorization with SSO/JWT/OAuth, Redis rate limiting or caching, advanced routing and fallback, and a full dashboard.
 
@@ -281,6 +281,18 @@ Invoke-RestMethod -Method Patch `
 - Rate limiting applies only to `POST /v1/chat/completions`; `/v1/models`, health checks, and the management API are not tenant-limited.
 - The PostgreSQL backend uses a single-row atomic counter and supports multiple workers; the memory backend is for local development and tests only.
 
+## Request audit
+
+Request auditing is opt-in twice: set `GATEWAY_AUDIT_ENABLED=true` globally and enable `audit_enabled` for a tenant (Access → Tenants in the console, or `PATCH /api/v1/tenants/{id}`). Either switch being off means zero capture.
+
+- Clients may send `x-llm-gateway-session-id` (1..64 chars, `[A-Za-z0-9._:-]`) to group requests. Without it, the gateway falls back to a 24-hour, 200-request prefix match scoped to the same tenant and API key; conversations that share only a system prompt are not merged.
+- Requests are stored with bounded content (default 256 KiB) and deterministic turn diffs (`new_session`, `continuation`, `regeneration`, `edit`, `truncation`). Hashes and diffs use the original content, and `truncated=true` is explicit.
+- Read APIs: `GET /api/v1/audit/sessions`, `GET /api/v1/audit/sessions/{id}?include_content=`, `GET /api/v1/audit/requests/{request_id}`. Master key only.
+- The Audit tab shows the session timeline, bounded previews, parameter/usage/response changes, and loads full content on demand. Content is never written to browser storage or URLs.
+- Audit writes are best-effort and isolated; failures log `audit_record_failed` without content and never change the inference response.
+
+Retention cleanup, export/delete, metrics, and partitioning are not implemented yet. See [`docs/audit.md`](docs/audit.md) for enablement, privacy limits, and manual retention, and [`docs/adr/0001-request-audit.md`](docs/adr/0001-request-audit.md) for the design decision.
+
 ## Configuration
 
 | Variable | Description |
@@ -299,6 +311,9 @@ Invoke-RestMethod -Method Patch `
 | `GATEWAY_REQUEST_TIMEOUT_SECONDS` | Total upstream request timeout, default 60 |
 | `GATEWAY_CONNECT_TIMEOUT_SECONDS` | Connect timeout, default 10 |
 | `GATEWAY_MAX_RETRIES` | Max retries before the first byte, default 2 (cap 5) |
+| `GATEWAY_AUDIT_ENABLED` | Global request-audit kill switch, default `false` |
+| `GATEWAY_AUDIT_MAX_CONTENT_BYTES` | Per-request/response audit content budget, default 262144 |
+| `GATEWAY_AUDIT_WRITE_TIMEOUT_SECONDS` | Audit write timeout; failures never affect inference, default 2 |
 
 `production` requires the `postgres` backend, disables the fake provider, and rejects placeholder or short master keys, so sample configuration cannot be deployed by accident.
 
@@ -468,7 +483,7 @@ design.md            LLM-GateAway design guidance
 - Model configuration supports create, list, and delete only; changing it requires delete and recreate.
 - `/v1/models` returns at most 1000 entries; the management API uses offset pagination.
 - Every authenticated inference request writes `last_used_at`; high-throughput deployments should sample or batch it.
-- The console does not register models or provide a prompt-audit UI; the usage panel is read-only with daily granularity, caps keys and tenants at 100 each, and labels the final bar as today so far. Tenant delete/rename is not available.
+- The console does not register models. The audit panel is read-only: no export/delete or retention UI, and the content budget is a global environment variable. The usage panel is read-only with daily granularity, caps keys and tenants at 100 each, and labels the final bar as today so far. Tenant delete/rename is not available.
 - Local `uv` runs require a manual `alembic upgrade head`; Compose runs it through the one-shot `migrate` service, and the application process itself never migrates.
 
 ## Related documents
@@ -479,7 +494,7 @@ design.md            LLM-GateAway design guidance
 - [`docs/verification.md`](docs/verification.md): step-by-step verification for DeepSeek, tenant keys, and gateway calls
 - [`docs/tenant-key-model.md`](docs/tenant-key-model.md): focused runbook for creating a tenant, API key, and model registration, with a verified DeepSeek call
 - [`docs/docker.md`](docs/docker.md): Docker Compose deployment, configuration, upgrades, and backups
-- [`TODO.md`](TODO.md): upcoming prompt-audit work and P2 items
+- [`TODO.md`](TODO.md): P2 items and the remaining P1e audit operations
 
 ## Agent skill
 
