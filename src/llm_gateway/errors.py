@@ -40,6 +40,9 @@ class ApiErrorCode(StrEnum):
     UPSTREAM_REJECTED = "upstream_rejected"
     UPSTREAM_INVALID_RESPONSE = "upstream_invalid_response"
     INVALID_SESSION_ID = "invalid_session_id"
+    AUDIT_SESSION_NOT_FOUND = "audit_session_not_found"
+    AUDIT_REQUEST_NOT_FOUND = "audit_request_not_found"
+    AUDIT_CONTENT_TOO_LARGE = "audit_content_too_large"
     INTERNAL_ERROR = "internal_error"
 
 
