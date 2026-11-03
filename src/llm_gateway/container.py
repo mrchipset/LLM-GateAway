@@ -26,6 +26,7 @@ from llm_gateway.storage.repositories import (
     TenantRepository,
     UsageRepository,
 )
+from llm_gateway.telemetry import Telemetry, configure_telemetry
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +56,7 @@ class Container:
     readiness_checks: tuple[ReadinessCheck, ...] = ()
     database: Database | None = None
     audit: AuditRepository = field(default_factory=InMemoryAuditRepository)
+    telemetry: Telemetry | None = None
 
     def __post_init__(self) -> None:
         seen: set[str] = set()
@@ -87,6 +89,8 @@ class Container:
         finally:
             if self.database is not None:
                 await self.database.aclose()
+            if self.telemetry is not None:
+                self.telemetry.shutdown()
 
 
 def get_container(request: Request) -> Container:
@@ -96,9 +100,10 @@ def get_container(request: Request) -> Container:
     return container
 
 
-def build_container(settings: Settings) -> Container:
+def build_container(settings: Settings, *, telemetry: Telemetry | None = None) -> Container:
     clock = SystemClock()
-    providers = build_providers(settings, clock=clock)
+    resolved_telemetry = telemetry if telemetry is not None else configure_telemetry(settings)
+    providers = build_providers(settings, clock=clock, tracer=resolved_telemetry.tracer)
 
     if settings.storage_backend is StorageBackend.POSTGRES:
         database = Database.from_settings(settings)
@@ -114,6 +119,7 @@ def build_container(settings: Settings) -> Container:
             providers=providers,
             readiness_checks=(ReadinessCheck(name="database", check=database.ping),),
             database=database,
+            telemetry=resolved_telemetry,
         )
 
     return Container(
@@ -126,4 +132,5 @@ def build_container(settings: Settings) -> Container:
         audit=InMemoryAuditRepository(),
         rate_limiter=InMemoryRateLimiter(),
         providers=providers,
+        telemetry=resolved_telemetry,
     )

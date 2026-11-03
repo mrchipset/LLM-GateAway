@@ -383,6 +383,7 @@ class SqlAlchemyUsageRepository:
             completion_tokens=record.completion_tokens,
             total_tokens=record.total_tokens,
             cached_tokens=record.cached_tokens,
+            trace_id=record.trace_id,
             created_at=record.created_at,
         )
         try:
@@ -780,6 +781,7 @@ class SqlAlchemyAuditRepository:
                     cached_tokens=request.cached_tokens,
                     total_tokens=request.total_tokens,
                     truncated=request.truncated,
+                    trace_id=request.trace_id,
                     created_at=request.created_at,
                 )
             )

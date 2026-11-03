@@ -718,8 +718,15 @@ async def test_migration_creates_usage_records_table(migrated_schema: None) -> N
                     "WHERE table_name = 'usage_records' AND column_name = 'tenant_id'"
                 )
             )
+            trace_nullable = await connection.scalar(
+                text(
+                    "SELECT is_nullable FROM information_schema.columns "
+                    "WHERE table_name = 'usage_records' AND column_name = 'trace_id'"
+                )
+            )
         assert table_name == "usage_records"
         assert nullable == "NO"
+        assert trace_nullable == "YES"
     finally:
         await engine.dispose()
 
@@ -807,6 +814,29 @@ async def test_usage_record_round_trip_and_summary(database: Database) -> None:
     assert by_model[0].cached_tokens == 0
     assert by_model[0].total_tokens == 15
     assert by_model[0].requests == 1
+
+
+async def test_usage_record_persists_trace_id(database: Database) -> None:
+    tenant = await database.tenants.create_tenant(_tenant(1))
+    key = _key(1, tenant_id=tenant.id)
+    await database.api_keys.create_key(key)
+    record = replace(
+        _usage(1, tenant_id=tenant.id, api_key_id=key.id),
+        trace_id="4bf92f3577b34da6a3ce929d0e0e4736",
+    )
+
+    await database.usage.record(record)
+
+    engine = create_async_engine(_test_url())
+    try:
+        async with engine.connect() as connection:
+            stored = await connection.scalar(
+                text("SELECT trace_id FROM usage_records WHERE request_id = :request_id"),
+                {"request_id": record.request_id},
+            )
+    finally:
+        await engine.dispose()
+    assert stored == "4bf92f3577b34da6a3ce929d0e0e4736"
 
 
 async def test_usage_summary_filters_and_by_model_ordering(database: Database) -> None:

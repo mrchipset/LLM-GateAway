@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import httpx
 from pydantic import SecretStr
 
@@ -11,6 +13,9 @@ from llm_gateway.providers.openai import OpenAIProvider
 from llm_gateway.providers.registry import ProviderRegistry
 from llm_gateway.providers.retry import RetryPolicy
 
+if TYPE_CHECKING:
+    from opentelemetry.trace import Tracer
+
 
 def _openai_compatible_provider(
     *,
@@ -18,6 +23,7 @@ def _openai_compatible_provider(
     api_key: SecretStr,
     base_url: str,
     settings: Settings,
+    tracer: Tracer | None,
 ) -> OpenAIProvider:
     return OpenAIProvider(
         name=name,
@@ -28,10 +34,16 @@ def _openai_compatible_provider(
             connect=settings.connect_timeout_seconds,
         ),
         retry_policy=RetryPolicy(max_attempts=settings.max_retries + 1),
+        tracer=tracer,
     )
 
 
-def build_providers(settings: Settings, *, clock: Clock) -> ProviderRegistry:
+def build_providers(
+    settings: Settings,
+    *,
+    clock: Clock,
+    tracer: Tracer | None = None,
+) -> ProviderRegistry:
     providers: dict[ProviderName, ChatProvider] = {}
 
     if settings.openai_api_key is not None:
@@ -40,6 +52,7 @@ def build_providers(settings: Settings, *, clock: Clock) -> ProviderRegistry:
             api_key=settings.openai_api_key,
             base_url=settings.openai_base_url,
             settings=settings,
+            tracer=tracer,
         )
 
     if settings.deepseek_api_key is not None:
@@ -48,6 +61,7 @@ def build_providers(settings: Settings, *, clock: Clock) -> ProviderRegistry:
             api_key=settings.deepseek_api_key,
             base_url=settings.deepseek_base_url,
             settings=settings,
+            tracer=tracer,
         )
 
     if settings.fake_provider_enabled:

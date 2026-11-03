@@ -48,6 +48,7 @@ from llm_gateway.storage.repositories import (
     AuditTurnDiffRecord,
     TenantRepository,
 )
+from llm_gateway.telemetry import current_trace_id
 
 logger = get_logger(__name__)
 
@@ -379,6 +380,7 @@ class AuditService:
             cached_tokens=None if counts is None else counts.cached_tokens,
             total_tokens=None if counts is None else counts.total_tokens,
             truncated=snapshot.truncated,
+            trace_id=current_trace_id(),
             created_at=now,
         )
         total_tokens = 0 if counts is None else counts.total_tokens

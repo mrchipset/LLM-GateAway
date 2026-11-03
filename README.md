@@ -14,7 +14,7 @@ A self-hosted, multi-provider, OpenAI-compatible LLM gateway. Current state: a r
 - Tenant-level monthly token quotas and per-minute request limits (429 + `Retry-After`)
 - Management API: `/api/v1/keys`, `/api/v1/models`, `/api/v1/tenants`, `/api/v1/usage/{summary,by-key,series}`, `/api/v1/audit/*`, protected by the master key
 - PostgreSQL persistence (SQLAlchemy 2 async + Alembic), with an in-memory mode for local development
-- Structured JSON logs, request ids, `/healthz`, and `/readyz`
+- Structured JSON logs, request ids, optional W3C trace-context tracing (OTLP/HTTP), `/healthz`, and `/readyz`
 - React + Vite + TypeScript admin console: health, models, usage, tenant management, one-time API key issuance, request audit timeline/diffs, and a per-tenant audit opt-in
 
 Out of scope: budgets and billing, guardrails, MCP/agents, tenant-level authorization with SSO/JWT/OAuth, Redis rate limiting or caching, advanced routing and fallback, and a full dashboard.
@@ -293,10 +293,26 @@ Request auditing is opt-in twice: set `GATEWAY_AUDIT_ENABLED=true` globally and 
 
 Retention cleanup, export/delete, metrics, and partitioning are not implemented yet. See [`docs/audit.md`](docs/audit.md) for enablement, privacy limits, and manual retention, and [`docs/adr/0001-request-audit.md`](docs/adr/0001-request-audit.md) for the design decision.
 
+## Tracing
+
+Tracing is off by default. When enabled, the gateway parses and emits W3C `traceparent` headers, records one server span per request, and one client span per upstream attempt:
+
+- An inbound `traceparent` is honored only when well formed (version `00`, lowercase hex, non-zero ids); otherwise a new trace starts.
+- Retries are sibling spans under the same request, so one logical request never becomes several unrelated traces. Each attempt carries `llm.attempt`, `llm.upstream_model`, and, for streaming, `llm.ttft_ms`.
+- JSON logs carry `trace_id` and `span_id` alongside `request_id`; usage and audit rows store the same `trace_id` (`NULL` when no trace exists).
+- No prompts, completions, keys, or request bodies are attached to spans.
+
+```dotenv
+GATEWAY_TRACING_ENABLED=true
+GATEWAY_TRACING_ENDPOINT=http://127.0.0.1:4318/v1/traces
+GATEWAY_TRACING_SAMPLE_RATIO=0.1
+```
+
+With tracing disabled nothing is recorded and no `traceparent` is sent upstream. Database spans, metrics, and tail-based sampling are not implemented yet. Design rationale: [`notes/observability.md`](notes/observability.md).
+
 ## Configuration
 
-| Variable | Description |
-|---|---|
+| Variable | Description ||---|---|
 | `GATEWAY_ENVIRONMENT` | Required. `development` / `test` / `production` |
 | `GATEWAY_MASTER_KEY` | Required. Management API credential; at least 16 characters, 32 in production |
 | `GATEWAY_LOG_LEVEL` | Defaults to `INFO` |
@@ -314,6 +330,11 @@ Retention cleanup, export/delete, metrics, and partitioning are not implemented 
 | `GATEWAY_AUDIT_ENABLED` | Global request-audit kill switch, default `false` |
 | `GATEWAY_AUDIT_MAX_CONTENT_BYTES` | Per-request/response audit content budget, default 262144 |
 | `GATEWAY_AUDIT_WRITE_TIMEOUT_SECONDS` | Audit write timeout; failures never affect inference, default 2 |
+| `GATEWAY_TRACING_ENABLED` | W3C trace-context tracing, default `false`; when off, no spans and no `traceparent` upstream |
+| `GATEWAY_TRACING_ENDPOINT` | OTLP/HTTP traces endpoint; required when tracing is enabled, e.g. `http://127.0.0.1:4318/v1/traces` |
+| `GATEWAY_TRACING_SAMPLE_RATIO` | Head-based sampling ratio in `[0, 1]`, default `0.1`; an upstream decision is honored |
+| `GATEWAY_TRACING_SERVICE_NAME` | `service.name` resource attribute, default `llm-gateway` |
+| `GATEWAY_TRACING_EXPORT_TIMEOUT_SECONDS` | OTLP export timeout, default 5 |
 
 `production` requires the `postgres` backend, disables the fake provider, and rejects placeholder or short master keys, so sample configuration cannot be deployed by accident.
 
@@ -479,6 +500,7 @@ design.md            LLM-GateAway design guidance
 - Rate limiting uses a fixed 60-second window at tenant level only; the memory backend counts per process.
 - Creating a key requires `tenant_id` (a breaking change for old callers); there is no tenant delete or rename API.
 - `usage_records` has no retention or archival job and grows with traffic; there is no cost conversion.
+- Tracing covers the server span and per-attempt upstream spans only: no database spans, no metrics endpoint, and no tail-based sampling.
 - A stream that disconnects before usage arrives leaves no record; write timeouts or failures only log a warning.
 - Model configuration supports create, list, and delete only; changing it requires delete and recreate.
 - `/v1/models` returns at most 1000 entries; the management API uses offset pagination.

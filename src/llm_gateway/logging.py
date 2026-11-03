@@ -8,6 +8,7 @@ from enum import Enum
 from uuid import UUID
 
 from llm_gateway.request_context import get_request_id
+from llm_gateway.telemetry import current_trace_ids
 
 _SENSITIVE_KEYS = frozenset(
     {
@@ -106,6 +107,12 @@ class JsonFormatter(logging.Formatter):
             request_id = get_request_id()
         if request_id is not None:
             payload["request_id"] = request_id
+
+        trace_id, span_id = current_trace_ids()
+        if trace_id is not None:
+            payload.setdefault("trace_id", trace_id)
+        if span_id is not None:
+            payload.setdefault("span_id", span_id)
 
         if record.exc_info is not None:
             payload["exception"] = self.formatException(record.exc_info)

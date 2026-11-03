@@ -8,7 +8,11 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from time import perf_counter
 
+from opentelemetry import trace
+from opentelemetry.trace import Span, SpanKind, Status, StatusCode
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+from llm_gateway.telemetry import Telemetry, extract_trace_context
 
 REQUEST_ID_HEADER = "x-request-id"
 
@@ -55,8 +59,13 @@ def _bind_request_id(scope: Scope, request_id: str) -> None:
 
 
 class RequestContextMiddleware:
-    def __init__(self, app: ASGIApp) -> None:
+    def __init__(self, app: ASGIApp, *, telemetry: Telemetry | None = None) -> None:
         self.app = app
+        self._telemetry = (
+            telemetry
+            if telemetry is not None
+            else Telemetry(tracer=trace.get_tracer("llm_gateway.request"))
+        )
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -65,6 +74,7 @@ class RequestContextMiddleware:
 
         request_id = _resolve_incoming_request_id(scope)
         _bind_request_id(scope, request_id)
+        span = self._start_span(scope)
 
         status_code = 500
         client_disconnected = False
@@ -100,18 +110,45 @@ class RequestContextMiddleware:
                 raise
 
         start = perf_counter()
-        with request_id_scope(request_id):
-            try:
-                await self.app(scope, receive_with_disconnect, send_with_request_id)
-            finally:
-                _access_logger.info(
-                    "request_completed",
-                    extra={
-                        "request_id": request_id,
-                        "method": scope.get("method", ""),
-                        "path": scope.get("path", ""),
-                        "status_code": status_code,
-                        "duration_ms": round((perf_counter() - start) * 1000, 2),
-                        "client_disconnected": client_disconnected,
-                    },
-                )
+        try:
+            with trace.use_span(span, end_on_exit=False), request_id_scope(request_id):
+                try:
+                    await self.app(scope, receive_with_disconnect, send_with_request_id)
+                finally:
+                    _access_logger.info(
+                        "request_completed",
+                        extra={
+                            "request_id": request_id,
+                            "method": scope.get("method", ""),
+                            "path": scope.get("path", ""),
+                            "status_code": status_code,
+                            "duration_ms": round((perf_counter() - start) * 1000, 2),
+                            "client_disconnected": client_disconnected,
+                        },
+                    )
+        finally:
+            span.set_attribute("http.response.status_code", status_code)
+            if client_disconnected:
+                span.set_attribute("llm.client_disconnected", True)
+            span.set_attribute(
+                "llm.duration_ms",
+                round((perf_counter() - start) * 1000, 2),
+            )
+            if status_code >= 500:
+                span.set_status(Status(StatusCode.ERROR))
+            span.end()
+
+    def _start_span(self, scope: Scope) -> Span:
+        carrier = {
+            name.decode("latin-1").lower(): value.decode("latin-1")
+            for name, value in scope.get("headers", [])
+        }
+        return self._telemetry.tracer.start_span(
+            "http.server",
+            context=extract_trace_context(carrier),
+            kind=SpanKind.SERVER,
+            attributes={
+                "http.request.method": scope.get("method", ""),
+                "url.path": scope.get("path", ""),
+            },
+        )

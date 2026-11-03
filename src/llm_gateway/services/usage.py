@@ -9,6 +9,7 @@ from llm_gateway.logging import get_logger
 from llm_gateway.providers.base import ProviderName
 from llm_gateway.schemas.chat import Usage
 from llm_gateway.storage.repositories import UsageRecord, UsageRepository
+from llm_gateway.telemetry import current_trace_id
 
 logger = get_logger(__name__)
 
@@ -87,6 +88,7 @@ class UsageRecorder:
             total_tokens=counts.total_tokens,
             cached_tokens=counts.cached_tokens,
             created_at=self._clock.now(),
+            trace_id=current_trace_id(),
         )
         await self._repository.record(record)
 

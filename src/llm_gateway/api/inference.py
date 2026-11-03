@@ -36,6 +36,7 @@ from llm_gateway.services.usage import (
     UsageRecorder,
     record_usage_safely,
 )
+from llm_gateway.telemetry import annotate_current_span
 
 logger = get_logger(__name__)
 
@@ -217,6 +218,14 @@ async def create_chat_completion(
     audit_service: Annotated[AuditService, Depends(get_audit_service)],
 ) -> ChatCompletionResponse | StreamingResponse:
     request_id = get_request_id() or ""
+    annotate_current_span(
+        {
+            "llm.tenant_id": str(api_key.record.tenant_id),
+            "llm.api_key_id": str(api_key.record.id),
+            "llm.model_id": payload.model,
+            "llm.stream": payload.stream,
+        }
+    )
     session_header = request.headers.get(AUDIT_SESSION_HEADER)
     audit_turn = await begin_audit_safely(
         service=audit_service,

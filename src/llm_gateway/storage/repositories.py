@@ -144,6 +144,7 @@ class UsageRecord:
     total_tokens: int
     cached_tokens: int
     created_at: datetime
+    trace_id: str | None = None
 
     def __post_init__(self) -> None:
         _require_uuid(self.id, "id")
@@ -433,6 +434,7 @@ class AuditRequestRecord:
     total_tokens: int | None
     truncated: bool
     created_at: datetime
+    trace_id: str | None = None
 
     def __post_init__(self) -> None:
         _require_non_blank_limited(self.request_id, "request_id", max_length=64)

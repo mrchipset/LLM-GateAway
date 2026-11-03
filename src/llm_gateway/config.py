@@ -45,6 +45,11 @@ class Settings(BaseSettings):
     audit_enabled: bool = False
     audit_max_content_bytes: int = Field(default=262144, ge=1024)
     audit_write_timeout_seconds: float = Field(default=2.0, gt=0)
+    tracing_enabled: bool = False
+    tracing_endpoint: str | None = None
+    tracing_sample_ratio: float = Field(default=0.1, ge=0, le=1)
+    tracing_service_name: str = "llm-gateway"
+    tracing_export_timeout_seconds: float = Field(default=5.0, gt=0)
 
     @field_validator("log_level")
     @classmethod
@@ -54,12 +59,27 @@ class Settings(BaseSettings):
             raise ValueError(f"unknown log level: {value}")
         return normalized
 
+    @field_validator("tracing_endpoint")
+    @classmethod
+    def _validate_tracing_endpoint(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            return None
+        if not normalized.startswith(("http://", "https://")):
+            raise ValueError("tracing_endpoint must be an http(s) URL")
+        return normalized
+
     @model_validator(mode="after")
     def _validate_environment(self) -> Self:
         secret = self.master_key.get_secret_value()
         normalized_secret = secret.lower()
         if "change-me" in normalized_secret or "changeme" in normalized_secret:
             raise ValueError("master_key must not contain a placeholder value")
+
+        if self.tracing_enabled and self.tracing_endpoint is None:
+            raise ValueError("tracing_endpoint is required when tracing_enabled is true")
 
         if self.storage_backend is StorageBackend.POSTGRES and not self.database_url:
             raise ValueError("database_url is required when storage_backend is postgres")

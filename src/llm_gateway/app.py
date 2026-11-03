@@ -14,6 +14,7 @@ from llm_gateway.container import Container, build_container
 from llm_gateway.errors import register_error_handlers
 from llm_gateway.logging import configure_logging
 from llm_gateway.request_context import RequestContextMiddleware
+from llm_gateway.telemetry import configure_telemetry
 
 
 def create_app(
@@ -45,7 +46,10 @@ def create_app(
         lifespan=lifespan,
     )
     app.state.container = resolved_container
-    app.add_middleware(RequestContextMiddleware)
+    telemetry = resolved_container.telemetry
+    if telemetry is None:
+        telemetry = configure_telemetry(resolved_settings)
+    app.add_middleware(RequestContextMiddleware, telemetry=telemetry)
     register_error_handlers(app)
     app.include_router(health_router)
     app.include_router(inference_router)

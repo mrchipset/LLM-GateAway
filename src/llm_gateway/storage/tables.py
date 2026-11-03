@@ -185,6 +185,7 @@ class AuditRequestRow(Base):
     cached_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     total_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     truncated: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=false())
+    trace_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     __table_args__ = (
@@ -192,6 +193,7 @@ class AuditRequestRow(Base):
         Index("ix_audit_requests_tenant_created", "tenant_id", "created_at"),
         Index("ix_audit_requests_parent_request_id", "parent_request_id"),
         Index("ix_audit_requests_api_key_created", "api_key_id", "created_at"),
+        Index("ix_audit_requests_trace_id", "trace_id"),
     )
 
 
@@ -248,6 +250,7 @@ class UsageRow(Base):
     completion_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
     total_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
     cached_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
+    trace_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     __table_args__ = (
@@ -256,6 +259,7 @@ class UsageRow(Base):
         Index("ix_usage_records_api_key_id", "api_key_id"),
         Index("ix_usage_records_model_created", "model_id", "created_at"),
         Index("ix_usage_records_created_at", "created_at"),
+        Index("ix_usage_records_trace_id", "trace_id"),
     )
 
 
