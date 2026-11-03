@@ -9,6 +9,7 @@
 - 尚缺：模型注册 UI、租户删除/重命名、P1e 运维项（保留期清理/导出/删除/指标/分区），以及 P2 中的其他项。
 - 当前 chat 请求是无状态的，没有 session/终端用户标识；会话审计需要显式 session header 或消息前缀启发式，且默认关闭。
 - 安全边界必须保持：master key 只存在于页面内存；推理 key 只在创建时返回一次明文；不把 key 或提示词写入浏览器存储/日志。
+- 企业级差距（身份与授权、可观测性、数据面可靠性、发布与合规）单独成节，见「企业级路线」，不与上面的功能项混排。
 
 ## P0：管理台租户管理
 
@@ -180,13 +181,126 @@
 - [ ] 审计导出与保留策略的可配置化。
 - [ ] 管理台操作审计（谁在何时创建/吊销了 key）。
 
+## 企业级路线（2026-11-03 评审）
+
+> 本节回答“要成为企业级 LLM Gateway 还缺什么”，与上面的功能项分开维护，不混入 P0–P2。
+> 分级：**G0** 不完成则过不了采购与上生产评审；**G1** 上量后必炸的可靠性缺口；**G2** 规模化与生态。
+> 每条都给出可断言的验收标准。只写“已支持”不算完成。
+
+现状判断：内核质量不错（分层清晰、错误契约统一、流式生命周期处理正确、测试与设计笔记齐全），但形态仍是“单管理员 + 单上游模型 + 单进程状态”，缺四类方向性能力：身份与授权、可观测性、数据面可靠性、发布与合规闭环。
+
+### G0 门槛级
+
+- [ ] **G0.1 管理面身份与授权（RBAC + 可选 OIDC）**
+  - 现状：管理 API 只认单一 master key，权限等同超级管理员；控制台把 master key 存在页面内存。
+  - 范围：管理员主体（本地账号，后续可接 OIDC）、角色（owner/operator/auditor/read-only）、路由级权限表、服务端校验（前端只做展示）。
+  - 验收：只读角色调用写接口返回 403 且错误码稳定；master key 保留为 break-glass 路径，可显式关闭，使用时写告警日志；角色变更即时生效，无需重启。
+
+- [ ] **G0.2 租户级模型访问控制**
+  - 现状：模型解析只校验“存在且启用”，不校验调用方是否有权使用；任意租户都能调用最贵的模型。
+  - 范围：租户 → 允许模型列表（或允许 provider 列表）；未授权返回 403 + 稳定错误码；列表接口按权限过滤。同时提供“默认允许/默认拒绝”策略开关。
+  - 验收：未授权模型返回 403，不产生 usage 记录；`/v1/models` 与用量报表口径一致；策略变更后下一次请求即生效。
+
+- [ ] **G0.3 管理操作审计**
+  - 现状：只有推理请求审计；谁在何时创建/吊销 key、改配额、注册/删除模型无记录。
+  - 范围：独立表（actor、action、target_type、target_id、before/after、request_id、时间），只记录可审计的元数据，不记录密钥明文。
+  - 验收：写接口全覆盖并有单元测试；审计写入失败不阻断业务但必须可观测；只读角色可查询但不能修改。
+
+- [ ] **G0.4 指标与告警最小集**
+  - 现状：只有 JSON 日志与 health/ready，无任何 metrics 端点，无法做 SLO、告警与自动扩缩。
+  - 范围：`/metrics`（Prometheus 格式，独立端口或仅内网）；低基数标签限定在 provider、model、status、error_code、route；不把 tenant/key/request_id 作为标签。
+  - 必测指标：请求量、错误率、P50/P95/P99 延迟、上游首 token 延迟、限流/配额拒绝数、usage/audit 写入失败数、连接池占用。
+  - 验收：压测时能通过指标定位“是限流拒了、上游慢、还是 DB 慢”；标签基数可估算且有上限；指标端点不暴露在公网入口。
+
+- [x] **G0.5 分布式追踪与 traceparent 透传**
+  - 现状：无 tracing，不解析也不透传 W3C Trace Context；provider 调用无 span。
+  - 范围：FastAPI / httpx / SQLAlchemy 自动埋点；入站沿用合法 `traceparent` 的 trace-id，出站生成新的 parent-id；采样率可配且决策在入口统一完成；`trace_id` 作为字段进入访问日志，并写入 usage/audit 记录（需迁移）。
+  - 关键判断：一次逻辑请求内的重试与 fallback 必须落在同一个 trace 下，否则无法解释“这次请求为什么贵/为什么慢”。
+  - 验收：跨进程调用链可见（客户端 → 网关 → 上游）；重试在 trace 中表现为多个 span；日志、usage、audit 能用 trace_id 关联到同一条链路；未采样请求仍有本地 request_id 可查。
+  - 落地步骤（设计已定，见 `notes/observability.md`）：
+    - [x] 配置项：`GATEWAY_TRACING_ENABLED`（默认 false）、`GATEWAY_TRACING_ENDPOINT`（启用时必填，OTLP/HTTP）、`GATEWAY_TRACING_SAMPLE_RATIO`（0–1）、`GATEWAY_TRACING_SERVICE_NAME`；启用但缺 endpoint 必须启动失败。
+    - [x] 服务端 span：在现有 `RequestContextMiddleware` 内解析/校验 `traceparent`（仅 version `00`、小写十六进制、非全零），否则新建 trace；遵守入站 sampled 标志；记录 method/path/status/tenant/key/model，不记录内容。
+    - [x] 客户端 span：provider 每次尝试一个 span，属性含 provider/model/upstream_model/attempt/stream/status，流式记录 `llm.ttft_ms`；重试为兄弟 span。
+    - [x] 出站透传：每次尝试生成新的 `parent-id`，不原样转发入站头；关闭时不发头。
+    - [x] 日志：`JsonFormatter` 输出 `trace_id`/`span_id`（无 span 时不输出），保留 `request_id` 且两者不互相替代。
+    - [x] 持久化：`usage_records`、`audit_requests` 增加可空 `trace_id` 列（新迁移），写入时从当前 span 取。
+    - [x] 关闭态验证：默认配置下不产生 span、不发 `traceparent`、日志无 `trace_id`，现有测试零改动通过。
+  - 设计说明：`notes/observability.md`（含为何不用自动埋点、采样与关闭策略、`trace_id` 与 `request_id` 的分工）。
+  - 已落地范围（2026-11-03）：手动 span（服务端 + 每次上游尝试）、OTLP/HTTP 导出、`trace_id`/`span_id` 日志字段、usage/audit 迁移 `0006`。未做：DB 查询 span、tail sampling、metrics（归 G0.4）。
+
+- [ ] **G0.6 CI 门禁**
+  - 现状：仓库无 CI，ruff/pyright/pytest 与前端 lint/typecheck/test/build 全靠自觉。
+  - 范围：PR 流水线跑后端静态检查 + 单测、前端四项、Docker 构建；PostgreSQL 集成测试用 service 容器；锁文件冻结安装。
+  - 验收：故意引入 pyright 错误、失败测试、格式问题各一次，流水线必须红；合并保护开启。
+  - 进度（2026-11-03）：`.github/workflows/ci.yml` 已落地（backend / integration / frontend / docker 四个 job），本地等价命令全绿（417 passed，52 个集成用例另跑全绿）。剩余：首次推送后验证流水线为红的能力，并开启分支保护。
+
+- [ ] **G0.7 审计数据合规闭环（原 P1e）**
+  - 现状：存了内容但无保留期清理、无导出/删除、无分区、无 PII 脱敏。
+  - 范围：保留期（默认 30/90 天，按租户可配）、清理任务（CLI + 一次性任务）、导出（JSONL/CSV）、按租户/时间删除、可配置正则脱敏、清理失败告警；大表按月分区评估。
+  - 验收：到期数据被清理且有指标；删除可证明（行数与对象存储均无残留）；脱敏只记录命中数量不记录原文；导出受权限控制且不落浏览器存储。
+
+- [ ] **G0.8 输入边界与成本护栏**
+  - 现状：请求体、messages 长度、`max_tokens` 均无上限；未知字段全量透传上游。
+  - 范围：请求体大小上限、单请求 token 估算上限、`max_tokens` 上限、并发上限、按模型的上下文窗口校验、参数白名单（区分“允许透传”和“拒绝”的字段）。
+  - 验收：超限请求返回 4xx 且错误码稳定，不触达上游；单客户端无法通过超长 prompt 或无限 `max_tokens` 打穿内存与成本。
+
+### G1 生产可靠性
+
+- [ ] **G1.1 多 deployment 路由与可靠性**
+  - 现状：一个公共模型对应一个上游模型，无权重、无 fallback、无 cooldown、无上游 key 池。
+  - 范围：公共模型 → 多个 deployment（provider + 凭证引用 + 权重 + 状态）；重试（仅首字节前）、fallback 链、失败计数与 cooldown、健康探测；路由策略先做加权 + 最少失败，不做算法堆叠。
+  - 验收：注入上游 429/5xx，客户端成功率高且响应头标明是否 fallback；连续失败的 deployment 进入 cooldown 并自动恢复；fallback 与重试均有指标与 trace span。
+  - 设计说明落到 `notes/routing.md`。
+
+- [ ] **G1.2 限流与配额离开请求热路径**
+  - 现状：固定 60 秒窗口、仅租户级；计数落在 PostgreSQL 单行，同租户请求互相争抢；Redis 仍是 Reserved。
+  - 范围：Redis 令牌桶（per-key / per-tenant / per-model）、TPM 与并发上限、RPM 与 TPM 同时生效、`Retry-After` 语义明确；限流不可用时降级策略显式（fail-open 必须告警）。
+  - 验收：多副本下限流口径一致；边界不出现 2 倍突发；Redis 不可用时行为符合配置且可观测。
+
+- [ ] **G1.3 热路径读写放大治理**
+  - 现状：每请求包含 key 查询、`last_used_at` 写入、租户查询、整月用量聚合、限流单行 upsert、usage 插入，全部同步打 PostgreSQL，无缓存。
+  - 范围：key/tenant 短期缓存（含显式失效）、`last_used_at` 采样或批量、usage 异步批量写入、日/月预聚合表、聚合查询走预聚合而非明细扫描。
+  - 验收：单请求 DB 往返次数有明确预算并可测；P95 延迟在目标 QPS 下不随月内累计用量增长而退化。
+
+- [ ] **G1.4 成本与预算**
+  - 现状：只有 token，无价格表、无货币、无成本聚合。
+  - 范围：model → 价格（输入/输出/缓存命中，按币种与生效时间版本化）、请求级成本、按 tenant/key/model/时间聚合、预算窗口与超额策略（拒绝或告警）、价格变更不影响历史记录。
+  - 验收：同一请求的 token 与成本可复算一致；历史账单不受调价影响；预算超额返回稳定错误码并有指标。
+  - 注意：不要硬编码第三方当前价格，价格来自配置或数据库。
+
+- [ ] **G1.5 运行时与生命周期参数化**
+  - 现状：连接池大小硬编码、无语句超时、启动未配 workers、无优雅停机排空、流式无 keepalive/空闲超时。
+  - 验收：连接池与并发参数可配且有上限校验；滚动发布会等待 in-flight 流结束（或按超时截断并记账）；长时间无数据的流按空闲超时关闭并释放上游。
+
+- [ ] **G1.6 缓存**
+  - 范围：先做精确缓存（内存 + Redis，键含 model/tenant/参数归一化哈希），再评估语义缓存；明确哪些请求可缓存（含 `temperature>0`、工具调用、流式的规则）；缓存命中/写入/绕过均有指标；prompt cache 相关字段透传语义写清楚。
+  - 验收：缓存命中不产生上游计费但产生可区分的 usage 记录；租户隔离不串缓存；失效策略可解释。
+
+- [ ] **G1.7 容量与 SLO 基线**
+  - 范围：压测脚本（非流式 + 流式 + 断连 + 上游慢/错），容量模型（连接数、内存、DB 写入放大），SLO（可用性、P95、错误率预算），告警阈值。
+  - 验收：给定 QPS 与并发能给出资源需求与瓶颈结论；每次性能相关改动有前后对比数据。
+
+### G2 规模化与生态
+
+- [ ] **G2.1 Provider 广度**：Azure OpenAI、Anthropic Messages、Bedrock、Vertex，以及模型能力表（上下文窗口、模态、工具调用、流式 usage 语义）；provider 差异只允许存在于 adapter 内。
+- [ ] **G2.2 端点广度**：embeddings、responses、messages、images、audio、rerank；每个端点都要有流式/错误/计费语义，不允许“能转发就算支持”。
+- [ ] **G2.3 Guardrails**：内容安全、PII、prompt injection，pre/post/stream 三阶段钩子；先做 2–3 个实现并稳定接口，不复制生态式堆量。
+- [ ] **G2.4 凭证管理**：secret manager（Vault/KMS/云厂商）、上游凭证轮换与双活、按租户 BYOK；应用内不落明文，轮换过程可观测且不中断流量。
+- [ ] **G2.5 交付形态**：Helm/K8s manifests、迁移 Job、PDB/HPA、NetworkPolicy、TLS/ingress 参考配置、备份与恢复演练、升级与回滚手册。
+- [ ] **G2.6 文档与生态**：本项目自己的架构文档（当前 `architecture.md` 是 LiteLLM 分析）、SLO/runbook/on-call 手册、威胁模型、OpenAPI 生成的管理客户端、可选 SDK 与 Terraform Provider。
+- [ ] **G2.7 兼容性策略**：`/v1` 与 `/api/v1` 的变更、弃用、版本化流程；错误码只增不改语义；破坏性变更需迁移窗口。
+
 ## 实施顺序与依赖
 
 1. 租户管理 UI（后端已就绪）
 2. API key 管理 UI（后端已就绪）
 3. 会话审计：ADR → 迁移/采集 → 会话匹配与轮次 diff → API → UI → 保留期/运维
+4. 企业级 G0：授权与模型 ACL → 指标/追踪 → CI → 合规闭环 → 输入护栏
+5. 企业级 G1 → G2：按目标形态决定，内部平台优先 G1.1/G1.3/G1.4，对外多租户优先 G1.2/G0.7/G0.8
 
 前置：管理台保持 master key 仅内存；新增写操作必须沿用现有错误信封与 request id；任何 schema 变更走新增迁移，不修改已应用迁移。
+
+G0 的取舍必须先定：目标形态是“内部多团队平台”（优先 RBAC、配额、成本）还是“对外多租户 SaaS”（优先隔离、合规、滥用防护）。两者 G0 内部排序不同，不要同时开工。
 
 ## 完成定义
 
