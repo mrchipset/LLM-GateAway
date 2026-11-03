@@ -36,6 +36,7 @@ from llm_gateway.services.usage import (
     UsageRecorder,
     record_usage_safely,
 )
+from llm_gateway.storage.repositories import ModelAccessMode
 from llm_gateway.telemetry import annotate_current_span
 
 logger = get_logger(__name__)
@@ -50,7 +51,11 @@ DEFAULT_AUDIT_WRITE_TIMEOUT_SECONDS = 2.0
 
 
 def get_chat_service(container: Annotated[Container, Depends(get_container)]) -> ChatService:
-    return ChatService(models=container.models, providers=container.providers)
+    return ChatService(
+        models=container.models,
+        providers=container.providers,
+        tenants=container.tenants,
+    )
 
 
 def get_usage_recorder(
@@ -240,7 +245,7 @@ async def create_chat_completion(
 
     if not payload.stream:
         try:
-            result = await service.complete(payload)
+            result = await service.complete(payload, tenant_id=api_key.record.tenant_id)
         except Exception as exc:
             if audit_turn is not None:
                 await record_audit_safely(
@@ -276,7 +281,7 @@ async def create_chat_completion(
         return result.response
 
     try:
-        stream = await service.open_stream(payload)
+        stream = await service.open_stream(payload, tenant_id=api_key.record.tenant_id)
     except Exception as exc:
         if audit_turn is not None:
             await record_audit_safely(
@@ -308,12 +313,17 @@ async def create_chat_completion(
 
 @router.get("/v1/models", response_model=ModelListResponse)
 async def list_models(
-    _: Annotated[AuthenticatedKey, Depends(require_api_key)],
+    api_key: Annotated[AuthenticatedKey, Depends(require_api_key)],
     container: Annotated[Container, Depends(get_container)],
 ) -> ModelListResponse:
     models, _total = await container.models.list_models(
         limit=MODEL_LIST_LIMIT, offset=0, enabled_only=True
     )
+    access = await container.tenants.get_model_access(api_key.record.tenant_id)
+    if access is None:
+        models = []
+    elif access.mode is not ModelAccessMode.ALL:
+        models = [model for model in models if access.allows(model.id)]
     data = [
         ModelSummary(
             id=model.id,

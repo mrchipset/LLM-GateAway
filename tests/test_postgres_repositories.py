@@ -30,10 +30,13 @@ from llm_gateway.storage.repositories import (
     DuplicateApiKeyError,
     DuplicateModelError,
     DuplicateTenantError,
+    ModelAccess,
+    ModelAccessMode,
     ModelConfig,
     Tenant,
     TenantLimitPatch,
     TimeBucket,
+    UnknownModelError,
     UnknownTenantError,
     UsageRecord,
 )
@@ -457,6 +460,112 @@ async def test_api_key_list_filters_by_tenant_before_pagination(database: Databa
 async def test_api_key_list_rejects_invalid_pagination(database: Database) -> None:
     with pytest.raises(ValueError, match="limit must be >= 1"):
         await database.api_keys.list_keys(limit=0, offset=0)
+
+
+async def test_tenant_model_access_round_trip_and_replace(database: Database) -> None:
+    tenant = await database.tenants.create_tenant(_tenant(1))
+    await database.models.create_model(_model(1))
+    await database.models.create_model(_model(2))
+
+    assert await database.tenants.get_model_access(tenant.id) == ModelAccess(
+        mode=ModelAccessMode.ALL
+    )
+
+    saved = await database.tenants.set_model_access(
+        tenant.id,
+        mode=ModelAccessMode.ALLOWLIST,
+        model_ids=["model-2", "model-1", "model-1"],
+    )
+    assert saved == ModelAccess(
+        mode=ModelAccessMode.ALLOWLIST,
+        model_ids=("model-1", "model-2"),
+    )
+    assert await database.tenants.get_model_access(tenant.id) == saved
+
+    reset = await database.tenants.set_model_access(
+        tenant.id,
+        mode=ModelAccessMode.ALL,
+        model_ids=["model-1"],
+    )
+    assert reset == ModelAccess(mode=ModelAccessMode.ALL, model_ids=())
+    # Switching back to "all" must not leave stale allowlist rows behind.
+    assert await database.tenants.get_model_access(tenant.id) == reset
+
+
+async def test_tenant_model_access_rejects_unknown_model(database: Database) -> None:
+    tenant = await database.tenants.create_tenant(_tenant(1))
+
+    with pytest.raises(UnknownModelError, match="does not exist"):
+        await database.tenants.set_model_access(
+            tenant.id,
+            mode=ModelAccessMode.ALLOWLIST,
+            model_ids=["missing-model"],
+        )
+
+    assert await database.tenants.get_model_access(tenant.id) == ModelAccess(
+        mode=ModelAccessMode.ALL
+    )
+
+
+async def test_tenant_model_access_unknown_tenant_returns_none(database: Database) -> None:
+    assert await database.tenants.get_model_access(uuid4()) is None
+    assert (
+        await database.tenants.set_model_access(
+            uuid4(),
+            mode=ModelAccessMode.ALLOWLIST,
+            model_ids=[],
+        )
+        is None
+    )
+
+
+async def test_deleting_a_model_removes_its_access_rows(database: Database) -> None:
+    tenant = await database.tenants.create_tenant(_tenant(1))
+    await database.models.create_model(_model(1))
+    await database.tenants.set_model_access(
+        tenant.id,
+        mode=ModelAccessMode.ALLOWLIST,
+        model_ids=["model-1"],
+    )
+
+    assert await database.models.delete_model("model-1") is True
+
+    assert await database.tenants.get_model_access(tenant.id) == ModelAccess(
+        mode=ModelAccessMode.ALLOWLIST,
+        model_ids=(),
+    )
+
+
+async def test_migration_adds_model_access_column_and_table(
+    migrated_schema: None,
+) -> None:
+    engine = create_async_engine(_test_url())
+    try:
+        async with engine.connect() as connection:
+            default_mode = await connection.scalar(
+                text(
+                    "SELECT column_default FROM information_schema.columns "
+                    "WHERE table_name = 'tenants' AND column_name = 'model_access_mode'"
+                )
+            )
+            nullable = await connection.scalar(
+                text(
+                    "SELECT is_nullable FROM information_schema.columns "
+                    "WHERE table_name = 'tenants' AND column_name = 'model_access_mode'"
+                )
+            )
+            table_name = await connection.scalar(
+                text(
+                    "SELECT table_name FROM information_schema.tables "
+                    "WHERE table_name = 'tenant_model_access'"
+                )
+            )
+    finally:
+        await engine.dispose()
+
+    assert default_mode == "'all'::character varying"
+    assert nullable == "NO"
+    assert table_name == "tenant_model_access"
 
 
 async def test_tenant_set_limits_round_trip_and_clear(database: Database) -> None:

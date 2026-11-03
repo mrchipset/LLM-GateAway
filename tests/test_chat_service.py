@@ -5,6 +5,7 @@ import logging
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
 from typing import Literal, cast
+from uuid import UUID
 
 import pytest
 
@@ -28,12 +29,13 @@ from llm_gateway.schemas.chat import (
     ChatMessage,
 )
 from llm_gateway.services.chat import ChatService, ChatStream, map_provider_error
-from llm_gateway.storage.memory import InMemoryModelRepository
-from llm_gateway.storage.repositories import ModelConfig
+from llm_gateway.storage.memory import InMemoryModelRepository, InMemoryTenantRepository
+from llm_gateway.storage.repositories import ModelConfig, Tenant
 
 NOW = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
 PUBLIC_MODEL = "public-model"
 UPSTREAM_MODEL = "upstream-model"
+TENANT_ID = UUID("00000000-0000-0000-0000-0000000000aa")
 
 
 def make_request(model: str = PUBLIC_MODEL) -> ChatCompletionRequest:
@@ -116,6 +118,12 @@ class RecordingProvider:
         return None
 
 
+async def make_tenants() -> InMemoryTenantRepository:
+    tenants = InMemoryTenantRepository()
+    await tenants.create_tenant(Tenant(id=TENANT_ID, name="chat-service-tenant", created_at=NOW))
+    return tenants
+
+
 async def make_service(
     provider: RecordingProvider,
     *,
@@ -132,7 +140,11 @@ async def make_service(
             enabled=enabled,
         )
     )
-    return ChatService(models=models, providers=ProviderRegistry({provider_name: provider}))
+    return ChatService(
+        models=models,
+        providers=ProviderRegistry({provider_name: provider}),
+        tenants=await make_tenants(),
+    )
 
 
 async def collect(stream: ChatStream) -> list[ChatCompletionChunk]:
@@ -247,7 +259,7 @@ async def test_resolve_model_returns_config_and_provider() -> None:
     provider = RecordingProvider()
     service = await make_service(provider)
 
-    resolved = await service.resolve_model(PUBLIC_MODEL)
+    resolved = await service.resolve_model(PUBLIC_MODEL, tenant_id=TENANT_ID)
 
     assert resolved.config.id == PUBLIC_MODEL
     assert resolved.provider is provider
@@ -257,7 +269,7 @@ async def test_resolve_model_unknown_id_returns_model_not_found() -> None:
     service = await make_service(RecordingProvider())
 
     with pytest.raises(ApiError) as info:
-        await service.resolve_model("missing-model")
+        await service.resolve_model("missing-model", tenant_id=TENANT_ID)
 
     assert info.value.status_code == 404
     assert info.value.code is ApiErrorCode.MODEL_NOT_FOUND
@@ -269,7 +281,7 @@ async def test_resolve_model_disabled_returns_model_disabled() -> None:
     service = await make_service(RecordingProvider(), enabled=False)
 
     with pytest.raises(ApiError) as info:
-        await service.resolve_model(PUBLIC_MODEL)
+        await service.resolve_model(PUBLIC_MODEL, tenant_id=TENANT_ID)
 
     assert info.value.status_code == 403
     assert info.value.code is ApiErrorCode.MODEL_DISABLED
@@ -285,10 +297,14 @@ async def test_resolve_model_with_unconfigured_provider_returns_provider_not_con
             created_at=NOW,
         )
     )
-    service = ChatService(models=models, providers=ProviderRegistry({}))
+    service = ChatService(
+        models=models,
+        providers=ProviderRegistry({}),
+        tenants=await make_tenants(),
+    )
 
     with pytest.raises(ApiError) as info:
-        await service.resolve_model(PUBLIC_MODEL)
+        await service.resolve_model(PUBLIC_MODEL, tenant_id=TENANT_ID)
 
     assert info.value.status_code == 503
     assert info.value.code is ApiErrorCode.PROVIDER_NOT_CONFIGURED
@@ -299,7 +315,7 @@ async def test_complete_rewrites_public_model_and_forwards_upstream_model() -> N
     provider = RecordingProvider()
     service = await make_service(provider)
 
-    result = await service.complete(make_request())
+    result = await service.complete(make_request(), tenant_id=TENANT_ID)
 
     assert provider.upstream_models == [UPSTREAM_MODEL]
     assert result.response.model == PUBLIC_MODEL
@@ -310,7 +326,7 @@ async def test_open_stream_exposes_first_chunk_immediately() -> None:
     provider = RecordingProvider(chunks=[make_chunk("", role="assistant"), make_chunk("hello")])
     service = await make_service(provider)
 
-    stream = await service.open_stream(make_request())
+    stream = await service.open_stream(make_request(), tenant_id=TENANT_ID)
 
     assert stream.first_chunk.choices[0].delta.role == "assistant"
     assert stream.first_chunk.model == PUBLIC_MODEL
@@ -321,7 +337,7 @@ async def test_open_stream_empty_upstream_returns_invalid_response() -> None:
     service = await make_service(RecordingProvider(chunks=[]))
 
     with pytest.raises(ApiError) as info:
-        await service.open_stream(make_request())
+        await service.open_stream(make_request(), tenant_id=TENANT_ID)
 
     assert info.value.status_code == 502
     assert info.value.code is ApiErrorCode.UPSTREAM_INVALID_RESPONSE
@@ -332,7 +348,7 @@ async def test_open_stream_first_chunk_timeout_returns_upstream_timeout() -> Non
     service = await make_service(RecordingProvider(stream_error=ProviderTimeoutError()))
 
     with pytest.raises(ApiError) as info:
-        await service.open_stream(make_request())
+        await service.open_stream(make_request(), tenant_id=TENANT_ID)
 
     assert info.value.status_code == 504
     assert info.value.code is ApiErrorCode.UPSTREAM_TIMEOUT
@@ -341,7 +357,7 @@ async def test_open_stream_first_chunk_timeout_returns_upstream_timeout() -> Non
 async def test_chunks_rewrites_model_on_first_and_later_chunks() -> None:
     provider = RecordingProvider(chunks=[make_chunk("one"), make_chunk("two")])
     service = await make_service(provider)
-    stream = await service.open_stream(make_request())
+    stream = await service.open_stream(make_request(), tenant_id=TENANT_ID)
 
     collected = await collect(stream)
 
@@ -352,7 +368,7 @@ async def test_chunks_rewrites_model_on_first_and_later_chunks() -> None:
 async def test_aclose_closes_upstream_once_and_is_idempotent() -> None:
     provider = RecordingProvider(chunks=[make_chunk("one"), make_chunk("two")])
     service = await make_service(provider)
-    stream = await service.open_stream(make_request())
+    stream = await service.open_stream(make_request(), tenant_id=TENANT_ID)
 
     assert provider.closed == 0
     await stream.aclose()
@@ -364,7 +380,7 @@ async def test_aclose_closes_upstream_once_and_is_idempotent() -> None:
 async def test_iterating_chunks_after_aclose_does_not_hang() -> None:
     provider = RecordingProvider(chunks=[make_chunk("one"), make_chunk("two")])
     service = await make_service(provider)
-    stream = await service.open_stream(make_request())
+    stream = await service.open_stream(make_request(), tenant_id=TENANT_ID)
     await stream.aclose()
 
     collected = await asyncio.wait_for(collect(stream), timeout=1)
@@ -378,7 +394,7 @@ async def test_open_stream_closes_upstream_and_reraises_unexpected_error() -> No
     service = await make_service(provider)
 
     with pytest.raises(RuntimeError, match="provider blew up"):
-        await service.open_stream(make_request())
+        await service.open_stream(make_request(), tenant_id=TENANT_ID)
 
     assert provider.closed == 1
 
@@ -386,7 +402,7 @@ async def test_open_stream_closes_upstream_and_reraises_unexpected_error() -> No
 async def test_closing_chunks_generator_early_closes_upstream() -> None:
     provider = RecordingProvider(chunks=[make_chunk("one"), make_chunk("two")])
     service = await make_service(provider)
-    stream = await service.open_stream(make_request())
+    stream = await service.open_stream(make_request(), tenant_id=TENANT_ID)
     chunks = stream.chunks()
 
     first = await anext(chunks)

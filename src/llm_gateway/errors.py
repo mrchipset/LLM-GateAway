@@ -28,6 +28,7 @@ class ApiErrorCode(StrEnum):
     TENANT_QUOTA_EXCEEDED = "tenant_quota_exceeded"
     MODEL_NOT_FOUND = "model_not_found"
     MODEL_DISABLED = "model_disabled"
+    MODEL_NOT_ALLOWED = "model_not_allowed"
     DUPLICATE_MODEL = "duplicate_model"
     DUPLICATE_TENANT = "duplicate_tenant"
     TENANT_NOT_FOUND = "tenant_not_found"

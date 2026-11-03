@@ -16,6 +16,8 @@ from llm_gateway.services.limits import enforce_inference_limits, month_window
 from llm_gateway.storage.rate_limits import RateLimitResult
 from llm_gateway.storage.repositories import (
     ApiKeyRecord,
+    ModelAccess,
+    ModelAccessMode,
     Tenant,
     TenantLimitPatch,
 )
@@ -35,6 +37,18 @@ class MissingTenantRepository:
         return [], 0
 
     async def set_tenant_limits(self, tenant_id: UUID, *, patch: TenantLimitPatch) -> Tenant | None:
+        return None
+
+    async def get_model_access(self, tenant_id: UUID) -> ModelAccess | None:
+        return None
+
+    async def set_model_access(
+        self,
+        tenant_id: UUID,
+        *,
+        mode: ModelAccessMode,
+        model_ids: Sequence[str],
+    ) -> ModelAccess | None:
         return None
 
 

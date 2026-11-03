@@ -17,6 +17,13 @@ class TimeBucket(StrEnum):
     DAY = "day"
 
 
+class ModelAccessMode(StrEnum):
+    """How a tenant's model permissions are evaluated."""
+
+    ALL = "all"
+    ALLOWLIST = "allowlist"
+
+
 DEFAULT_TENANT_ID = UUID("00000000-0000-0000-0000-000000000001")
 
 
@@ -69,6 +76,7 @@ class Tenant:
     monthly_token_quota: int | None = None
     requests_per_minute: int | None = None
     audit_enabled: bool = False
+    model_access_mode: ModelAccessMode = ModelAccessMode.ALL
 
     def __post_init__(self) -> None:
         _require_uuid(self.id, "id")
@@ -76,6 +84,29 @@ class Tenant:
         _require_aware(self.created_at, "created_at")
         _require_optional_positive_int(self.monthly_token_quota, "monthly_token_quota")
         _require_optional_positive_int(self.requests_per_minute, "requests_per_minute")
+        if not isinstance(self.model_access_mode, ModelAccessMode):
+            raise ValueError("model_access_mode must be a ModelAccessMode")
+
+
+@dataclass(frozen=True, slots=True)
+class ModelAccess:
+    """A tenant's resolved model permissions.
+
+    ``ALLOWLIST`` with an empty ``model_ids`` means "no models", which is a
+    deliberate way to block a tenant without deleting its keys.
+    """
+
+    mode: ModelAccessMode
+    model_ids: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.mode, ModelAccessMode):
+            raise ValueError("mode must be a ModelAccessMode")
+        for model_id in self.model_ids:
+            _require_non_blank(model_id, "model_id")
+
+    def allows(self, model_id: str) -> bool:
+        return self.mode is ModelAccessMode.ALL or model_id in self.model_ids
 
 
 @dataclass(frozen=True, slots=True)
@@ -264,6 +295,14 @@ class UnknownTenantError(Exception):
         self.tenant_id = tenant_id
 
 
+class UnknownModelError(Exception):
+    """Raised when a write references a model that is not registered."""
+
+    def __init__(self, model_id: str) -> None:
+        super().__init__(f"model '{model_id}' does not exist")
+        self.model_id = model_id
+
+
 class DuplicateApiKeyError(Exception):
     def __init__(self) -> None:
         super().__init__("an API key with the same hash already exists")
@@ -294,6 +333,16 @@ class TenantRepository(Protocol):
         *,
         patch: TenantLimitPatch,
     ) -> Tenant | None: ...
+
+    async def get_model_access(self, tenant_id: UUID) -> ModelAccess | None: ...
+
+    async def set_model_access(
+        self,
+        tenant_id: UUID,
+        *,
+        mode: ModelAccessMode,
+        model_ids: Sequence[str],
+    ) -> ModelAccess | None: ...
 
 
 class UsageRepository(Protocol):

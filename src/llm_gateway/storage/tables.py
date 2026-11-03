@@ -35,6 +35,11 @@ class TenantRow(Base):
     monthly_token_quota: Mapped[int | None] = mapped_column(Integer, nullable=True)
     requests_per_minute: Mapped[int | None] = mapped_column(Integer, nullable=True)
     audit_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=false())
+    model_access_mode: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        server_default=text("'all'"),
+    )
 
     __table_args__ = (
         Index("ix_tenants_name", "name", unique=True),
@@ -46,6 +51,35 @@ class TenantRow(Base):
             "requests_per_minute IS NULL OR requests_per_minute >= 1",
             name="ck_tenants_requests_per_minute_positive",
         ),
+        CheckConstraint(
+            "model_access_mode IN ('all', 'allowlist')",
+            name="ck_tenants_model_access_mode",
+        ),
+    )
+
+
+class TenantModelAccessRow(Base):
+    """Composite key of (tenant, model) plus a CASCADE from both sides."""
+
+    __tablename__ = "tenant_model_access"
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey(
+            "tenants.id",
+            name="fk_tenant_model_access_tenant_id",
+            ondelete="CASCADE",
+        ),
+        primary_key=True,
+    )
+    model_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey(
+            "models.id",
+            name="fk_tenant_model_access_model_id",
+            ondelete="CASCADE",
+        ),
+        primary_key=True,
     )
 
 

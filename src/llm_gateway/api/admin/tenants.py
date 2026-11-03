@@ -10,12 +10,15 @@ from llm_gateway.container import Container, get_container
 from llm_gateway.errors import ApiError, ApiErrorCode
 from llm_gateway.schemas.admin import (
     CreateTenantRequest,
+    ModelAccessResponse,
     TenantDetail,
     TenantListResponse,
+    UpdateModelAccessRequest,
     UpdateTenantLimitsRequest,
 )
 from llm_gateway.storage.repositories import (
     DuplicateTenantError,
+    ModelAccessMode,
     Tenant,
     TenantLimitPatch,
 )
@@ -34,6 +37,7 @@ def _detail(tenant: Tenant) -> TenantDetail:
         monthly_token_quota=tenant.monthly_token_quota,
         requests_per_minute=tenant.requests_per_minute,
         audit_enabled=tenant.audit_enabled,
+        model_access_mode=tenant.model_access_mode,
     )
 
 
@@ -107,3 +111,65 @@ async def list_tenants(
         limit=limit,
         offset=offset,
     )
+
+
+def _model_access_response(
+    tenant_id: UUID,
+    mode: ModelAccessMode,
+    model_ids: tuple[str, ...],
+) -> ModelAccessResponse:
+    return ModelAccessResponse(
+        tenant_id=tenant_id,
+        mode=mode,
+        model_ids=list(model_ids),
+    )
+
+
+@router.get(
+    "/tenants/{tenant_id}/model-access",
+    response_model=ModelAccessResponse,
+)
+async def get_tenant_model_access(
+    tenant_id: UUID,
+    container: Annotated[Container, Depends(get_container)],
+) -> ModelAccessResponse:
+    access = await container.tenants.get_model_access(tenant_id)
+    if access is None:
+        raise _not_found(tenant_id)
+    return _model_access_response(tenant_id, access.mode, access.model_ids)
+
+
+@router.put(
+    "/tenants/{tenant_id}/model-access",
+    response_model=ModelAccessResponse,
+)
+async def replace_tenant_model_access(
+    tenant_id: UUID,
+    payload: UpdateModelAccessRequest,
+    container: Annotated[Container, Depends(get_container)],
+) -> ModelAccessResponse:
+    tenant = await container.tenants.get_tenant(tenant_id)
+    if tenant is None:
+        raise _not_found(tenant_id)
+
+    model_ids = (
+        tuple(sorted(set(payload.model_ids))) if payload.mode is ModelAccessMode.ALLOWLIST else ()
+    )
+    for model_id in model_ids:
+        if await container.models.get_model(model_id) is None:
+            raise ApiError(
+                status_code=404,
+                code=ApiErrorCode.MODEL_NOT_FOUND,
+                message=f"Model '{model_id}' was not found",
+                error_type="invalid_request_error",
+                param="model_ids",
+            )
+
+    access = await container.tenants.set_model_access(
+        tenant_id,
+        mode=payload.mode,
+        model_ids=model_ids,
+    )
+    if access is None:
+        raise _not_found(tenant_id)
+    return _model_access_response(tenant_id, access.mode, access.model_ids)

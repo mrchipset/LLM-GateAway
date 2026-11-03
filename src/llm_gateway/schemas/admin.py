@@ -6,6 +6,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from llm_gateway.providers.base import ProviderName
+from llm_gateway.storage.repositories import ModelAccessMode
 
 
 class CreateApiKeyRequest(BaseModel):
@@ -111,6 +112,43 @@ class TenantDetail(BaseModel):
     monthly_token_quota: int | None = None
     requests_per_minute: int | None = None
     audit_enabled: bool = False
+    model_access_mode: ModelAccessMode = ModelAccessMode.ALL
+
+
+class ModelAccessResponse(BaseModel):
+    """Resolved model permissions for one tenant."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    tenant_id: UUID
+    mode: ModelAccessMode
+    model_ids: list[str] = Field(default_factory=list)
+
+
+class UpdateModelAccessRequest(BaseModel):
+    """Body for `PUT /api/v1/tenants/{tenant_id}/model-access`.
+
+    Replaces the whole permission set. ``mode=allowlist`` with an empty list
+    deliberately blocks every model for that tenant.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    mode: ModelAccessMode
+    model_ids: list[str] = Field(default_factory=list, max_length=1000)
+
+    @field_validator("model_ids")
+    @classmethod
+    def _validate_model_ids(cls, value: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for model_id in value:
+            stripped = model_id.strip()
+            if not stripped:
+                raise ValueError("model_ids must not contain blank values")
+            if len(stripped) > 128:
+                raise ValueError("model_ids entries must be at most 128 characters")
+            normalized.append(stripped)
+        return normalized
 
 
 class TenantListResponse(BaseModel):

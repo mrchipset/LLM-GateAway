@@ -12,6 +12,7 @@ A self-hosted, multi-provider, OpenAI-compatible LLM gateway. Current state: a r
 - API key auth: only SHA-256 hashes are stored; keys support expiry, revocation, and tenant ownership
 - Token usage records and aggregates: input, output, and cache-hit tokens, attributed to tenant, key, and model
 - Tenant-level monthly token quotas and per-minute request limits (429 + `Retry-After`)
+- Tenant-scoped model access control (default allow-all, or an explicit allowlist)
 - Management API: `/api/v1/keys`, `/api/v1/models`, `/api/v1/tenants`, `/api/v1/usage/{summary,by-key,series}`, `/api/v1/audit/*`, protected by the master key
 - PostgreSQL persistence (SQLAlchemy 2 async + Alembic), with an in-memory mode for local development
 - Structured JSON logs, request ids, optional W3C trace-context tracing (OTLP/HTTP), `/healthz`, and `/readyz`
@@ -281,6 +282,24 @@ Invoke-RestMethod -Method Patch `
 - Rate limiting applies only to `POST /v1/chat/completions`; `/v1/models`, health checks, and the management API are not tenant-limited.
 - The PostgreSQL backend uses a single-row atomic counter and supports multiple workers; the memory backend is for local development and tests only.
 
+## Tenant model access
+
+Every tenant defaults to `mode=all`, so existing deployments need no migration step. Switch a tenant to an explicit allowlist to restrict which registered models it can call:
+
+```powershell
+Invoke-RestMethod -Method Put `
+  -Uri http://127.0.0.1:4000/api/v1/tenants/$($tenant.id)/model-access `
+  -Headers @{ Authorization = "Bearer $master" } `
+  -ContentType "application/json" `
+  -Body '{"mode":"allowlist","model_ids":["deepseek-flash"]}'
+```
+
+- `mode=all` (default) allows every enabled model; any `model_ids` in the body is ignored and cleared.
+- `mode=allowlist` allows only the listed models. An empty list blocks every model without touching keys, which is a deliberate way to suspend a tenant.
+- `PUT` replaces the whole set atomically. Unknown model ids return 404 `model_not_found` and nothing is applied.
+- Enforcement: `POST /v1/chat/completions` returns 403 `model_not_allowed`, and `GET /v1/models` lists only the models that tenant may use. Rejected requests create no usage record.
+- Read the current policy with `GET /api/v1/tenants/{id}/model-access`; tenant details also expose `model_access_mode`.
+
 ## Request audit
 
 Request auditing is opt-in twice: set `GATEWAY_AUDIT_ENABLED=true` globally and enable `audit_enabled` for a tenant (Access → Tenants in the console, or `PATCH /api/v1/tenants/{id}`). Either switch being off means zero capture.
@@ -529,6 +548,7 @@ design.md            LLM-GateAway design guidance
 - No billing/invoicing, per-key or per-model limits, or burst shaping (token bucket); quotas are soft.
 - Rate limiting uses a fixed 60-second window at tenant level only; the memory backend counts per process.
 - Creating a key requires `tenant_id` (a breaking change for old callers); there is no tenant delete or rename API.
+- Model access is tenant-scoped only: no per-key scoping, no per-model rate limits, and no console management for it yet.
 - `usage_records` has no retention or archival job and grows with traffic; there is no cost conversion.
 - Tracing covers the server span and per-attempt upstream spans only: no database spans and no tail-based sampling.
 - Metrics expose counters and histograms but ship without dashboards, alert rules, or OTLP metric export; database pool occupancy is not exported yet.

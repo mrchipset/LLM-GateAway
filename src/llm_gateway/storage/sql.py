@@ -27,11 +27,14 @@ from llm_gateway.storage.repositories import (
     DuplicateModelError,
     DuplicateTenantError,
     KeyUsage,
+    ModelAccess,
+    ModelAccessMode,
     ModelConfig,
     ModelUsage,
     Tenant,
     TenantLimitPatch,
     TimeBucket,
+    UnknownModelError,
     UnknownTenantError,
     UsagePoint,
     UsageRecord,
@@ -42,6 +45,7 @@ from llm_gateway.storage.tables import (
     AuditSessionRow,
     AuditTurnDiffRow,
     ModelRow,
+    TenantModelAccessRow,
     TenantRow,
     UsageRow,
 )
@@ -123,6 +127,12 @@ def _to_model(row: ModelRow) -> ModelConfig:
 
 
 def _to_tenant(row: TenantRow) -> Tenant:
+    try:
+        mode = ModelAccessMode(row.model_access_mode)
+    except ValueError as exc:
+        raise ValueError(
+            f"stored tenant '{row.id}' has unknown model_access_mode {row.model_access_mode!r}"
+        ) from exc
     return Tenant(
         id=row.id,
         name=row.name,
@@ -130,6 +140,7 @@ def _to_tenant(row: TenantRow) -> Tenant:
         monthly_token_quota=row.monthly_token_quota,
         requests_per_minute=row.requests_per_minute,
         audit_enabled=row.audit_enabled,
+        model_access_mode=mode,
     )
 
 
@@ -221,6 +232,7 @@ class SqlAlchemyTenantRepository:
             monthly_token_quota=tenant.monthly_token_quota,
             requests_per_minute=tenant.requests_per_minute,
             audit_enabled=tenant.audit_enabled,
+            model_access_mode=tenant.model_access_mode.value,
         )
         try:
             async with self._session_factory() as session, session.begin():
@@ -276,6 +288,62 @@ class SqlAlchemyTenantRepository:
                 )
                 row = await session.scalar(statement)
             return _to_tenant(row) if row is not None else None
+
+    async def get_model_access(self, tenant_id: UUID) -> ModelAccess | None:
+        async with self._session_factory() as session, session.begin():
+            tenant = await session.get(TenantRow, tenant_id)
+            if tenant is None:
+                return None
+            model_ids = (
+                await session.scalars(
+                    select(TenantModelAccessRow.model_id)
+                    .where(TenantModelAccessRow.tenant_id == tenant_id)
+                    .order_by(TenantModelAccessRow.model_id)
+                )
+            ).all()
+        return ModelAccess(
+            mode=ModelAccessMode(tenant.model_access_mode),
+            model_ids=tuple(model_ids),
+        )
+
+    async def set_model_access(
+        self,
+        tenant_id: UUID,
+        *,
+        mode: ModelAccessMode,
+        model_ids: Sequence[str],
+    ) -> ModelAccess | None:
+        unique_ids = tuple(sorted(set(model_ids)))
+        async with self._session_factory() as session, session.begin():
+            tenant = await session.get(TenantRow, tenant_id)
+            if tenant is None:
+                return None
+
+            if unique_ids:
+                existing = set(
+                    (
+                        await session.scalars(
+                            select(ModelRow.id).where(ModelRow.id.in_(unique_ids))
+                        )
+                    ).all()
+                )
+                missing = [model_id for model_id in unique_ids if model_id not in existing]
+                if missing:
+                    raise UnknownModelError(missing[0])
+
+            tenant.model_access_mode = mode.value
+            await session.execute(
+                delete(TenantModelAccessRow).where(TenantModelAccessRow.tenant_id == tenant_id)
+            )
+            if mode is ModelAccessMode.ALLOWLIST:
+                for model_id in unique_ids:
+                    session.add(TenantModelAccessRow(tenant_id=tenant_id, model_id=model_id))
+            await session.flush()
+
+        return ModelAccess(
+            mode=mode,
+            model_ids=unique_ids if mode is ModelAccessMode.ALLOWLIST else (),
+        )
 
 
 class SqlAlchemyApiKeyRepository:

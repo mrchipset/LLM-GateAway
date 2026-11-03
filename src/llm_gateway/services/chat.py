@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
+from uuid import UUID
 
 import anyio
 
@@ -24,7 +25,7 @@ from llm_gateway.schemas.chat import (
     ChatCompletionResponse,
     Usage,
 )
-from llm_gateway.storage.repositories import ModelConfig, ModelRepository
+from llm_gateway.storage.repositories import ModelConfig, ModelRepository, TenantRepository
 
 logger = get_logger(__name__)
 
@@ -196,11 +197,18 @@ class ChatStream:
 
 
 class ChatService:
-    def __init__(self, *, models: ModelRepository, providers: ProviderRegistry) -> None:
+    def __init__(
+        self,
+        *,
+        models: ModelRepository,
+        providers: ProviderRegistry,
+        tenants: TenantRepository,
+    ) -> None:
         self._models = models
         self._providers = providers
+        self._tenants = tenants
 
-    async def resolve_model(self, model_id: str) -> ResolvedModel:
+    async def resolve_model(self, model_id: str, *, tenant_id: UUID) -> ResolvedModel:
         config = await self._models.get_model(model_id)
         if config is None:
             raise _error(
@@ -217,6 +225,18 @@ class ChatService:
                 message=f"Model '{model_id}' is not available",
                 error_type="invalid_request_error",
             )
+        access = await self._tenants.get_model_access(tenant_id)
+        if access is None or not access.allows(model_id):
+            logger.warning(
+                "model_not_allowed",
+                extra={"tenant_id": str(tenant_id), "model_id": model_id},
+            )
+            raise _error(
+                status_code=403,
+                code=ApiErrorCode.MODEL_NOT_ALLOWED,
+                message=f"Model '{model_id}' is not available to this tenant",
+                error_type="permission_error",
+            )
         try:
             provider = self._providers.get(config.provider)
         except ProviderNotConfiguredError as exc:
@@ -228,8 +248,10 @@ class ChatService:
             ) from exc
         return ResolvedModel(config=config, provider=provider)
 
-    async def complete(self, request: ChatCompletionRequest) -> ChatCompletionResult:
-        resolved = await self.resolve_model(request.model)
+    async def complete(
+        self, request: ChatCompletionRequest, *, tenant_id: UUID
+    ) -> ChatCompletionResult:
+        resolved = await self.resolve_model(request.model, tenant_id=tenant_id)
         try:
             response = await resolved.provider.complete(
                 upstream_model=resolved.config.upstream_model,
@@ -247,8 +269,8 @@ class ChatService:
             model=resolved.config,
         )
 
-    async def open_stream(self, request: ChatCompletionRequest) -> ChatStream:
-        resolved = await self.resolve_model(request.model)
+    async def open_stream(self, request: ChatCompletionRequest, *, tenant_id: UUID) -> ChatStream:
+        resolved = await self.resolve_model(request.model, tenant_id=tenant_id)
         stream_options = request.stream_options or {}
         client_wants_usage = bool(stream_options.get("include_usage"))
         upstream_request = request.model_copy(

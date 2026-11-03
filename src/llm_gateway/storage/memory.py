@@ -19,6 +19,8 @@ from llm_gateway.storage.repositories import (
     DuplicateModelError,
     DuplicateTenantError,
     KeyUsage,
+    ModelAccess,
+    ModelAccessMode,
     ModelConfig,
     ModelUsage,
     Tenant,
@@ -82,6 +84,7 @@ class InMemoryTenantRepository:
 
     def __init__(self) -> None:
         self._tenants: dict[UUID, Tenant] = {}
+        self._model_access: dict[UUID, tuple[ModelAccessMode, tuple[str, ...]]] = {}
         self._lock = asyncio.Lock()
 
     async def create_tenant(self, tenant: Tenant) -> Tenant:
@@ -127,6 +130,39 @@ class InMemoryTenantRepository:
             updated = replace(tenant, **changes)  # pyright: ignore[reportArgumentType]
             self._tenants[tenant_id] = updated
             return updated
+
+    async def get_model_access(self, tenant_id: UUID) -> ModelAccess | None:
+        async with self._lock:
+            tenant = self._tenants.get(tenant_id)
+            if tenant is None:
+                return None
+            mode, model_ids = self._model_access.get(
+                tenant_id,
+                (tenant.model_access_mode, ()),
+            )
+            return ModelAccess(mode=mode, model_ids=model_ids)
+
+    async def set_model_access(
+        self,
+        tenant_id: UUID,
+        *,
+        mode: ModelAccessMode,
+        model_ids: Sequence[str],
+    ) -> ModelAccess | None:
+        unique_ids = tuple(sorted(set(model_ids)))
+        async with self._lock:
+            tenant = self._tenants.get(tenant_id)
+            if tenant is None:
+                return None
+            self._model_access[tenant_id] = (
+                mode,
+                unique_ids if mode is ModelAccessMode.ALLOWLIST else (),
+            )
+            self._tenants[tenant_id] = replace(tenant, model_access_mode=mode)
+            return ModelAccess(
+                mode=mode,
+                model_ids=unique_ids if mode is ModelAccessMode.ALLOWLIST else (),
+            )
 
 
 class InMemoryApiKeyRepository:
