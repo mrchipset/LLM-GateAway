@@ -13,6 +13,7 @@ from llm_gateway.config import Settings
 from llm_gateway.container import Container, build_container
 from llm_gateway.errors import register_error_handlers
 from llm_gateway.logging import configure_logging
+from llm_gateway.metrics import configure_metrics
 from llm_gateway.request_context import RequestContextMiddleware
 from llm_gateway.telemetry import configure_telemetry
 
@@ -46,6 +47,7 @@ def create_app(
         lifespan=lifespan,
     )
     app.state.container = resolved_container
+    configure_metrics(resolved_settings)
     telemetry = resolved_container.telemetry
     if telemetry is None:
         telemetry = configure_telemetry(resolved_settings)

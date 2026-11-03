@@ -12,6 +12,7 @@ from opentelemetry import trace
 from opentelemetry.trace import Span, SpanKind, Tracer
 from pydantic import ValidationError
 
+from llm_gateway.metrics import current_metrics
 from llm_gateway.providers.base import (
     ProviderConnectionError,
     ProviderError,
@@ -134,6 +135,17 @@ class OpenAIProvider:
         span.set_attribute("llm.retryable", exc.retryable)
         mark_span_error(span, status_code=getattr(exc, "status_code", None))
 
+    def _record_attempt(self, *, model_id: str, status: str, started: float) -> None:
+        instruments = current_metrics()
+        attributes = {"provider": self.name.value, "model": model_id}
+        instruments.upstream_requests.add(1, {**attributes, "status": status})
+        instruments.upstream_duration.record(perf_counter() - started, attributes)
+
+    @staticmethod
+    def _status_label(exc: ProviderError) -> str:
+        status_code = getattr(exc, "status_code", None)
+        return str(status_code) if status_code is not None else "error"
+
     async def _post(self, payload: dict[str, object], *, headers: dict[str, str]) -> httpx.Response:
         try:
             return await self._client.post(
@@ -221,9 +233,19 @@ class OpenAIProvider:
                     )
                     if result.usage is not None:
                         span.set_attribute("llm.total_tokens", result.usage.total_tokens)
+                    self._record_attempt(
+                        model_id=request.model,
+                        status=str(response.status_code),
+                        started=started,
+                    )
                     return result
             except ProviderError as exc:
                 self._mark_attempt_failed(span, exc)
+                self._record_attempt(
+                    model_id=request.model,
+                    status=self._status_label(exc),
+                    started=started,
+                )
                 if not exc.retryable or attempt >= self._retry_policy.max_attempts:
                     raise
                 await self._sleep_before_retry(attempt)
@@ -265,6 +287,11 @@ class OpenAIProvider:
             except ProviderError as exc:
                 self._mark_attempt_failed(span, exc)
                 span.end()
+                self._record_attempt(
+                    model_id=request.model,
+                    status=self._status_label(exc),
+                    started=started,
+                )
                 if not exc.retryable or attempt >= self._retry_policy.max_attempts:
                     raise
                 await self._sleep_before_retry(attempt)
@@ -273,6 +300,7 @@ class OpenAIProvider:
         seen_finish = False
         first_chunk = True
         completed = False
+        outcome = "cancelled"
         try:
             async for data in self._iter_sse_data(response):
                 if data == "[DONE]":
@@ -281,9 +309,11 @@ class OpenAIProvider:
                     break
                 chunk = self._parse_chunk(data)
                 if first_chunk:
-                    span.set_attribute(
-                        "llm.ttft_ms",
-                        round((perf_counter() - started) * 1000, 2),
+                    ttft = perf_counter() - started
+                    span.set_attribute("llm.ttft_ms", round(ttft * 1000, 2))
+                    current_metrics().upstream_ttft.record(
+                        ttft,
+                        {"provider": self.name.value, "model": request.model},
                     )
                     first_chunk = False
                 if any(choice.finish_reason is not None for choice in chunk.choices):
@@ -292,13 +322,20 @@ class OpenAIProvider:
             if not seen_done and not seen_finish:
                 raise ProviderResponseError("Upstream stream ended before completion")
             completed = True
+            outcome = "ok"
         except ProviderError as exc:
+            outcome = self._status_label(exc)
             self._mark_attempt_failed(span, exc)
             raise
         finally:
             await response.aclose()
             span.set_attribute("llm.stream_completed", completed)
             span.end()
+            self._record_attempt(
+                model_id=request.model,
+                status=outcome,
+                started=started,
+            )
 
     async def _iter_sse_data(self, response: httpx.Response) -> AsyncIterator[str]:
         decoder = codecs.getincrementaldecoder("utf-8")("strict")

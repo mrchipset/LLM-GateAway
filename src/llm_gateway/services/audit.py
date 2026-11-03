@@ -23,6 +23,7 @@ from llm_gateway.clock import Clock
 from llm_gateway.config import Settings
 from llm_gateway.errors import ApiError, ApiErrorCode
 from llm_gateway.logging import get_logger
+from llm_gateway.metrics import current_metrics
 from llm_gateway.schemas.chat import ChatCompletionRequest, Usage
 from llm_gateway.services.audit_diff import (
     ChangeType,
@@ -543,6 +544,7 @@ async def record_audit_safely(
     except ApiError:
         raise
     except Exception as exc:
+        current_metrics().audit_write_failures.add(1)
         logger.warning(
             "audit_record_failed",
             extra=_log_fields(

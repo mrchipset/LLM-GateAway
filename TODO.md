@@ -206,11 +206,13 @@
   - 范围：独立表（actor、action、target_type、target_id、before/after、request_id、时间），只记录可审计的元数据，不记录密钥明文。
   - 验收：写接口全覆盖并有单元测试；审计写入失败不阻断业务但必须可观测；只读角色可查询但不能修改。
 
-- [ ] **G0.4 指标与告警最小集**
+- [x] **G0.4 指标与告警最小集**
   - 现状：只有 JSON 日志与 health/ready，无任何 metrics 端点，无法做 SLO、告警与自动扩缩。
   - 范围：`/metrics`（Prometheus 格式，独立端口或仅内网）；低基数标签限定在 provider、model、status、error_code、route；不把 tenant/key/request_id 作为标签。
   - 必测指标：请求量、错误率、P50/P95/P99 延迟、上游首 token 延迟、限流/配额拒绝数、usage/audit 写入失败数、连接池占用。
   - 验收：压测时能通过指标定位“是限流拒了、上游慢、还是 DB 慢”；标签基数可估算且有上限；指标端点不暴露在公网入口。
+  - 进度（2026-11-03）：Prometheus `/metrics` 已落地（独立端口、默认关闭、绑定失败不阻断流量）；已覆盖 `gateway_requests`、`gateway_request_duration_seconds`、`gateway_upstream_requests`、`gateway_upstream_duration_seconds`、`gateway_upstream_ttft_seconds`、`gateway_rejections`、`gateway_usage_write_failures`、`gateway_audit_write_failures`。`route` 使用路由模板而非具体路径。
+  - 未做：告警规则与看板、连接池占用、OTLP metrics 导出；验收中的“压测定位”依赖 G1.7 压测基线。
 
 - [x] **G0.5 分布式追踪与 traceparent 透传**
   - 现状：无 tracing，不解析也不透传 W3C Trace Context；provider 调用无 span。

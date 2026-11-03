@@ -50,6 +50,10 @@ class Settings(BaseSettings):
     tracing_sample_ratio: float = Field(default=0.1, ge=0, le=1)
     tracing_service_name: str = "llm-gateway"
     tracing_export_timeout_seconds: float = Field(default=5.0, gt=0)
+    metrics_enabled: bool = False
+    metrics_host: str = "127.0.0.1"
+    metrics_port: int = Field(default=9464, ge=1, le=65535)
+    metrics_service_name: str = "llm-gateway"
 
     @field_validator("log_level")
     @classmethod

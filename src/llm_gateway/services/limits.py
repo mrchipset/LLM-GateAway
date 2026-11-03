@@ -10,6 +10,7 @@ from llm_gateway.auth.dependencies import AuthenticatedKey, require_api_key
 from llm_gateway.container import Container, get_container
 from llm_gateway.errors import ApiError, ApiErrorCode
 from llm_gateway.logging import get_logger
+from llm_gateway.metrics import current_metrics
 
 logger = get_logger(__name__)
 
@@ -57,6 +58,7 @@ async def enforce_inference_limits(
                     "used": used,
                 },
             )
+            current_metrics().rejections.add(1, {"reason": "tenant_quota"})
             raise ApiError(
                 status_code=429,
                 code=ApiErrorCode.TENANT_QUOTA_EXCEEDED,
@@ -80,6 +82,7 @@ async def enforce_inference_limits(
                     "retry_after": retry_after,
                 },
             )
+            current_metrics().rejections.add(1, {"reason": "rate_limit"})
             raise ApiError(
                 status_code=429,
                 code=ApiErrorCode.RATE_LIMITED,

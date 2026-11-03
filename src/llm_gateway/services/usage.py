@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 
 from llm_gateway.clock import Clock
 from llm_gateway.logging import get_logger
+from llm_gateway.metrics import current_metrics
 from llm_gateway.providers.base import ProviderName
 from llm_gateway.schemas.chat import Usage
 from llm_gateway.storage.repositories import UsageRecord, UsageRepository
@@ -109,6 +110,7 @@ async def record_usage_safely(
                 "model_id": context.model_id,
             },
         )
+        current_metrics().usage_write_failures.add(1, {"reason": "unavailable"})
         return
 
     try:
@@ -123,3 +125,4 @@ async def record_usage_safely(
                 "error": type(exc).__name__,
             },
         )
+        current_metrics().usage_write_failures.add(1, {"reason": "write_failed"})

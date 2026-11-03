@@ -310,6 +310,32 @@ GATEWAY_TRACING_SAMPLE_RATIO=0.1
 
 With tracing disabled nothing is recorded and no `traceparent` is sent upstream. Database spans, metrics, and tail-based sampling are not implemented yet. Design rationale: [`notes/observability.md`](notes/observability.md).
 
+## Metrics
+
+Metrics are off by default. When enabled, Prometheus scrapes a dedicated port (never the API port):
+
+| Metric | Type | Labels |
+|---|---|---|
+| `gateway_requests` | counter | `route`, `method`, `status_code` |
+| `gateway_request_duration_seconds` | histogram | `route` |
+| `gateway_upstream_requests` | counter | `provider`, `model`, `status` |
+| `gateway_upstream_duration_seconds` | histogram | `provider`, `model` |
+| `gateway_upstream_ttft_seconds` | histogram | `provider`, `model` |
+| `gateway_rejections` | counter | `reason` |
+| `gateway_usage_write_failures` | counter | `reason` |
+| `gateway_audit_write_failures` | counter | — |
+
+```dotenv
+GATEWAY_METRICS_ENABLED=true
+GATEWAY_METRICS_HOST=127.0.0.1
+GATEWAY_METRICS_PORT=9464
+```
+
+- `route` is the matched route template, never the concrete path, so ids cannot become label values. Tenant, key, request id, prompts, and completions are never labels.
+- Time to first token is a histogram, not just a span attribute: a per-request value in a trace cannot be aggregated into P95.
+- If the port cannot bind, the gateway logs `metrics_endpoint_bind_failed` and keeps serving traffic; it does not lose metrics silently and does not crash.
+- Dashboards, alert rules, and OTLP metric export are not included.
+
 ## Configuration
 
 | Variable | Description ||---|---|
@@ -335,6 +361,10 @@ With tracing disabled nothing is recorded and no `traceparent` is sent upstream.
 | `GATEWAY_TRACING_SAMPLE_RATIO` | Head-based sampling ratio in `[0, 1]`, default `0.1`; an upstream decision is honored |
 | `GATEWAY_TRACING_SERVICE_NAME` | `service.name` resource attribute, default `llm-gateway` |
 | `GATEWAY_TRACING_EXPORT_TIMEOUT_SECONDS` | OTLP export timeout, default 5 |
+| `GATEWAY_METRICS_ENABLED` | Prometheus `/metrics` endpoint on a separate port, default `false` |
+| `GATEWAY_METRICS_HOST` | Metrics bind address, default `127.0.0.1` |
+| `GATEWAY_METRICS_PORT` | Metrics bind port, default `9464` |
+| `GATEWAY_METRICS_SERVICE_NAME` | `service.name` resource attribute, default `llm-gateway` |
 
 `production` requires the `postgres` backend, disables the fake provider, and rejects placeholder or short master keys, so sample configuration cannot be deployed by accident.
 
@@ -500,7 +530,8 @@ design.md            LLM-GateAway design guidance
 - Rate limiting uses a fixed 60-second window at tenant level only; the memory backend counts per process.
 - Creating a key requires `tenant_id` (a breaking change for old callers); there is no tenant delete or rename API.
 - `usage_records` has no retention or archival job and grows with traffic; there is no cost conversion.
-- Tracing covers the server span and per-attempt upstream spans only: no database spans, no metrics endpoint, and no tail-based sampling.
+- Tracing covers the server span and per-attempt upstream spans only: no database spans and no tail-based sampling.
+- Metrics expose counters and histograms but ship without dashboards, alert rules, or OTLP metric export; database pool occupancy is not exported yet.
 - A stream that disconnects before usage arrives leaves no record; write timeouts or failures only log a warning.
 - Model configuration supports create, list, and delete only; changing it requires delete and recreate.
 - `/v1/models` returns at most 1000 entries; the management API uses offset pagination.

@@ -1,4 +1,4 @@
-# Observability: why tracing, and what `traceparent` is
+﻿# Observability: why tracing, and what `traceparent` is
 
 Status: design note for TODO G0.5 (tracing) and the reasoning behind G0.4 (metrics).
 Scope: gateway data plane. Metrics design is referenced but not specified here.
@@ -22,7 +22,7 @@ answered by the current telemetry:
 Enterprise requirements that depend on this: SLO attribution, billing dispute forensics,
 noisy-tenant investigation, incident timelines.
 
-## 2. Why not logs or metrics
+## 2. Why traces, and what logs and metrics cannot do
 
 - **Metrics** are aggregated. They answer "is the system healthy", not "why was this request
   slow or expensive". They also cannot carry per-request causality because request-scoped
@@ -166,7 +166,35 @@ attempts never appear falsely sequential.
 `llm.ttft_ms` is the metric the system is currently missing entirely, and it is the most
 important latency number for an LLM gateway.
 
-## 5. Consequences
+## 5. Metrics
+
+Metrics answer a different question than traces: "is the system healthy, and did it get
+worse", aggregated over time and app instances. They are not a substitute for traces and
+traces are not a substitute for them.
+
+Decisions:
+
+- **Prometheus, separate port.** Scraping is the dominant pattern for self-hosted gateways.
+  The endpoint binds `GATEWAY_METRICS_HOST:GATEWAY_METRICS_PORT` and defaults to loopback, so
+  enabling it never widens the inference API surface. A failed bind logs
+  `metrics_endpoint_bind_failed` and continues serving traffic.
+- **Narrow labels only.** `provider`, `model`, `route` template, `status_code`, `error`
+  class, rejection reason. Never tenant, key, request id, prompt, completion, or a concrete
+  path. Route labels come from the matched route template; unmatched requests collapse to
+  `unmatched`, which also removes a cardinality attack vector.
+- **TTFT is a histogram, not only a span attribute.** A trace holds one request's value; a
+  histogram is what makes P50/P95 queryable. The same applies to request and upstream
+  duration.
+- **Instruments are process-global and thread-safe.** They are created once and replaced at
+  startup; with no provider installed they are no-ops, so importing a call site is always
+  safe and tests never need a live endpoint.
+- **No per-attempt spans required for metrics.** Upstream counters carry `status`, so retries
+  are visible as two increments with different statuses even without a trace backend.
+
+Not covered in the first iteration: database pool occupancy, queue depth, per-provider
+budget gauges, dashboard JSON, alert rules, and OTLP metric export.
+
+## 6. Consequences
 
 Positive:
 - retries and fallbacks become explainable;
@@ -181,16 +209,18 @@ Negative:
 - an unreachable OTLP collector must never block requests: export is batched and
   fire-and-forget, and shutdown must flush with a bounded timeout.
 
-## 6. Rollout
+## 7. Rollout
 
-1. Config + telemetry module + server span + `trace_id` in JSON logs.
-2. Client spans with attempt/TTFT/status attributes and outbound `traceparent`.
-3. Nullable `trace_id` on `usage_records` and `audit_requests` + migration.
-4. Later: DB write spans, tail sampling, metrics endpoint (TODO G0.4).
+1. Config + telemetry module + server span + `trace_id` in JSON logs. Done.
+2. Client spans with attempt/TTFT/status attributes and outbound `traceparent`. Done.
+3. Nullable `trace_id` on `usage_records` and `audit_requests` + migration `0006`. Done.
+4. Prometheus metrics with narrow labels and TTFT histograms (TODO G0.4). Done.
+5. Later: database pool metrics, DB write spans, tail sampling, dashboards and alerts.
 
-## 7. References
+## 8. References
 
 - W3C Trace Context: https://www.w3.org/TR/trace-context/
 - OpenTelemetry Python SDK and OTLP/HTTP exporter
 - `src/llm_gateway/request_context.py` (existing middleware and access log)
 - `src/llm_gateway/providers/openai.py` (retry loop that must stay inside one trace)
+

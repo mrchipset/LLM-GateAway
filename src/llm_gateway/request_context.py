@@ -12,6 +12,7 @@ from opentelemetry import trace
 from opentelemetry.trace import Span, SpanKind, Status, StatusCode
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from llm_gateway.metrics import current_metrics
 from llm_gateway.telemetry import Telemetry, extract_trace_context
 
 REQUEST_ID_HEADER = "x-request-id"
@@ -56,6 +57,17 @@ def _bind_request_id(scope: Scope, request_id: str) -> None:
         state = {}
         scope["state"] = state
     state["request_id"] = request_id
+
+
+def _route_label(scope: Scope) -> str:
+    """Return the matched route template, never the concrete path.
+
+    Concrete paths contain ids and would explode metric cardinality; unmatched
+    requests collapse into a single label for the same reason.
+    """
+    route = scope.get("route")
+    path = getattr(route, "path", None)
+    return path if isinstance(path, str) and path else "unmatched"
 
 
 class RequestContextMiddleware:
@@ -127,13 +139,22 @@ class RequestContextMiddleware:
                         },
                     )
         finally:
+            elapsed_seconds = perf_counter() - start
+            route = _route_label(scope)
+            instruments = current_metrics()
+            instruments.requests.add(
+                1,
+                {
+                    "route": route,
+                    "method": scope.get("method", ""),
+                    "status_code": str(status_code),
+                },
+            )
+            instruments.request_duration.record(elapsed_seconds, {"route": route})
             span.set_attribute("http.response.status_code", status_code)
             if client_disconnected:
                 span.set_attribute("llm.client_disconnected", True)
-            span.set_attribute(
-                "llm.duration_ms",
-                round((perf_counter() - start) * 1000, 2),
-            )
+            span.set_attribute("llm.duration_ms", round(elapsed_seconds * 1000, 2))
             if status_code >= 500:
                 span.set_status(Status(StatusCode.ERROR))
             span.end()

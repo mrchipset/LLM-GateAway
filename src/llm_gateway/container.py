@@ -8,6 +8,7 @@ from fastapi import Request
 
 from llm_gateway.clock import Clock, SystemClock
 from llm_gateway.config import Settings, StorageBackend
+from llm_gateway.metrics import configure_metrics, shutdown_metrics
 from llm_gateway.providers.factory import build_providers
 from llm_gateway.providers.registry import ProviderRegistry
 from llm_gateway.storage.db import Database
@@ -91,6 +92,7 @@ class Container:
                 await self.database.aclose()
             if self.telemetry is not None:
                 self.telemetry.shutdown()
+            shutdown_metrics()
 
 
 def get_container(request: Request) -> Container:
@@ -102,6 +104,7 @@ def get_container(request: Request) -> Container:
 
 def build_container(settings: Settings, *, telemetry: Telemetry | None = None) -> Container:
     clock = SystemClock()
+    configure_metrics(settings)
     resolved_telemetry = telemetry if telemetry is not None else configure_telemetry(settings)
     providers = build_providers(settings, clock=clock, tracer=resolved_telemetry.tracer)
 
