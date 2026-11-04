@@ -25,6 +25,28 @@ export interface ModelListResponse {
   offset: number;
 }
 
+export type ModelProvider = 'openai' | 'deepseek' | 'fake';
+
+export interface CreateModelInput {
+  id: string;
+  provider: ModelProvider;
+  upstream_model: string;
+  enabled: boolean;
+}
+
+export type ModelAccessMode = 'all' | 'allowlist';
+
+export interface TenantModelAccess {
+  tenant_id: string;
+  mode: ModelAccessMode;
+  model_ids: string[];
+}
+
+export interface TenantModelAccessInput {
+  mode: ModelAccessMode;
+  model_ids: string[];
+}
+
 export interface TenantSummary {
   id: string;
   name: string;
@@ -32,6 +54,7 @@ export interface TenantSummary {
   monthly_token_quota: number | null;
   requests_per_minute: number | null;
   audit_enabled: boolean;
+  model_access_mode: ModelAccessMode;
 }
 
 export interface TenantListResponse {
@@ -351,7 +374,22 @@ function isTenantSummary(value: unknown): value is TenantSummary {
     typeof value.created_at === 'string' &&
     isNullableCount(value.monthly_token_quota) &&
     isNullableCount(value.requests_per_minute) &&
-    typeof value.audit_enabled === 'boolean'
+    typeof value.audit_enabled === 'boolean' &&
+    isModelAccessMode(value.model_access_mode)
+  );
+}
+
+function isModelAccessMode(value: unknown): value is ModelAccessMode {
+  return value === 'all' || value === 'allowlist';
+}
+
+function isTenantModelAccess(value: unknown): value is TenantModelAccess {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.tenant_id === 'string' &&
+    isModelAccessMode(value.mode) &&
+    Array.isArray(value.model_ids) &&
+    value.model_ids.every((modelId) => typeof modelId === 'string')
   );
 }
 
@@ -812,7 +850,7 @@ async function sendAdmin(path: string, masterKey: string, signal?: AbortSignal):
 async function sendAdminJson(
   path: string,
   masterKey: string,
-  method: 'POST' | 'PATCH',
+  method: 'POST' | 'PATCH' | 'PUT',
   body: unknown,
   signal?: AbortSignal,
 ): Promise<Response> {
@@ -979,6 +1017,56 @@ export async function listTenants(
     limit: payload.limit,
     offset: payload.offset,
   };
+}
+
+export async function createModel(
+  masterKey: string,
+  input: CreateModelInput,
+  signal?: AbortSignal,
+): Promise<ModelSummary> {
+  const response = await sendAdminJson('/api/v1/models', masterKey, 'POST', input, signal);
+  const payload = await readJson(response, '/api/v1/models');
+  if (!isModelSummary(payload)) {
+    throw unexpectedPayload(response, 'model');
+  }
+  return payload;
+}
+
+export async function deleteModel(
+  masterKey: string,
+  modelId: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  await sendAdminDelete(`/api/v1/models/${encodeURIComponent(modelId)}`, masterKey, signal);
+}
+
+export async function getTenantModelAccess(
+  masterKey: string,
+  tenantId: string,
+  signal?: AbortSignal,
+): Promise<TenantModelAccess> {
+  const path = `/api/v1/tenants/${encodeURIComponent(tenantId)}/model-access`;
+  const response = await sendAdmin(path, masterKey, signal);
+  const payload = await readJson(response, path);
+  if (!isTenantModelAccess(payload)) {
+    throw unexpectedPayload(response, 'tenant model access');
+  }
+  return payload;
+}
+
+export async function replaceTenantModelAccess(
+  masterKey: string,
+  tenantId: string,
+  input: TenantModelAccessInput,
+  signal?: AbortSignal,
+): Promise<TenantModelAccess> {
+  const path = `/api/v1/tenants/${encodeURIComponent(tenantId)}/model-access`;
+  const response = await sendAdminJson(path, masterKey, 'PUT', input, signal);
+  const payload = await readJson(response, path);
+  if (!isTenantModelAccess(payload)) {
+    throw unexpectedPayload(response, 'tenant model access');
+  }
+  return payload;
 }
 
 export async function createTenant(

@@ -61,7 +61,7 @@ describe('model registry', () => {
     expect(screen.queryByText('150 models')).not.toBeInTheDocument();
   });
 
-  it('shows the registration hint with a curl command when the registry is empty', async () => {
+  it('invites registration from the empty registry state', async () => {
     installFetchMock();
     const user = userEvent.setup();
     renderApp();
@@ -70,8 +70,11 @@ describe('model registry', () => {
 
     expect(await screen.findByText('No models registered')).toBeInTheDocument();
     expect(screen.getByText('0 models')).toBeInTheDocument();
-    expect(screen.getByText(/GATEWAY_MASTER_KEY/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Copy command' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Register your first model' })).toBeInTheDocument();
+    expect(screen.queryByText(/GATEWAY_MASTER_KEY/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Register your first model' }));
+    expect(await screen.findByRole('dialog', { name: 'Register model' })).toBeInTheDocument();
   });
 
   it('shows the HTTP status, message, code, and request id when the request is rejected', async () => {

@@ -6,9 +6,13 @@ export interface Routes {
   '/healthz'?: RouteHandler;
   '/readyz'?: RouteHandler;
   '/api/v1/models'?: RouteHandler;
+  'POST /api/v1/models'?: RouteHandler;
+  'DELETE /api/v1/models/:id'?: RouteHandler;
   '/api/v1/tenants'?: RouteHandler;
   'POST /api/v1/tenants'?: RouteHandler;
   'PATCH /api/v1/tenants/:id'?: RouteHandler;
+  'GET /api/v1/tenants/:id/model-access'?: RouteHandler;
+  'PUT /api/v1/tenants/:id/model-access'?: RouteHandler;
   '/api/v1/keys'?: RouteHandler;
   'POST /api/v1/keys'?: RouteHandler;
   'DELETE /api/v1/keys/:id'?: RouteHandler;
@@ -41,12 +45,24 @@ const defaultRoutes: Record<keyof Routes, RouteHandler> = {
   '/healthz': () => jsonResponse({ status: 'ok', version: '0.1.0' }),
   '/readyz': () => jsonResponse({ status: 'ok', checks: { database: 'ok' } }),
   '/api/v1/models': () => jsonResponse({ items: [], total: 0, limit: 100, offset: 0 }),
+  'POST /api/v1/models': () => {
+    throw new Error('Unexpected request: POST /api/v1/models');
+  },
+  'DELETE /api/v1/models/:id': () => {
+    throw new Error('Unexpected request: DELETE /api/v1/models/:id');
+  },
   '/api/v1/tenants': () => jsonResponse({ items: [], total: 0, limit: 100, offset: 0 }),
   'POST /api/v1/tenants': () => {
     throw new Error('Unexpected request: POST /api/v1/tenants');
   },
   'PATCH /api/v1/tenants/:id': () => {
     throw new Error('Unexpected request: PATCH /api/v1/tenants/:id');
+  },
+  'GET /api/v1/tenants/:id/model-access': () => {
+    throw new Error('Unexpected request: GET /api/v1/tenants/:id/model-access');
+  },
+  'PUT /api/v1/tenants/:id/model-access': () => {
+    throw new Error('Unexpected request: PUT /api/v1/tenants/:id/model-access');
   },
   '/api/v1/keys': () =>
     jsonResponse({ items: [], total: 0, limit: 20, offset: 0, tenant_id: null }),
@@ -109,6 +125,21 @@ function resolveHandler(routes: Routes, url: URL, init: RequestInit): RouteHandl
 
   if (method === 'PATCH' && url.pathname.startsWith('/api/v1/tenants/')) {
     const handler = routes['PATCH /api/v1/tenants/:id'];
+    if (handler !== undefined) return handler;
+  }
+
+  if (/^\/api\/v1\/tenants\/[^/]+\/model-access$/.test(url.pathname)) {
+    const handler =
+      method === 'PUT'
+        ? routes['PUT /api/v1/tenants/:id/model-access']
+        : method === 'GET'
+          ? routes['GET /api/v1/tenants/:id/model-access']
+          : undefined;
+    if (handler !== undefined) return handler;
+  }
+
+  if (method === 'DELETE' && url.pathname.startsWith('/api/v1/models/')) {
+    const handler = routes['DELETE /api/v1/models/:id'];
     if (handler !== undefined) return handler;
   }
 

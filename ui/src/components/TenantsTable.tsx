@@ -1,16 +1,38 @@
 import type { TenantSummary } from '../api/client';
 import { formatCreatedAt, formatExactNumber } from '../lib/format';
 import { Button } from './Button';
-import { EditIcon } from './Icons';
+import { AccessIcon, EditIcon } from './Icons';
 import { TenantLimitFacts } from './TenantLimitFacts';
 
 interface TenantsTableProps {
   tenants: TenantSummary[];
   onEdit: (tenant: TenantSummary, trigger: HTMLButtonElement) => void;
+  onEditModelAccess: (tenant: TenantSummary, trigger: HTMLButtonElement) => void;
 }
 
 function shortId(tenant: TenantSummary): string {
   return `${tenant.id.slice(0, 8)}…`;
+}
+
+function ModelAccessBadge({ mode }: { mode: TenantSummary['model_access_mode'] }) {
+  const label = mode === 'all' ? 'All models' : 'Allowlist';
+  return (
+    <span
+      title={
+        mode === 'all'
+          ? 'Every enabled model is available to this tenant'
+          : 'Only models on the allowlist are available to this tenant'
+      }
+      className={`inline-flex items-center gap-1 whitespace-nowrap rounded border px-1.5 py-0.5 font-mono text-[10.5px] font-medium ${
+        mode === 'all'
+          ? 'border-line bg-surface text-ink-muted'
+          : 'border-line-strong bg-surface-sunken text-ink'
+      }`}
+    >
+      <span aria-hidden="true" className="size-1.5 rounded-full bg-current" />
+      {label}
+    </span>
+  );
 }
 
 function AuditStatusBadge({ enabled }: { enabled: boolean }) {
@@ -46,6 +68,7 @@ function EditLimitButton({
       variant="ghost"
       onClick={(event) => onEdit(tenant, event.currentTarget)}
       aria-label={`Edit limits for ${tenant.name}`}
+      title="Edit limits"
       className="shrink-0 px-2 py-1 text-[12px]"
     >
       <EditIcon className="size-3.5" />
@@ -54,33 +77,58 @@ function EditLimitButton({
   );
 }
 
-export function TenantsTable({ tenants, onEdit }: TenantsTableProps) {
+function ModelAccessButton({
+  tenant,
+  onEditModelAccess,
+  withLabel = false,
+}: {
+  tenant: TenantSummary;
+  onEditModelAccess: TenantsTableProps['onEditModelAccess'];
+  withLabel?: boolean;
+}) {
+  return (
+    <Button
+      variant="ghost"
+      onClick={(event) => onEditModelAccess(tenant, event.currentTarget)}
+      aria-label={`Model access for ${tenant.name}`}
+      title="Model access"
+      className="shrink-0 px-2 py-1 text-[12px]"
+    >
+      <AccessIcon className="size-3.5" />
+      {withLabel && <span>Model access</span>}
+    </Button>
+  );
+}
+
+export function TenantsTable({ tenants, onEdit, onEditModelAccess }: TenantsTableProps) {
   return (
     <>
       <div className="hidden md:block">
         <table className="w-full table-fixed border-collapse text-left text-[13px]">
           <caption className="sr-only">Tenants</caption>
           <colgroup>
-            <col className="w-[23%]" />
-            <col className="w-[13%]" />
-            <col className="w-[19%]" />
-            <col className="w-[20%]" />
-            <col className="w-[13%]" />
+            <col className="w-[21%]" />
             <col className="w-[12%]" />
+            <col className="w-[18%]" />
+            <col className="w-[22%]" />
+            <col className="w-[11%]" />
+            <col className="w-[16%]" />
           </colgroup>
           <thead>
             <tr className="border-b border-line">
-              {['Name', 'ID', 'Created (UTC)', 'Limits', 'Audit', 'Actions'].map((label, index) => (
-                <th
-                  key={label}
-                  scope="col"
-                  className={`py-2 pr-3 font-mono text-[10px] font-medium uppercase tracking-[0.1em] text-ink-muted last:pr-0 ${
-                    index === 5 ? 'text-right' : 'text-left'
-                  }`}
-                >
-                  {label}
-                </th>
-              ))}
+              {['Name', 'ID', 'Created (UTC)', 'Limits / access', 'Audit', 'Actions'].map(
+                (label, index) => (
+                  <th
+                    key={label}
+                    scope="col"
+                    className={`py-2 pr-3 font-mono text-[10px] font-medium uppercase tracking-[0.1em] text-ink-muted last:pr-0 ${
+                      index === 5 ? 'text-right' : 'text-left'
+                    }`}
+                  >
+                    {label}
+                  </th>
+                ),
+              )}
             </tr>
           </thead>
           <tbody className="divide-y divide-line">
@@ -99,12 +147,18 @@ export function TenantsTable({ tenants, onEdit }: TenantsTableProps) {
                 </td>
                 <td className="py-2.5 pr-3 align-top">
                   <TenantLimitFacts tenant={tenant} variant="compact" />
+                  <span className="mt-1 block">
+                    <ModelAccessBadge mode={tenant.model_access_mode} />
+                  </span>
                 </td>
                 <td className="py-2.5 pr-3 align-top">
                   <AuditStatusBadge enabled={tenant.audit_enabled} />
                 </td>
                 <td className="py-2.5 text-right align-top">
-                  <EditLimitButton tenant={tenant} onEdit={onEdit} />
+                  <div className="flex justify-end gap-0.5">
+                    <EditLimitButton tenant={tenant} onEdit={onEdit} />
+                    <ModelAccessButton tenant={tenant} onEditModelAccess={onEditModelAccess} />
+                  </div>
                 </td>
               </tr>
             ))}
@@ -117,7 +171,7 @@ export function TenantsTable({ tenants, onEdit }: TenantsTableProps) {
           <li key={tenant.id} className="py-3">
             <div className="flex items-start justify-between gap-3">
               <p className="break-words font-medium text-ink">{tenant.name}</p>
-              <EditLimitButton tenant={tenant} onEdit={onEdit} withLabel />
+              <AuditStatusBadge enabled={tenant.audit_enabled} />
             </div>
             <dl className="mt-2 grid grid-cols-[5.5rem_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs">
               <dt className="text-ink-muted">ID</dt>
@@ -134,11 +188,15 @@ export function TenantsTable({ tenants, onEdit }: TenantsTableProps) {
               <dd>
                 <TenantLimitFacts tenant={tenant} variant="compact" />
               </dd>
-              <dt className="text-ink-muted">Audit</dt>
+              <dt className="text-ink-muted">Models</dt>
               <dd>
-                <AuditStatusBadge enabled={tenant.audit_enabled} />
+                <ModelAccessBadge mode={tenant.model_access_mode} />
               </dd>
             </dl>
+            <div className="mt-2 flex flex-wrap justify-end gap-2">
+              <EditLimitButton tenant={tenant} onEdit={onEdit} withLabel />
+              <ModelAccessButton tenant={tenant} onEditModelAccess={onEditModelAccess} withLabel />
+            </div>
           </li>
         ))}
       </ul>

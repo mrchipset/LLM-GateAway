@@ -472,7 +472,13 @@ $env:VITE_PROXY_TARGET = "http://127.0.0.1:4000"
 npm run dev
 ```
 
-Enter the master key to view backend health, the model list, the usage panel, and the Access tab. The usage panel provides:
+Enter the master key to view backend health, the model registry, the usage panel, and the Access tab. The Models tab provides:
+
+- Register a model (id, provider, upstream model, enabled) with client-side validation mirroring the API; provider configuration is still a backend concern.
+- Delete a model with confirmation; deleting it also removes it from every tenant allowlist.
+- The registry list with provider, upstream model, status, and creation time.
+
+The usage panel provides:
 
 - `Models / Usage / Access` tabs
 - Tenant filtering (including "All tenants"); the selected tenant's quota and rate limit are shown read-only. The tenant list is capped at 100 with a truncation note.
@@ -484,6 +490,7 @@ Enter the master key to view backend health, the model list, the usage panel, an
 The Access tab manages tenants and API keys:
 
 - Create tenants and edit the monthly token quota / requests-per-minute limit; empty input clears a limit.
+- Set each tenant's model access policy (`All models` or an explicit allowlist) in a dedicated dialog. The dialog shows an explicit warning when an empty allowlist would block every model.
 - Create keys per tenant with an optional expiry. The plaintext is shown once, can be copied, and is never written to storage, the URL, or the query cache; closing an uncopied dialog asks for confirmation.
 - Revoke keys with confirmation. Revoked and expired keys are labeled, and only non-revoked keys offer the revoke action.
 
@@ -548,7 +555,7 @@ design.md            LLM-GateAway design guidance
 - No billing/invoicing, per-key or per-model limits, or burst shaping (token bucket); quotas are soft.
 - Rate limiting uses a fixed 60-second window at tenant level only; the memory backend counts per process.
 - Creating a key requires `tenant_id` (a breaking change for old callers); there is no tenant delete or rename API.
-- Model access is tenant-scoped only: no per-key scoping, no per-model rate limits, and no console management for it yet.
+- Model access is tenant-scoped only: no per-key scoping and no per-model rate limits.
 - `usage_records` has no retention or archival job and grows with traffic; there is no cost conversion.
 - Tracing covers the server span and per-attempt upstream spans only: no database spans and no tail-based sampling.
 - Metrics expose counters and histograms but ship without dashboards, alert rules, or OTLP metric export; database pool occupancy is not exported yet.
@@ -556,7 +563,7 @@ design.md            LLM-GateAway design guidance
 - Model configuration supports create, list, and delete only; changing it requires delete and recreate.
 - `/v1/models` returns at most 1000 entries; the management API uses offset pagination.
 - Every authenticated inference request writes `last_used_at`; high-throughput deployments should sample or batch it.
-- The console does not register models. The audit panel is read-only: no export/delete or retention UI, and the content budget is a global environment variable. The usage panel is read-only with daily granularity, caps keys and tenants at 100 each, and labels the final bar as today so far. Tenant delete/rename is not available.
+- The console cannot edit an existing model (delete and recreate instead), and the audit panel is read-only: no export/delete or retention UI, and the content budget is a global environment variable. The usage panel is read-only with daily granularity, caps keys and tenants at 100 each, and labels the final bar as today so far. Tenant delete/rename is not available.
 - Local `uv` runs require a manual `alembic upgrade head`; Compose runs it through the one-shot `migrate` service, and the application process itself never migrates.
 
 ## Related documents

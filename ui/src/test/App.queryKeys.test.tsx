@@ -10,6 +10,7 @@ import { renderApp } from './renderApp';
 const EXPECTED_ADMIN_PREFIXES = [
   'admin-models',
   'admin-tenants',
+  'admin-model-access',
   'usage-summary',
   'usage-series',
   'usage-by-key',
@@ -20,7 +21,11 @@ const EXPECTED_ADMIN_PREFIXES = [
 ];
 
 const LOADED_ADMIN_PREFIXES = EXPECTED_ADMIN_PREFIXES.filter(
-  (prefix) => prefix !== 'admin-keys' && prefix !== 'audit-session' && prefix !== 'audit-request',
+  (prefix) =>
+    prefix !== 'admin-keys' &&
+    prefix !== 'admin-model-access' &&
+    prefix !== 'audit-session' &&
+    prefix !== 'audit-request',
 );
 
 describe('admin query keys', () => {

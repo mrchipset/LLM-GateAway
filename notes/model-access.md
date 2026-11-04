@@ -1,7 +1,7 @@
 # Tenant-scoped model access control
 
-Status: implements TODO G0.2. Scope: backend, admin API, enforcement. The console does not
-edit this yet.
+Status: implements TODO G0.2. Scope: backend, admin API, enforcement, and the console
+(Models tab register/delete, Access tab per-tenant policy dialog).
 
 ## 1. Problem
 
@@ -56,8 +56,9 @@ tenant's access to models without revoking keys.
   feature until a cache is introduced; any future cache must key on a policy version.
 - No per-key scoping and no ownership checks beyond the tenant: one tenant's admin key does
   not exist yet, so all management calls still require the master key.
-- The console has no model-access UI. Until it does, the only way to change policy is the
-  admin API.
+- The console policy dialog keeps ids that are not in the first page of the model list visible
+  as "not in the loaded model list", so saving cannot silently drop a grant. A deleted model
+  fails the save with 404 until it is deselected; that is deliberate rather than guessing.
 
 ## 6. Migration and compatibility
 

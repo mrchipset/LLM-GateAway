@@ -18,6 +18,7 @@ const ACME: TenantSummary = {
   monthly_token_quota: 1_000_000,
   requests_per_minute: 60,
   audit_enabled: false,
+  model_access_mode: 'all',
 };
 
 const SOLO: TenantSummary = {
@@ -27,6 +28,7 @@ const SOLO: TenantSummary = {
   monthly_token_quota: null,
   requests_per_minute: null,
   audit_enabled: false,
+  model_access_mode: 'all',
 };
 
 const TENANTS = [ACME, SOLO];

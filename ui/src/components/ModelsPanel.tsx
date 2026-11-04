@@ -1,22 +1,29 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 
 import type { ModelSummary } from '../api/client';
 import type { ModelsQuery } from '../hooks/useModels';
 import { formatCreatedAt, formatUpdatedAt } from '../lib/format';
 import { Button } from './Button';
-import { KeyIcon, RefreshIcon } from './Icons';
+import { CheckCircleIcon, KeyIcon, RefreshIcon, TrashIcon } from './Icons';
+import { ModelCreateDialog } from './ModelCreateDialog';
+import { ModelDeleteDialog } from './ModelDeleteDialog';
 import { Panel, PanelHeader } from './Panel';
 import { RequestErrorPanel } from './RequestErrorPanel';
-
-const CURL_COMMAND =
-  'curl -X POST http://127.0.0.1:4000/api/v1/models -H "Authorization: Bearer $GATEWAY_MASTER_KEY" -H "Content-Type: application/json" -d \'{"id":"gpt-4o-mini","provider":"openai","upstream_model":"gpt-4o-mini"}\'';
 
 interface ModelsPanelProps {
   masterKey: string | null;
   query: ModelsQuery;
 }
 
+type DeleteModelHandler = (model: ModelSummary, trigger: HTMLButtonElement) => void;
+
 export function ModelsPanel({ masterKey, query }: ModelsPanelProps) {
+  const [notice, setNotice] = useState<string | null>(null);
+  const [registerOpen, setRegisterOpen] = useState(false);
+  const [deletingModel, setDeletingModel] = useState<ModelSummary | null>(null);
+  const registerButtonRef = useRef<HTMLButtonElement>(null);
+  const deleteTriggerRef = useRef<HTMLElement | null>(null);
+
   const count =
     query.status === 'success'
       ? query.data.items.length < query.data.total
@@ -26,33 +33,91 @@ export function ModelsPanel({ masterKey, query }: ModelsPanelProps) {
           : `${query.data.total} models`
       : null;
 
+  const openRegister = () => {
+    setNotice(null);
+    setRegisterOpen(true);
+  };
+
+  const handleDelete = (model: ModelSummary, trigger: HTMLButtonElement) => {
+    setNotice(null);
+    deleteTriggerRef.current = trigger;
+    setDeletingModel(model);
+  };
+
   return (
     <Panel labelledBy="models-heading">
       <PanelHeader id="models-heading" eyebrow="Registry" title="Models">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
           {count !== null && (
             <span className="rounded border border-line bg-surface-sunken px-1.5 py-0.5 font-mono text-[10.5px] tabular-nums text-ink">
               {count}
             </span>
           )}
           {masterKey !== null && (
-            <Button
-              variant="ghost"
-              onClick={() => void query.refetch()}
-              disabled={query.isFetching}
-              aria-label="Refresh models"
-            >
-              <RefreshIcon
-                className={`size-3.5 ${query.isFetching ? 'animate-spin motion-reduce:animate-none' : ''}`}
-              />
-              <span className="hidden sm:inline">Refresh</span>
-            </Button>
+            <>
+              <Button
+                variant="ghost"
+                onClick={() => void query.refetch()}
+                disabled={query.isFetching}
+                aria-label="Refresh models"
+              >
+                <RefreshIcon
+                  className={`size-3.5 ${query.isFetching ? 'animate-spin motion-reduce:animate-none' : ''}`}
+                />
+                <span className="hidden sm:inline">Refresh</span>
+              </Button>
+              <Button ref={registerButtonRef} onClick={openRegister}>
+                Register model
+              </Button>
+            </>
           )}
         </div>
       </PanelHeader>
       <div className="px-5 py-4" aria-busy={masterKey !== null && query.isFetching}>
-        <ModelsContent masterKey={masterKey} query={query} />
+        {notice !== null && (
+          <p
+            role="status"
+            className="mb-3 flex items-center gap-1.5 rounded border border-ok/25 bg-ok-soft px-2.5 py-1.5 text-[12px] text-ok"
+          >
+            <CheckCircleIcon className="size-3.5" />
+            {notice}
+          </p>
+        )}
+        <ModelsContent
+          masterKey={masterKey}
+          query={query}
+          onRegister={openRegister}
+          onDelete={handleDelete}
+        />
       </div>
+
+      {registerOpen && masterKey !== null && (
+        <ModelCreateDialog
+          masterKey={masterKey}
+          returnFocusRef={registerButtonRef}
+          onClose={() => setRegisterOpen(false)}
+          onCreated={(model) => {
+            setRegisterOpen(false);
+            setNotice(`Model '${model.id}' registered.`);
+          }}
+        />
+      )}
+
+      {deletingModel !== null && masterKey !== null && (
+        <ModelDeleteDialog
+          masterKey={masterKey}
+          model={deletingModel}
+          returnFocusRef={deleteTriggerRef}
+          onClose={() => setDeletingModel(null)}
+          onDeleted={(model) => {
+            setDeletingModel(null);
+            setNotice(`Model '${model.id}' deleted.`);
+          }}
+          onStale={() => {
+            void query.refetch();
+          }}
+        />
+      )}
     </Panel>
   );
 }
@@ -60,9 +125,11 @@ export function ModelsPanel({ masterKey, query }: ModelsPanelProps) {
 interface ModelsContentProps {
   masterKey: string | null;
   query: ModelsQuery;
+  onRegister: () => void;
+  onDelete: DeleteModelHandler;
 }
 
-function ModelsContent({ masterKey, query }: ModelsContentProps) {
+function ModelsContent({ masterKey, query, onRegister, onDelete }: ModelsContentProps) {
   if (masterKey === null) return <ConnectPrompt />;
   if (query.status === 'pending') return <ModelsSkeleton />;
   if (query.status === 'error') {
@@ -89,9 +156,9 @@ function ModelsContent({ masterKey, query }: ModelsContentProps) {
         </div>
       )}
       {query.data.items.length === 0 ? (
-        <EmptyRegistry />
+        <EmptyRegistry onRegister={onRegister} />
       ) : (
-        <ModelsTable models={query.data.items} />
+        <ModelsTable models={query.data.items} onDelete={onDelete} />
       )}
     </>
   );
@@ -119,13 +186,14 @@ function ModelsSkeleton() {
         {[0, 1, 2, 3].map((row) => (
           <div
             key={row}
-            className="grid grid-cols-[1.5fr_0.8fr_1.3fr_0.7fr_1fr] gap-4 rounded border border-line/70 px-3 py-3"
+            className="grid grid-cols-[1.5fr_0.8fr_1.3fr_0.7fr_1fr_0.4fr] gap-4 rounded border border-line/70 px-3 py-3"
           >
-            <span className="h-3.5 w-4/5 animate-pulse rounded bg-surface-sunken motion-reduce:animate-none" />
-            <span className="h-3.5 w-3/5 animate-pulse rounded bg-surface-sunken motion-reduce:animate-none" />
-            <span className="h-3.5 w-3/4 animate-pulse rounded bg-surface-sunken motion-reduce:animate-none" />
-            <span className="h-3.5 w-4/5 animate-pulse rounded bg-surface-sunken motion-reduce:animate-none" />
-            <span className="h-3.5 w-full animate-pulse rounded bg-surface-sunken motion-reduce:animate-none" />
+            {[0, 1, 2, 3, 4, 5].map((cell) => (
+              <span
+                key={cell}
+                className="h-3.5 w-4/5 animate-pulse rounded bg-surface-sunken motion-reduce:animate-none"
+              />
+            ))}
           </div>
         ))}
       </div>
@@ -133,87 +201,75 @@ function ModelsSkeleton() {
   );
 }
 
-function EmptyRegistry() {
-  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
-
-  const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(CURL_COMMAND);
-      setCopyState('copied');
-    } catch {
-      setCopyState('failed');
-    }
-  };
-
+function EmptyRegistry({ onRegister }: { onRegister: () => void }) {
   return (
-    <div className="py-1">
+    <div className="rounded-md border border-dashed border-line-strong px-4 py-8 text-center">
       <h3 className="text-sm font-semibold text-ink">No models registered</h3>
-      <p className="mt-1 max-w-prose text-[13px] text-ink-muted">
-        Register a model with the admin API. Its provider must already be configured on the backend.
+      <p className="mx-auto mt-1 max-w-md text-[13px] text-ink-muted">
+        Register a model to make it available through the gateway. Its provider must already be
+        configured on the backend.
       </p>
-      <div className="mt-4">
-        <div className="flex items-center justify-between gap-3">
-          <p className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-ink-muted">
-            Register a model
-          </p>
-          <Button variant="ghost" onClick={() => void handleCopy()}>
-            {copyState === 'copied' ? 'Copied' : 'Copy command'}
-          </Button>
-        </div>
-        <pre className="mt-1.5 rounded-md border border-line bg-surface-sunken px-3 py-2.5 font-mono text-[11.5px] leading-relaxed break-all whitespace-pre-wrap text-ink">
-          <code>{CURL_COMMAND}</code>
-        </pre>
-        {copyState === 'failed' && (
-          <p className="mt-1.5 text-xs text-danger">Could not copy. Select the command instead.</p>
-        )}
-      </div>
+      <Button onClick={onRegister} className="mt-3">
+        Register your first model
+      </Button>
     </div>
   );
 }
 
-function ModelsTable({ models }: { models: ModelSummary[] }) {
+function ModelsTable({
+  models,
+  onDelete,
+}: {
+  models: ModelSummary[];
+  onDelete: DeleteModelHandler;
+}) {
   return (
     <>
       <div className="hidden md:block">
         <table className="w-full table-fixed border-collapse text-left text-[13px]">
           <caption className="sr-only">Registered models</caption>
           <colgroup>
-            <col className="w-[24%]" />
-            <col className="w-[10%]" />
-            <col className="w-[28%]" />
+            <col className="w-[22%]" />
+            <col className="w-[9%]" />
+            <col className="w-[25%]" />
+            <col className="w-[12%]" />
+            <col className="w-[18%]" />
             <col className="w-[14%]" />
-            <col className="w-[24%]" />
           </colgroup>
           <thead>
             <tr className="border-b border-line">
-              {['Model', 'Provider', 'Upstream model', 'Status', 'Created (UTC)'].map((label) => (
-                <th
-                  key={label}
-                  scope="col"
-                  className="py-2 pr-3 font-mono text-[10px] font-medium uppercase tracking-[0.12em] text-ink-muted last:pr-0"
-                >
-                  {label}
-                </th>
-              ))}
+              {['Model', 'Provider', 'Upstream model', 'Status', 'Created (UTC)', 'Actions'].map(
+                (label, index) => (
+                  <th
+                    key={label}
+                    scope="col"
+                    className={`py-2 pr-3 font-mono text-[10px] font-medium uppercase tracking-[0.12em] text-ink-muted last:pr-0 ${
+                      index === 5 ? 'text-right' : 'text-left'
+                    }`}
+                  >
+                    {label}
+                  </th>
+                ),
+              )}
             </tr>
           </thead>
           <tbody className="divide-y divide-line">
             {models.map((model) => (
-              <ModelRow key={model.id} model={model} />
+              <ModelRow key={model.id} model={model} onDelete={onDelete} />
             ))}
           </tbody>
         </table>
       </div>
       <ul className="divide-y divide-line md:hidden">
         {models.map((model) => (
-          <ModelCard key={model.id} model={model} />
+          <ModelCard key={model.id} model={model} onDelete={onDelete} />
         ))}
       </ul>
     </>
   );
 }
 
-function ModelRow({ model }: { model: ModelSummary }) {
+function ModelRow({ model, onDelete }: { model: ModelSummary; onDelete: DeleteModelHandler }) {
   return (
     <tr
       className={`transition-colors hover:bg-surface-sunken/40 ${
@@ -233,14 +289,25 @@ function ModelRow({ model }: { model: ModelSummary }) {
       <td className="py-2.5 pr-3 align-top">
         <ModelStatusBadge enabled={model.enabled} />
       </td>
-      <td className="py-2.5 align-top font-mono text-[11.5px] tabular-nums">
+      <td className="py-2.5 pr-3 align-top font-mono text-[11.5px] tabular-nums">
         <time dateTime={model.created_at}>{formatCreatedAt(model.created_at)}</time>
+      </td>
+      <td className="py-2.5 text-right align-top">
+        <Button
+          variant="ghost"
+          onClick={(event) => onDelete(model, event.currentTarget)}
+          aria-label={`Delete ${model.id}`}
+          title="Delete model"
+          className="shrink-0 px-2 py-1 text-[12px] text-danger hover:bg-danger-soft hover:text-danger"
+        >
+          <TrashIcon className="size-3.5" />
+        </Button>
       </td>
     </tr>
   );
 }
 
-function ModelCard({ model }: { model: ModelSummary }) {
+function ModelCard({ model, onDelete }: { model: ModelSummary; onDelete: DeleteModelHandler }) {
   return (
     <li className={`py-3 ${model.enabled ? '' : 'bg-surface-sunken/30'}`}>
       <div className="flex items-start justify-between gap-3">
@@ -267,6 +334,17 @@ function ModelCard({ model }: { model: ModelSummary }) {
           <time dateTime={model.created_at}>{formatCreatedAt(model.created_at)}</time>
         </dd>
       </dl>
+      <div className="mt-2 flex justify-end">
+        <Button
+          variant="ghost"
+          onClick={(event) => onDelete(model, event.currentTarget)}
+          aria-label={`Delete ${model.id}`}
+          className="shrink-0 px-2 py-1 text-[12px] text-danger hover:bg-danger-soft hover:text-danger"
+        >
+          <TrashIcon className="size-3.5" />
+          <span>Delete</span>
+        </Button>
+      </div>
     </li>
   );
 }

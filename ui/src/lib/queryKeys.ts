@@ -3,6 +3,7 @@ import type { AuditSessionQuery } from '../api/client';
 const modelsPrefix = ['admin-models'] as const;
 const tenantsPrefix = ['admin-tenants'] as const;
 const keysPrefix = ['admin-keys'] as const;
+const modelAccessPrefix = ['admin-model-access'] as const;
 
 export const usageSummaryPrefix = ['usage-summary'] as const;
 export const usageSeriesPrefix = ['usage-series'] as const;
@@ -16,6 +17,7 @@ export const queryKeys = {
   models: modelsPrefix,
   tenants: tenantsPrefix,
   tenantPage: (limit: number, offset: number) => [...tenantsPrefix, { limit, offset }] as const,
+  modelAccess: (tenantId: string) => [...modelAccessPrefix, tenantId] as const,
   usageSummary: (tenantId: string | null, since: string) =>
     [...usageSummaryPrefix, tenantId, since] as const,
   usageSeries: (tenantId: string | null, since: string) =>
@@ -47,6 +49,7 @@ export const queryKeys = {
 export const adminQueryPrefixes = [
   modelsPrefix,
   tenantsPrefix,
+  modelAccessPrefix,
   usageSummaryPrefix,
   usageSeriesPrefix,
   usageByKeyPrefix,
