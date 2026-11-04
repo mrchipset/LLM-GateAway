@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     master_key: SecretStr = Field(min_length=16)
     storage_backend: StorageBackend = StorageBackend.MEMORY
     database_url: str | None = None
+    database_pool_size: int = Field(default=5, ge=1, le=100)
+    database_max_overflow: int = Field(default=5, ge=0, le=100)
+    database_pool_timeout_seconds: float = Field(default=10.0, gt=0)
+    database_statement_timeout_ms: int = Field(default=30_000, ge=0, le=600_000)
     redis_url: str | None = None
     openai_api_key: SecretStr | None = None
     openai_base_url: str = "https://api.openai.com/v1"
@@ -43,6 +47,8 @@ class Settings(BaseSettings):
     fake_provider_enabled: bool = False
     request_timeout_seconds: float = Field(default=60.0, gt=0)
     connect_timeout_seconds: float = Field(default=10.0, gt=0)
+    stream_idle_timeout_seconds: float = Field(default=60.0, ge=0, le=3600)
+    shutdown_grace_seconds: float = Field(default=30.0, ge=0, le=600)
     max_retries: int = Field(default=2, ge=0, le=5)
     audit_enabled: bool = False
     audit_max_content_bytes: int = Field(default=262144, ge=1024)

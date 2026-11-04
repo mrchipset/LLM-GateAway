@@ -8,6 +8,7 @@ from fastapi import Request
 
 from llm_gateway.clock import Clock, SystemClock
 from llm_gateway.config import Settings, StorageBackend
+from llm_gateway.lifecycle import InFlightTracker
 from llm_gateway.metrics import configure_metrics, shutdown_metrics
 from llm_gateway.providers.factory import build_providers
 from llm_gateway.providers.pool import ProviderPool
@@ -81,6 +82,7 @@ class Container:
     login_throttle: LoginThrottle = field(default_factory=InMemoryLoginThrottle)
     router: ModelRouter | None = None
     telemetry: Telemetry | None = None
+    inflight: InFlightTracker = field(default_factory=InFlightTracker)
 
     def __post_init__(self) -> None:
         seen: set[str] = set()

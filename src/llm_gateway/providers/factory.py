@@ -35,6 +35,7 @@ def _openai_compatible_provider(
         ),
         retry_policy=RetryPolicy(max_attempts=settings.max_retries + 1),
         tracer=tracer,
+        stream_idle_timeout_seconds=settings.stream_idle_timeout_seconds,
     )
 
 

@@ -479,6 +479,10 @@ Invoke-RestMethod -Uri http://127.0.0.1:4000/api/v1/tenants -WebSession $session
 | `GATEWAY_LOG_LEVEL` | Defaults to `INFO` |
 | `GATEWAY_STORAGE_BACKEND` | `memory` or `postgres` |
 | `GATEWAY_DATABASE_URL` | Required for postgres, e.g. `postgresql+asyncpg://gateway:gateway@127.0.0.1:5432/gateway` |
+| `GATEWAY_DATABASE_POOL_SIZE` | SQLAlchemy pool size, default 5 (1-100) |
+| `GATEWAY_DATABASE_MAX_OVERFLOW` | Extra connections above the pool size, default 5 (0-100) |
+| `GATEWAY_DATABASE_POOL_TIMEOUT_SECONDS` | Wait for a pool slot before failing, default 10 |
+| `GATEWAY_DATABASE_STATEMENT_TIMEOUT_MS` | Server-side `statement_timeout`, default 30000; `0` leaves the server default |
 | `GATEWAY_REDIS_URL` | Reserved; unused for now |
 | `GATEWAY_OPENAI_API_KEY` | When empty, the OpenAI provider is not registered |
 | `GATEWAY_OPENAI_BASE_URL` | Defaults to `https://api.openai.com/v1` |
@@ -487,6 +491,9 @@ Invoke-RestMethod -Uri http://127.0.0.1:4000/api/v1/tenants -WebSession $session
 | `GATEWAY_FAKE_PROVIDER_ENABLED` | Development/test only; production forbids it |
 | `GATEWAY_REQUEST_TIMEOUT_SECONDS` | Total upstream request timeout, default 60 |
 | `GATEWAY_CONNECT_TIMEOUT_SECONDS` | Connect timeout, default 10 |
+| `GATEWAY_STREAM_IDLE_TIMEOUT_SECONDS` | Maximum gap between streamed upstream bytes before the stream is failed, default 60; `0` disables |
+| `GATEWAY_SHUTDOWN_GRACE_SECONDS` | In-flight drain budget during shutdown, default 30; uvicorn uses the same value as its hard timeout |
+| `GATEWAY_WORKERS` | uvicorn worker processes in the container, default 1; keep at 1 until shared rate limiting lands |
 | `GATEWAY_MAX_RETRIES` | Max retries before the first byte, default 2 (cap 5) |
 | `GATEWAY_AUDIT_ENABLED` | Global request-audit kill switch, default `false` |
 | `GATEWAY_AUDIT_MAX_CONTENT_BYTES` | Per-request/response audit content budget, default 262144 |
@@ -518,6 +525,26 @@ Invoke-RestMethod -Uri http://127.0.0.1:4000/api/v1/tenants -WebSession $session
 | `GATEWAY_BOOTSTRAP_ADMIN_PASSWORD` | Optional first-run owner password (12+ chars); ignored once an owner exists |
 
 `production` requires the `postgres` backend, disables the fake provider, and rejects placeholder or short master keys, so sample configuration cannot be deployed by accident.
+
+## Runtime, workers, and shutdown
+
+The container runs `uvicorn` with `--workers ${GATEWAY_WORKERS:-1}` and
+`--timeout-graceful-shutdown ${GATEWAY_SHUTDOWN_GRACE_SECONDS:-30}`; `docker compose` sets
+`stop_grace_period: 45s` so the drain has room before SIGKILL.
+
+- **Keep `GATEWAY_WORKERS=1` until G1.2 lands.** Rate limiting, deployment cooldown, and login
+  throttling are process-local today, so multiple workers multiply the effective limits. The
+  load baseline also showed a single worker saturating around 100 RPS, so workers are a real
+  capacity lever — they are just not safe yet.
+- Shutdown drains in-flight requests, including active streams, for up to
+  `GATEWAY_SHUTDOWN_GRACE_SECONDS`. Uvicorn enforces the same value as its hard ceiling; if it
+  has to cancel, the gateway logs `shutdown_grace_exceeded`, increments
+  `gateway_forced_shutdowns`, and still releases the pool.
+- A stream that stops producing bytes for `GATEWAY_STREAM_IDLE_TIMEOUT_SECONDS` is failed with
+  an upstream timeout frame (then `[DONE]`), the upstream connection is closed, and usage is
+  settled for what was delivered. `0` disables the guard.
+- `GATEWAY_DATABASE_STATEMENT_TIMEOUT_MS` is enforced by PostgreSQL, not the client, so a
+  runaway aggregate fails as an error instead of pinning a connection.
 
 ## Database and migrations
 

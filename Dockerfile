@@ -29,4 +29,6 @@ COPY --from=builder --chown=app:app /app /app
 
 USER app
 EXPOSE 4000
-CMD ["uvicorn", "llm_gateway.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "4000"]
+# Shell form so the graceful-shutdown bound and worker count track the environment.
+# The app also drains in-flight requests; uvicorn's timeout is the hard ceiling.
+CMD ["sh", "-c", "exec uvicorn llm_gateway.app:create_app --factory --host 0.0.0.0 --port 4000 --workers ${GATEWAY_WORKERS:-1} --timeout-graceful-shutdown ${GATEWAY_SHUTDOWN_GRACE_SECONDS:-30}"]

@@ -61,6 +61,7 @@ class Metrics:
     audit_cleanup_failures: Counter
     audit_redactions: Counter
     audit_export_rows: Counter
+    forced_shutdowns: Counter
 
 
 def build_metrics(meter: Meter) -> Metrics:
@@ -144,6 +145,11 @@ def build_metrics(meter: Meter) -> Metrics:
             "gateway_audit_export_rows",
             unit="{row}",
             description="Audit rows streamed through an export, by format",
+        ),
+        forced_shutdowns=meter.create_counter(
+            "gateway_forced_shutdowns",
+            unit="{request}",
+            description="In-flight requests still active when the shutdown grace expired",
         ),
     )
 

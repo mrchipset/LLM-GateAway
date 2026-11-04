@@ -43,6 +43,20 @@ from llm_gateway.storage.sql import (
 logger = logging.getLogger(__name__)
 
 
+def _connect_args(settings: Settings) -> dict[str, object]:
+    """asyncpg connect arguments, including the server-side statement timeout.
+
+    ``statement_timeout`` is a server setting rather than a client option, so it
+    travels in ``server_settings``. Zero disables it and leaves the server default.
+    """
+    args: dict[str, object] = {"timeout": settings.connect_timeout_seconds}
+    if settings.database_statement_timeout_ms > 0:
+        args["server_settings"] = {
+            "statement_timeout": f"{settings.database_statement_timeout_ms}ms"
+        }
+    return args
+
+
 class Database:
     """Async engine plus the PostgreSQL-backed repository implementations.
 
@@ -81,11 +95,11 @@ class Database:
         engine = create_async_engine(
             settings.database_url,
             pool_pre_ping=True,
-            pool_size=5,
-            max_overflow=5,
-            pool_timeout=settings.connect_timeout_seconds,
+            pool_size=settings.database_pool_size,
+            max_overflow=settings.database_max_overflow,
+            pool_timeout=settings.database_pool_timeout_seconds,
             pool_recycle=1800,
-            connect_args={"timeout": settings.connect_timeout_seconds},
+            connect_args=_connect_args(settings),
         )
         return cls(engine=engine, connect_timeout_seconds=settings.connect_timeout_seconds)
 

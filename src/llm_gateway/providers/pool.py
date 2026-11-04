@@ -69,6 +69,7 @@ class ProviderPool:
             ),
             retry_policy=RetryPolicy(max_attempts=self._settings.max_retries + 1),
             tracer=self._tracer,  # pyright: ignore[reportArgumentType]
+            stream_idle_timeout_seconds=self._settings.stream_idle_timeout_seconds,
         )
         self._clients[key] = provider
         return provider

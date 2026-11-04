@@ -13,8 +13,9 @@ from llm_gateway.body_limit import RequestBodyLimitMiddleware
 from llm_gateway.config import Settings
 from llm_gateway.container import Container, build_container
 from llm_gateway.errors import register_error_handlers
+from llm_gateway.lifecycle import InFlightMiddleware
 from llm_gateway.logging import configure_logging, get_logger
-from llm_gateway.metrics import configure_metrics
+from llm_gateway.metrics import configure_metrics, current_metrics
 from llm_gateway.request_context import RequestContextMiddleware
 from llm_gateway.services.bootstrap import bootstrap_admin
 from llm_gateway.telemetry import configure_telemetry
@@ -53,6 +54,15 @@ def create_app(
         try:
             yield
         finally:
+            tracker = resolved_container.inflight
+            grace = resolved_settings.shutdown_grace_seconds
+            idle = await tracker.wait_for_idle(grace) if grace > 0 else tracker.active == 0
+            if not idle:
+                logger.warning(
+                    "shutdown_grace_exceeded",
+                    extra={"active_requests": tracker.active},
+                )
+                current_metrics().forced_shutdowns.add(1)
             await resolved_container.aclose()
 
     app = FastAPI(
@@ -70,6 +80,7 @@ def create_app(
         max_bytes=resolved_settings.max_request_bytes,
     )
     app.add_middleware(RequestContextMiddleware, telemetry=telemetry)
+    app.add_middleware(InFlightMiddleware, tracker=resolved_container.inflight)
     register_error_handlers(app)
     app.include_router(health_router)
     app.include_router(inference_router)

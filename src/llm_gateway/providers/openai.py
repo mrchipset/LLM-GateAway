@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import codecs
 import json
 from collections.abc import AsyncGenerator, AsyncIterator
@@ -89,9 +90,11 @@ class OpenAIProvider:
         sleeper: Sleeper = asyncio_sleep,
         rng: Random | None = None,
         tracer: Tracer | None = None,
+        stream_idle_timeout_seconds: float = 0.0,
     ) -> None:
         self.name = name
         self._api_key = api_key
+        self._stream_idle_timeout_seconds = stream_idle_timeout_seconds
         self._endpoint = f"{base_url.rstrip('/')}/chat/completions"
         self._retry_policy = retry_policy
         self._sleeper = sleeper
@@ -340,7 +343,11 @@ class OpenAIProvider:
     async def _iter_sse_data(self, response: httpx.Response) -> AsyncIterator[str]:
         decoder = codecs.getincrementaldecoder("utf-8")("strict")
         buffer = ""
-        async for raw in response.aiter_bytes():
+        byte_iterator = response.aiter_bytes().__aiter__()
+        while True:
+            raw = await self._next_stream_bytes(byte_iterator)
+            if raw is None:
+                break
             buffer += self._decode(decoder, raw)
             while True:
                 newline = buffer.find("\n")
@@ -356,6 +363,27 @@ class OpenAIProvider:
         data = _parse_sse_line(buffer.rstrip("\r"))
         if data is not None:
             yield data
+
+    async def _next_stream_bytes(self, iterator: AsyncIterator[bytes]) -> bytes | None:
+        """Return the next chunk, ``None`` at end of stream, or raise on idle.
+
+        The timeout bounds the wait for the next bytes, not the total stream
+        duration, so a slow but still-producing upstream is not interrupted.
+        """
+        if self._stream_idle_timeout_seconds == 0:
+            try:
+                return await iterator.__anext__()
+            except StopAsyncIteration:
+                return None
+
+        try:
+            async with asyncio.timeout(self._stream_idle_timeout_seconds):
+                return await iterator.__anext__()
+        except StopAsyncIteration:
+            return None
+        except TimeoutError as exc:
+            timeout = self._stream_idle_timeout_seconds
+            raise ProviderTimeoutError(f"Upstream stream idle for {timeout:g}s") from exc
 
     @staticmethod
     def _decode(decoder: codecs.IncrementalDecoder, raw: bytes, *, final: bool = False) -> str:

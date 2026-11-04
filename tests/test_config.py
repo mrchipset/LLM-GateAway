@@ -247,3 +247,37 @@ def test_master_key_is_not_exposed_in_repr() -> None:
     )
 
     assert MASTER_KEY not in repr(settings)
+
+
+def test_database_and_lifecycle_bounds_are_validated() -> None:
+    base = {
+        "_env_file": None,
+        "environment": Environment.TEST,
+        "master_key": MASTER_KEY,
+    }
+
+    for field, value in (
+        ("database_pool_size", 0),
+        ("database_max_overflow", -1),
+        ("database_pool_timeout_seconds", 0),
+        ("database_statement_timeout_ms", 600_001),
+        ("stream_idle_timeout_seconds", -1),
+        ("shutdown_grace_seconds", 601),
+    ):
+        with pytest.raises(ValidationError):
+            Settings(**{**base, field: value})
+
+    settings = Settings(
+        **{
+            **base,
+            "database_pool_size": 20,
+            "database_max_overflow": 0,
+            "database_statement_timeout_ms": 0,
+            "stream_idle_timeout_seconds": 0,
+        }
+    )
+
+    assert settings.database_pool_size == 20
+    assert settings.database_max_overflow == 0
+    assert settings.database_statement_timeout_ms == 0
+    assert settings.stream_idle_timeout_seconds == 0
