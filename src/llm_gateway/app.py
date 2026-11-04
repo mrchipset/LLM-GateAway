@@ -45,8 +45,7 @@ def create_app(
                 "billing_disabled",
                 extra={
                     "consequence": (
-                        "plan and budget enforcement are skipped; "
-                        "usage costs are not settled"
+                        "plan and budget enforcement are skipped; usage costs are not settled"
                     )
                 },
             )

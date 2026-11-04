@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import String, case, delete, func, literal, or_, select, text, update
+from sqlalchemy import String, and_, case, delete, func, literal, or_, select, text, update
 from sqlalchemy import cast as sa_cast
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import CursorResult
@@ -83,6 +83,10 @@ def _validate_page(*, limit: int, offset: int) -> None:
         raise ValueError("limit must be >= 1")
     if offset < 0:
         raise ValueError("offset must be >= 0")
+
+
+def _deleted_rows(result: object) -> int:
+    return max(cast("CursorResult[tuple[()]]", result).rowcount, 0)
 
 
 def _is_unique_violation(error: IntegrityError) -> bool:
@@ -170,6 +174,7 @@ def _to_tenant(row: TenantRow) -> Tenant:
         monthly_cost_budget=(
             Decimal(row.monthly_cost_budget) if row.monthly_cost_budget is not None else None
         ),
+        audit_retention_days=row.audit_retention_days,
     )
 
 
@@ -343,6 +348,7 @@ class SqlAlchemyTenantRepository:
             plan_tokens=tenant.plan_tokens,
             plan_allow_overage=tenant.plan_allow_overage,
             monthly_cost_budget=tenant.monthly_cost_budget,
+            audit_retention_days=tenant.audit_retention_days,
         )
         try:
             async with self._session_factory() as session, session.begin():
@@ -392,6 +398,8 @@ class SqlAlchemyTenantRepository:
             values["plan_allow_overage"] = patch.plan_allow_overage
         if patch.set_monthly_cost_budget:
             values["monthly_cost_budget"] = patch.monthly_cost_budget
+        if patch.set_audit_retention_days:
+            values["audit_retention_days"] = patch.audit_retention_days
         async with self._session_factory() as session, session.begin():
             if not values:
                 row = await session.get(TenantRow, tenant_id)
@@ -1244,6 +1252,111 @@ class SqlAlchemyAuditRepository:
         async with self._session_factory() as db, db.begin():
             row = await db.get(AuditTurnDiffRow, request_id)
             return _to_audit_diff(row) if row is not None else None
+
+    async def delete_requests_before(
+        self, *, tenant_id: UUID, cutoff: datetime, batch_size: int
+    ) -> int:
+        _validate_page(limit=batch_size, offset=0)
+        victims = (
+            select(AuditRequestRow.request_id)
+            .where(
+                AuditRequestRow.tenant_id == tenant_id,
+                AuditRequestRow.created_at < cutoff,
+            )
+            .order_by(AuditRequestRow.created_at.asc(), AuditRequestRow.request_id.asc())
+            .limit(batch_size)
+        )
+        async with self._session_factory() as db, db.begin():
+            result = await db.execute(
+                delete(AuditRequestRow).where(AuditRequestRow.request_id.in_(victims))
+            )
+            return _deleted_rows(result)
+
+    async def delete_orphan_sessions_before(
+        self, *, tenant_id: UUID, cutoff: datetime, batch_size: int
+    ) -> int:
+        _validate_page(limit=batch_size, offset=0)
+        orphans = (
+            select(AuditSessionRow.id)
+            .where(
+                AuditSessionRow.tenant_id == tenant_id,
+                AuditSessionRow.last_seen_at < cutoff,
+                ~select(AuditRequestRow.request_id)
+                .where(AuditRequestRow.session_id == AuditSessionRow.id)
+                .exists(),
+            )
+            .order_by(AuditSessionRow.last_seen_at.asc(), AuditSessionRow.id.asc())
+            .limit(batch_size)
+        )
+        async with self._session_factory() as db, db.begin():
+            result = await db.execute(
+                delete(AuditSessionRow).where(AuditSessionRow.id.in_(orphans))
+            )
+            return _deleted_rows(result)
+
+    async def count_requests(
+        self,
+        *,
+        tenant_id: UUID,
+        since: datetime | None,
+        until: datetime | None,
+    ) -> int:
+        filters: list[ColumnElement[bool]] = [AuditRequestRow.tenant_id == tenant_id]
+        if since is not None:
+            filters.append(AuditRequestRow.created_at >= since)
+        if until is not None:
+            filters.append(AuditRequestRow.created_at < until)
+        async with self._session_factory() as db, db.begin():
+            total = await db.scalar(
+                select(func.count()).select_from(AuditRequestRow).where(*filters)
+            )
+        return total or 0
+
+    async def iter_requests_for_export(
+        self,
+        *,
+        tenant_id: UUID,
+        since: datetime,
+        until: datetime,
+        batch_size: int,
+    ) -> AsyncIterator[AuditRequestRecord]:
+        _validate_page(limit=batch_size, offset=0)
+        cursor_created: datetime | None = None
+        cursor_request_id: str | None = None
+        while True:
+            filters: list[ColumnElement[bool]] = [
+                AuditRequestRow.tenant_id == tenant_id,
+                AuditRequestRow.created_at >= since,
+                AuditRequestRow.created_at < until,
+            ]
+            if cursor_created is not None and cursor_request_id is not None:
+                filters.append(
+                    or_(
+                        AuditRequestRow.created_at > cursor_created,
+                        and_(
+                            AuditRequestRow.created_at == cursor_created,
+                            AuditRequestRow.request_id > cursor_request_id,
+                        ),
+                    )
+                )
+            async with self._session_factory() as db, db.begin():
+                rows = (
+                    await db.scalars(
+                        select(AuditRequestRow)
+                        .where(*filters)
+                        .order_by(
+                            AuditRequestRow.created_at.asc(),
+                            AuditRequestRow.request_id.asc(),
+                        )
+                        .limit(batch_size)
+                    )
+                ).all()
+            if not rows:
+                return
+            for row in rows:
+                yield _to_audit_request(row)
+            cursor_created = rows[-1].created_at
+            cursor_request_id = rows[-1].request_id
 
 
 def _to_admin_user(row: AdminUserRow) -> AdminUser:

@@ -82,6 +82,7 @@ class CreateTenantRequest(BaseModel):
     monthly_token_quota: int | None = Field(default=None, ge=1)
     requests_per_minute: int | None = Field(default=None, ge=1)
     audit_enabled: bool = False
+    audit_retention_days: int | None = Field(default=None, ge=0)
 
     @field_validator("name", mode="before")
     @classmethod
@@ -105,6 +106,7 @@ class UpdateTenantLimitsRequest(BaseModel):
     plan_tokens: int | None = Field(default=None, ge=1)
     plan_allow_overage: bool | None = None
     monthly_cost_budget: Decimal | None = Field(default=None, ge=0)
+    audit_retention_days: int | None = Field(default=None, ge=0)
 
 
 class TenantDetail(BaseModel):
@@ -120,6 +122,7 @@ class TenantDetail(BaseModel):
     plan_tokens: int | None = None
     plan_allow_overage: bool = False
     monthly_cost_budget: Decimal | None = None
+    audit_retention_days: int | None = None
 
 
 class TenantBillingResponse(BaseModel):

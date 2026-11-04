@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import logging
+import re
 from enum import StrEnum
 from typing import Self
 
@@ -45,6 +47,8 @@ class Settings(BaseSettings):
     audit_enabled: bool = False
     audit_max_content_bytes: int = Field(default=262144, ge=1024)
     audit_write_timeout_seconds: float = Field(default=2.0, gt=0)
+    audit_retention_days: int = Field(default=90, ge=0)
+    audit_redact_patterns: str = ""
     tracing_enabled: bool = False
     tracing_endpoint: str | None = None
     tracing_sample_ratio: float = Field(default=0.1, ge=0, le=1)
@@ -95,6 +99,37 @@ class Settings(BaseSettings):
             return None
         if not normalized.startswith(("http://", "https://")):
             raise ValueError("tracing_endpoint must be an http(s) URL")
+        return normalized
+
+    @field_validator("audit_redact_patterns")
+    @classmethod
+    def _validate_redact_patterns(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            return ""
+        try:
+            rules = json.loads(normalized)
+        except json.JSONDecodeError as exc:
+            raise ValueError("audit_redact_patterns must be a JSON array") from exc
+        if not isinstance(rules, list):
+            raise ValueError("audit_redact_patterns must be a JSON array")
+        seen: set[str] = set()
+        for rule in rules:
+            if not isinstance(rule, dict):
+                raise ValueError("each redaction rule must be an object with name and pattern")
+            name = rule.get("name")
+            pattern = rule.get("pattern")
+            if not isinstance(name, str) or not name.strip():
+                raise ValueError("redaction rule name must be a non-empty string")
+            if name in seen:
+                raise ValueError(f"duplicate redaction rule name: {name}")
+            seen.add(name)
+            if not isinstance(pattern, str) or not pattern:
+                raise ValueError(f"redaction rule '{name}' must have a non-empty pattern")
+            try:
+                re.compile(pattern)
+            except re.error as exc:
+                raise ValueError(f"redaction rule '{name}' has an invalid pattern") from exc
         return normalized
 
     @model_validator(mode="after")

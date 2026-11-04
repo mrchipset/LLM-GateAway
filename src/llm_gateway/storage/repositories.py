@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
@@ -104,6 +104,7 @@ class Tenant:
     plan_tokens: int | None = None
     plan_allow_overage: bool = False
     monthly_cost_budget: Decimal | None = None
+    audit_retention_days: int | None = None
 
     def __post_init__(self) -> None:
         _require_uuid(self.id, "id")
@@ -115,6 +116,12 @@ class Tenant:
         if not isinstance(self.plan_allow_overage, bool):
             raise ValueError("plan_allow_overage must be a boolean")
         _require_optional_money(self.monthly_cost_budget, "monthly_cost_budget")
+        if self.audit_retention_days is not None and (
+            not isinstance(self.audit_retention_days, int)
+            or isinstance(self.audit_retention_days, bool)
+            or self.audit_retention_days < 0
+        ):
+            raise ValueError("audit_retention_days must be a non-negative integer or None")
         if not isinstance(self.model_access_mode, ModelAccessMode):
             raise ValueError("model_access_mode must be a ModelAccessMode")
 
@@ -446,12 +453,14 @@ class TenantLimitPatch:
     plan_tokens: int | None = None
     plan_allow_overage: bool | None = None
     monthly_cost_budget: Decimal | None = None
+    audit_retention_days: int | None = None
     set_monthly_token_quota: bool = False
     set_requests_per_minute: bool = False
     set_audit_enabled: bool = False
     set_plan_tokens: bool = False
     set_plan_allow_overage: bool = False
     set_monthly_cost_budget: bool = False
+    set_audit_retention_days: bool = False
 
 
 class TenantRepository(Protocol):
@@ -829,6 +838,37 @@ class AuditRepository(Protocol):
     async def get_request(self, *, request_id: str) -> AuditRequestRecord | None: ...
 
     async def get_diff(self, *, request_id: str) -> AuditTurnDiffRecord | None: ...
+
+    async def delete_requests_before(
+        self, *, tenant_id: UUID, cutoff: datetime, batch_size: int
+    ) -> int:
+        """Delete up to ``batch_size`` requests older than ``cutoff``; diffs cascade."""
+        ...
+
+    async def delete_orphan_sessions_before(
+        self, *, tenant_id: UUID, cutoff: datetime, batch_size: int
+    ) -> int:
+        """Delete up to ``batch_size`` sessions last seen before ``cutoff`` with no requests."""
+        ...
+
+    async def count_requests(
+        self,
+        *,
+        tenant_id: UUID,
+        since: datetime | None,
+        until: datetime | None,
+    ) -> int: ...
+
+    def iter_requests_for_export(
+        self,
+        *,
+        tenant_id: UUID,
+        since: datetime,
+        until: datetime,
+        batch_size: int,
+    ) -> AsyncIterator[AuditRequestRecord]:
+        """Stream requests in ``(created_at, request_id)`` order with keyset pagination."""
+        ...
 
 
 class AdminRole(StrEnum):

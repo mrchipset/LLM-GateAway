@@ -584,6 +584,7 @@ async def test_create_tenant_returns_detail_and_rejects_duplicates(
         "model_access_mode",
         "plan_tokens",
         "plan_allow_overage",
+        "audit_retention_days",
         "monthly_cost_budget",
     }
     assert body["audit_enabled"] is False
@@ -873,6 +874,46 @@ async def test_patch_tenant_limits_replaces_clears_and_keeps_omitted_fields(
     assert noop.status_code == 200
     assert noop.json()["monthly_token_quota"] is None
     assert noop.json()["requests_per_minute"] == 3
+
+
+async def test_patch_tenant_sets_and_clears_audit_retention(
+    make_container: Callable[..., Container],
+    make_client: Callable[..., Any],
+    settings: Settings,
+) -> None:
+    container = make_container(settings, clock=SteppingClock())
+    master = _auth(_master(settings))
+
+    async with make_client(settings, container) as client:
+        created = await client.post(
+            "/api/v1/tenants",
+            json={"name": "retention-me"},
+            headers=master,
+        )
+        tenant_id = created.json()["id"]
+        assert created.json()["audit_retention_days"] is None
+
+        set_days = await client.patch(
+            f"/api/v1/tenants/{tenant_id}",
+            json={"audit_retention_days": 30},
+            headers=master,
+        )
+        cleared = await client.patch(
+            f"/api/v1/tenants/{tenant_id}",
+            json={"audit_retention_days": None},
+            headers=master,
+        )
+        rejected = await client.patch(
+            f"/api/v1/tenants/{tenant_id}",
+            json={"audit_retention_days": -1},
+            headers=master,
+        )
+
+    assert set_days.status_code == 200
+    assert set_days.json()["audit_retention_days"] == 30
+    assert cleared.status_code == 200
+    assert cleared.json()["audit_retention_days"] is None
+    assert rejected.status_code == 400
 
 
 async def test_patch_tenant_limits_validates_target_and_values(

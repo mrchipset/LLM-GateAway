@@ -103,6 +103,7 @@ def tenant_snapshot(tenant: Any) -> dict[str, object]:
         "monthly_cost_budget": (
             str(tenant.monthly_cost_budget) if tenant.monthly_cost_budget is not None else None
         ),
+        "audit_retention_days": tenant.audit_retention_days,
     }
 
 

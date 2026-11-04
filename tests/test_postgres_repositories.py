@@ -2330,3 +2330,190 @@ async def test_migration_adds_model_deployments_table(migrated_schema: None) -> 
 
     assert table_name == "model_deployments"
     assert unique_index == "uq_model_deployments_model_name"
+
+
+async def test_tenant_audit_retention_days_round_trips_and_clears(database: Database) -> None:
+    tenant = replace(_tenant(1), audit_retention_days=30)
+
+    created = await database.tenants.create_tenant(tenant)
+    stored = await database.tenants.get_tenant(tenant.id)
+
+    assert created.audit_retention_days == 30
+    assert stored is not None
+    assert stored.audit_retention_days == 30
+
+    cleared = await database.tenants.set_tenant_limits(
+        tenant.id,
+        patch=TenantLimitPatch(audit_retention_days=None, set_audit_retention_days=True),
+    )
+
+    assert cleared is not None
+    assert cleared.audit_retention_days is None
+
+
+async def test_delete_requests_before_deletes_only_the_tenant_window(
+    database: Database,
+) -> None:
+    tenant = await database.tenants.create_tenant(_tenant(1))
+    other = await database.tenants.create_tenant(_tenant(2))
+    key = _key(1, tenant_id=tenant.id)
+    await database.api_keys.create_key(key)
+
+    old_session = _audit_session(0, tenant_id=tenant.id, api_key_id=key.id, request_count=3)
+    old_requests = [
+        _audit_request(
+            index,
+            session_id=old_session.id,
+            tenant_id=tenant.id,
+            api_key_id=key.id,
+            created_at=BASE + timedelta(seconds=index),
+        )
+        for index in range(3)
+    ]
+    fresh = _audit_request(
+        10,
+        session_id=old_session.id,
+        tenant_id=tenant.id,
+        api_key_id=key.id,
+        created_at=BASE + timedelta(days=5),
+    )
+    for request in [*old_requests, fresh]:
+        await database.audit.record_turn(
+            session=old_session,
+            request=request,
+            diff=_audit_diff(
+                int(request.request_id.rsplit("-", 1)[1]), request_id=request.request_id
+            ),
+        )
+
+    other_key = _key(2, tenant_id=other.id)
+    await database.api_keys.create_key(other_key)
+    other_session = _audit_session(1, tenant_id=other.id, api_key_id=other_key.id)
+    other_request = _audit_request(
+        20,
+        session_id=other_session.id,
+        tenant_id=other.id,
+        api_key_id=other_key.id,
+        created_at=BASE,
+    )
+    await database.audit.record_turn(session=other_session, request=other_request, diff=None)
+
+    cutoff = BASE + timedelta(days=1)
+    assert (
+        await database.audit.delete_requests_before(
+            tenant_id=tenant.id, cutoff=cutoff, batch_size=2
+        )
+        == 2
+    )
+    assert (
+        await database.audit.delete_requests_before(
+            tenant_id=tenant.id, cutoff=cutoff, batch_size=2
+        )
+        == 1
+    )
+    assert (
+        await database.audit.delete_requests_before(
+            tenant_id=tenant.id, cutoff=cutoff, batch_size=2
+        )
+        == 0
+    )
+
+    for request in old_requests:
+        assert await database.audit.get_request(request_id=request.request_id) is None
+        assert await database.audit.get_diff(request_id=request.request_id) is None
+    assert await database.audit.get_request(request_id=fresh.request_id) == fresh
+    assert await database.audit.get_request(request_id=other_request.request_id) == other_request
+
+
+async def test_delete_orphan_sessions_before_keeps_sessions_with_live_requests(
+    database: Database,
+) -> None:
+    tenant = await database.tenants.create_tenant(_tenant(1))
+    key = _key(1, tenant_id=tenant.id)
+    await database.api_keys.create_key(key)
+
+    stale = _audit_session(0, tenant_id=tenant.id, api_key_id=key.id)
+    stale_request = _audit_request(
+        0,
+        session_id=stale.id,
+        tenant_id=tenant.id,
+        api_key_id=key.id,
+        created_at=BASE,
+    )
+    await database.audit.record_turn(session=stale, request=stale_request, diff=None)
+
+    live = _audit_session(1, tenant_id=tenant.id, api_key_id=key.id)
+    live_request = _audit_request(
+        1,
+        session_id=live.id,
+        tenant_id=tenant.id,
+        api_key_id=key.id,
+        created_at=BASE + timedelta(days=9),
+    )
+    await database.audit.record_turn(session=live, request=live_request, diff=None)
+
+    await database.audit.delete_requests_before(
+        tenant_id=tenant.id,
+        cutoff=BASE + timedelta(days=1),
+        batch_size=10,
+    )
+    deleted = await database.audit.delete_orphan_sessions_before(
+        tenant_id=tenant.id,
+        cutoff=BASE + timedelta(days=1),
+        batch_size=10,
+    )
+
+    assert deleted == 1
+    assert await database.audit.get_session(session_id=stale.id) is None
+    assert await database.audit.get_session(session_id=live.id) is not None
+
+
+async def test_iter_requests_for_export_paginates_without_gaps_or_duplicates(
+    database: Database,
+) -> None:
+    tenant = await database.tenants.create_tenant(_tenant(1))
+    key = _key(1, tenant_id=tenant.id)
+    await database.api_keys.create_key(key)
+    session = _audit_session(0, tenant_id=tenant.id, api_key_id=key.id, request_count=5)
+
+    requests = [
+        _audit_request(
+            index,
+            session_id=session.id,
+            tenant_id=tenant.id,
+            api_key_id=key.id,
+            created_at=BASE + timedelta(seconds=index),
+        )
+        for index in range(5)
+    ]
+    for request in requests:
+        await database.audit.record_turn(session=session, request=request, diff=None)
+
+    exported = [
+        record.request_id
+        async for record in database.audit.iter_requests_for_export(
+            tenant_id=tenant.id,
+            since=BASE,
+            until=BASE + timedelta(days=1),
+            batch_size=2,
+        )
+    ]
+
+    assert exported == [request.request_id for request in requests]
+    assert len(set(exported)) == len(exported)
+    assert (
+        await database.audit.count_requests(
+            tenant_id=tenant.id,
+            since=BASE,
+            until=BASE + timedelta(days=1),
+        )
+        == 5
+    )
+    assert (
+        await database.audit.count_requests(
+            tenant_id=tenant.id,
+            since=BASE + timedelta(seconds=2),
+            until=None,
+        )
+        == 3
+    )

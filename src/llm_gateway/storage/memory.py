@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -143,6 +143,8 @@ class InMemoryTenantRepository:
                 changes["plan_allow_overage"] = patch.plan_allow_overage
             if patch.set_monthly_cost_budget:
                 changes["monthly_cost_budget"] = patch.monthly_cost_budget
+            if patch.set_audit_retention_days:
+                changes["audit_retention_days"] = patch.audit_retention_days
             if not changes:
                 return tenant
             updated = replace(tenant, **changes)  # pyright: ignore[reportArgumentType]
@@ -701,6 +703,74 @@ class InMemoryAuditRepository:
 
     async def get_diff(self, *, request_id: str) -> AuditTurnDiffRecord | None:
         return self._diffs.get(request_id)
+
+    async def delete_requests_before(
+        self, *, tenant_id: UUID, cutoff: datetime, batch_size: int
+    ) -> int:
+        victims = sorted(
+            (
+                request
+                for request in self._requests.values()
+                if request.tenant_id == tenant_id and request.created_at < cutoff
+            ),
+            key=lambda request: (request.created_at, request.request_id),
+        )[:batch_size]
+        for request in victims:
+            self._requests.pop(request.request_id, None)
+            self._diffs.pop(request.request_id, None)
+        return len(victims)
+
+    async def delete_orphan_sessions_before(
+        self, *, tenant_id: UUID, cutoff: datetime, batch_size: int
+    ) -> int:
+        live_session_ids = {request.session_id for request in self._requests.values()}
+        victims = sorted(
+            (
+                session
+                for session in self._sessions.values()
+                if session.tenant_id == tenant_id
+                and session.last_seen_at < cutoff
+                and session.id not in live_session_ids
+            ),
+            key=lambda session: (session.last_seen_at, session.id),
+        )[:batch_size]
+        for session in victims:
+            self._sessions.pop(session.id, None)
+        return len(victims)
+
+    async def count_requests(
+        self,
+        *,
+        tenant_id: UUID,
+        since: datetime | None,
+        until: datetime | None,
+    ) -> int:
+        return sum(
+            1
+            for request in self._requests.values()
+            if request.tenant_id == tenant_id
+            and (since is None or request.created_at >= since)
+            and (until is None or request.created_at < until)
+        )
+
+    async def iter_requests_for_export(
+        self,
+        *,
+        tenant_id: UUID,
+        since: datetime,
+        until: datetime,
+        batch_size: int,
+    ) -> AsyncIterator[AuditRequestRecord]:
+        ordered = sorted(
+            (
+                request
+                for request in self._requests.values()
+                if request.tenant_id == tenant_id and since <= request.created_at < until
+            ),
+            key=lambda request: (request.created_at, request.request_id),
+        )
+        for request in ordered:
+            yield request
 
 
 def _audit_session_matches(

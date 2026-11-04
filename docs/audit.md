@@ -90,6 +90,55 @@ messages、响应、参数与 tool calls 共享 `GATEWAY_AUDIT_MAX_CONTENT_BYTES
 
 返回单请求全文、参数、响应、diff 与存储的 `truncated` 标记；未知 404 `audit_request_not_found`；超预算 413。
 
+### `GET /api/v1/audit/export`
+
+导出某个租户在时间窗口内的请求，仅 `owner` 与 `auditor` 可调用。
+
+| 参数 | 说明 |
+|---|---|
+| `tenant_id` | **必填**；未知租户 404 `tenant_not_found` |
+| `since` / `until` | **必填**，带时区，半开窗口；`since >= until` 返回 400 |
+| `format` | `jsonl`（默认）或 `csv` |
+
+流式返回，带 `Content-Disposition: attachment`，按 `(created_at, request_id)` keyset 分页读取，导出过程不会因为新写入而重复或漏行。`jsonl` 每行一个请求对象；`csv` 首行表头，JSON 字段以紧凑 JSON 字符串放入单元格。两者都包含正文内容——导出本身就是受控的内容读取，权限与审计访问日志是边界。
+
+### `DELETE /api/v1/audit`
+
+按租户与时间删除，仅 `owner` 可调用。
+
+| 参数 | 说明 |
+|---|---|
+| `tenant_id` / `before` | **必填**；删除 `created_at < before` 的行 |
+| `dry_run` | 默认 `false`；`true` 时只统计不删除 |
+| `batch_size` | `1..5000`，默认 5000 |
+| `max_batches` | `1..100`，默认 20 |
+
+先删 requests（diffs 随外键级联），再删没有剩余请求的 sessions。返回 `requests_deleted`、`sessions_deleted`、`requests_remaining`；`requests_remaining > 0` 说明被 `max_batches` 截断，需要再次运行。删除成功会写一条 `audit.deleted` 管理审计事件（只含计数与截止时间）。
+
+## 保留期与清理
+
+- 全局默认保留 90 天：`GATEWAY_AUDIT_RETENTION_DAYS`，`0` 表示全局不清理。
+- 租户可用 `PATCH /api/v1/tenants/{id}` 的 `audit_retention_days` 覆盖：`null` 继承全局，`0` 为 legal hold（永不删除），正整数为天数。
+- 清理任务是一个独立进程，适合 cron、systemd timer 或 Kubernetes Job：
+
+```bash
+uv run python scripts/audit_cleanup.py --dry-run
+uv run python scripts/audit_cleanup.py
+uv run python scripts/audit_cleanup.py --tenant <uuid> --batch-size 2000 --max-batches 10
+```
+
+脚本按租户顺序执行，单租户失败只记录 `audit_cleanup_failed` 与 `gateway_audit_cleanup_failures_total`，不阻断其他租户；有失败时退出码为 1，便于调度器告警。`--dry-run` 只输出待删行数。
+
+## 脱敏
+
+`GATEWAY_AUDIT_REDACT_PATTERNS` 接受 JSON 数组，例如：
+
+```bash
+export GATEWAY_AUDIT_REDACT_PATTERNS='[{"name":"email","pattern":"[\\w.+-]+@[\\w-]+\\.[\\w.]+"},{"name":"card","pattern":"\\b\\d{16}\\b"}]'
+```
+
+匹配发生在**写入前**：messages、参数、响应正文与 tool calls 中的命中都会被替换为 `[redacted:<name>]`，随后才计算哈希、diff 与截断。因此两轮仅在敏感片段不同的对话仍能正确归并到同一会话。只记录规则名与命中次数（`gateway_audit_redactions_total{rule}`），命中原文不会进入日志、指标或数据库。
+
 ## 管理台
 
 Audit 标签与 Models/Usage/Access 同级：
@@ -103,16 +152,11 @@ Audit 标签与 Models/Usage/Access 同级：
 ## 隐私与保留（必读）
 
 - 审计内容可能包含 PII、业务数据或用户粘贴的密钥。开启前由部署方确认合法依据与告知义务。
-- 只有 master key 可见；推理 key 无权访问审计 API。
+- 读接口限 `owner` / `auditor`；导出限 `owner|auditor`，删除限 `owner`；推理 key 无权访问审计 API。
 - diff 预览（≤160 字符）在开关关闭时也会返回；UI 文案使用“预览片段”，不得宣称完全无内容。
-- 不内置 PII 正则脱敏。应用层不做额外加密，依赖数据库磁盘加密、备份加密与 TLS；备份同样包含审计内容。
-- **自动保留期清理、导出与删除 API 尚未实现**（P1e）。当前需手工管理数据量；示例（请先在备份/测试库验证）：
-
-```sql
-DELETE FROM audit_sessions WHERE last_seen_at < now() - interval '30 days';
-```
-
-外键级联会删除对应 requests 与 diffs；删除前确认保留期与合规要求。审计访问本身（谁看过哪个 session）也尚未记录。
+- 正则脱敏是尽力而为：它降低误存风险，不替代数据分类分级、磁盘加密与备份加密。备份同样包含审计内容。
+- 删除是硬删除，没有软删除标记；删除可证明性来自接口返回的计数与后续复核。当前没有对象存储，因此“无残留”即指库内无行。
+- 审计访问本身（谁看过哪个 session）尚未记录。
 
 ## 限制与非目标
 

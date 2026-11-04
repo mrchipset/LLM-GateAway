@@ -386,11 +386,14 @@ Request auditing is opt-in twice: set `GATEWAY_AUDIT_ENABLED=true` globally and 
 
 - Clients may send `x-llm-gateway-session-id` (1..64 chars, `[A-Za-z0-9._:-]`) to group requests. Without it, the gateway falls back to a 24-hour, 200-request prefix match scoped to the same tenant and API key; conversations that share only a system prompt are not merged.
 - Requests are stored with bounded content (default 256 KiB) and deterministic turn diffs (`new_session`, `continuation`, `regeneration`, `edit`, `truncation`). Hashes and diffs use the original content, and `truncated=true` is explicit.
-- Read APIs: `GET /api/v1/audit/sessions`, `GET /api/v1/audit/sessions/{id}?include_content=`, `GET /api/v1/audit/requests/{request_id}`. Master key only.
+- Optional redaction runs before hashing: `GATEWAY_AUDIT_REDACT_PATTERNS` is a JSON array of `{"name","pattern"}` rules; matches become `[redacted:<name>]` in messages, parameters, and responses, so the same conversation still groups correctly.
+- Read APIs: `GET /api/v1/audit/sessions`, `GET /api/v1/audit/sessions/{id}?include_content=`, `GET /api/v1/audit/requests/{request_id}`. Owner and auditor only.
+- `GET /api/v1/audit/export` streams JSONL or CSV for one tenant and time window; `DELETE /api/v1/audit` hard-deletes a tenant window (owner only) with a `dry_run` count and a follow-up `requests_remaining` proof.
+- Retention defaults to 90 days (`GATEWAY_AUDIT_RETENTION_DAYS`, `0` disables); a tenant's `audit_retention_days` overrides it and `0` is a legal hold. Run `uv run python scripts/audit_cleanup.py` from cron or a Kubernetes Job.
 - The Audit tab shows the session timeline, bounded previews, parameter/usage/response changes, and loads full content on demand. Content is never written to browser storage or URLs.
 - Audit writes are best-effort and isolated; failures log `audit_record_failed` without content and never change the inference response.
 
-Retention cleanup, export/delete, metrics, and partitioning are not implemented yet. See [`docs/audit.md`](docs/audit.md) for enablement, privacy limits, and manual retention, and [`docs/adr/0001-request-audit.md`](docs/adr/0001-request-audit.md) for the design decision.
+Monthly partitioning is not implemented; the trigger and trade-offs are in [`notes/audit-retention.md`](notes/audit-retention.md). See [`docs/audit.md`](docs/audit.md) for enablement, retention, export, redaction, and privacy limits, and [`docs/adr/0001-request-audit.md`](docs/adr/0001-request-audit.md) for the design decision.
 
 ## Tracing
 
@@ -488,6 +491,8 @@ Invoke-RestMethod -Uri http://127.0.0.1:4000/api/v1/tenants -WebSession $session
 | `GATEWAY_AUDIT_ENABLED` | Global request-audit kill switch, default `false` |
 | `GATEWAY_AUDIT_MAX_CONTENT_BYTES` | Per-request/response audit content budget, default 262144 |
 | `GATEWAY_AUDIT_WRITE_TIMEOUT_SECONDS` | Audit write timeout; failures never affect inference, default 2 |
+| `GATEWAY_AUDIT_RETENTION_DAYS` | Global audit retention in days, default 90; `0` disables cleanup. A tenant's `audit_retention_days` overrides it, and per-tenant `0` is a legal hold |
+| `GATEWAY_AUDIT_REDACT_PATTERNS` | Optional JSON array of `{"name","pattern"}` regex rules applied to captured content before hashing; matches become `[redacted:<name>]` |
 | `GATEWAY_TRACING_ENABLED` | W3C trace-context tracing, default `false`; when off, no spans and no `traceparent` upstream |
 | `GATEWAY_TRACING_ENDPOINT` | OTLP/HTTP traces endpoint; required when tracing is enabled, e.g. `http://127.0.0.1:4318/v1/traces` |
 | `GATEWAY_TRACING_SAMPLE_RATIO` | Head-based sampling ratio in `[0, 1]`, default `0.1`; an upstream decision is honored |

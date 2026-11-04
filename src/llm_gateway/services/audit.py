@@ -16,7 +16,7 @@ import asyncio
 import re
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 from llm_gateway.clock import Clock
@@ -39,6 +39,7 @@ from llm_gateway.services.audit_diff import (
     text_hash,
     truncate_snapshot,
 )
+from llm_gateway.services.redaction import Redactor
 from llm_gateway.services.usage import extract_token_counts
 from llm_gateway.storage.repositories import (
     ApiKeyRecord,
@@ -157,6 +158,17 @@ class AuditService:
         self._repository = repository
         self._tenants = tenants
         self._clock = clock
+        self._redactor = Redactor.from_settings(settings)
+
+    def _redact(self, value: object) -> object:
+        """Redact a JSON-shaped value and account every hit per rule."""
+
+        redacted, counts = self._redactor.redact_value(value)
+        if counts:
+            metrics = current_metrics()
+            for rule, count in counts.items():
+                metrics.audit_redactions.add(count, {"rule": rule})
+        return redacted
 
     async def begin(
         self,
@@ -188,11 +200,17 @@ class AuditService:
                 )
             external_session_id = session_header
 
-        messages: list[dict[str, Any]] = [
-            message.model_dump(mode="json", exclude_none=True) for message in payload.messages
-        ]
+        messages = cast(
+            list[dict[str, Any]],
+            self._redact(
+                [message.model_dump(mode="json", exclude_none=True) for message in payload.messages]
+            ),
+        )
+        params = cast(
+            dict[str, Any],
+            self._redact(_request_params(payload, model_id=model_id)),
+        )
         hashes = message_hashes(messages)
-        params = _request_params(payload, model_id=model_id)
         now = self._clock.now()
 
         parent: AuditRequestRecord | None
@@ -316,23 +334,25 @@ class AuditService:
                 "total_tokens": counts.total_tokens,
             }
         )
+        redacted_content = cast(str | None, self._redact(response_content))
+        redacted_tool_calls = cast(list[dict[str, Any]] | None, self._redact(response_tool_calls))
         response_summary = summarize_response(
-            content=response_content,
-            tool_calls=response_tool_calls,
+            content=redacted_content,
+            tool_calls=redacted_tool_calls,
             finish_reason=finish_reason,
         )
         snapshot = truncate_snapshot(
             messages=turn.messages,
-            response_content=response_content,
+            response_content=redacted_content,
             max_bytes=self.settings.audit_max_content_bytes,
-            extras=(turn.params, response_tool_calls),
+            extras=(turn.params, redacted_tool_calls),
         )
         stored_params = snapshot.extras[0] if len(snapshot.extras) > 0 else turn.params
         if not isinstance(stored_params, dict):
             stored_params = turn.params
-        stored_tool_calls = snapshot.extras[1] if len(snapshot.extras) > 1 else response_tool_calls
+        stored_tool_calls = snapshot.extras[1] if len(snapshot.extras) > 1 else redacted_tool_calls
         if not isinstance(stored_tool_calls, list):
-            stored_tool_calls = response_tool_calls
+            stored_tool_calls = redacted_tool_calls
         diff = build_turn_diff(
             change_type=turn.change_type,
             current_messages=turn.messages,
@@ -373,7 +393,7 @@ class AuditService:
             request_params=stored_params,
             response_content=snapshot.response_content,
             response_tool_calls=stored_tool_calls,
-            response_content_hash=text_hash(response_content),
+            response_content_hash=text_hash(redacted_content),
             finish_reason=finish_reason,
             status=status,
             prompt_tokens=None if counts is None else counts.prompt_tokens,

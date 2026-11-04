@@ -57,6 +57,10 @@ class Metrics:
     route_attempts: Counter
     route_fallbacks: Counter
     deployment_cooldowns: Counter
+    audit_cleanup_rows: Counter
+    audit_cleanup_failures: Counter
+    audit_redactions: Counter
+    audit_export_rows: Counter
 
 
 def build_metrics(meter: Meter) -> Metrics:
@@ -120,6 +124,26 @@ def build_metrics(meter: Meter) -> Metrics:
             "gateway_deployment_cooldowns",
             unit="{event}",
             description="Times a deployment entered cooldown",
+        ),
+        audit_cleanup_rows=meter.create_counter(
+            "gateway_audit_cleanup_rows",
+            unit="{row}",
+            description="Rows removed by the audit retention job, by kind",
+        ),
+        audit_cleanup_failures=meter.create_counter(
+            "gateway_audit_cleanup_failures",
+            unit="{failure}",
+            description="Audit retention runs that failed, by stage",
+        ),
+        audit_redactions=meter.create_counter(
+            "gateway_audit_redactions",
+            unit="{match}",
+            description="Audit content redactions, by configured rule",
+        ),
+        audit_export_rows=meter.create_counter(
+            "gateway_audit_export_rows",
+            unit="{row}",
+            description="Audit rows streamed through an export, by format",
         ),
     )
 

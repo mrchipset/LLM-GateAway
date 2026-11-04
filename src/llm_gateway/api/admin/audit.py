@@ -20,19 +20,27 @@ response after it has been built: the ``turns`` array for session detail and
 
 from __future__ import annotations
 
+import csv
+import io
 import json
+from collections.abc import AsyncIterator, Sequence
 from datetime import datetime
-from typing import Annotated, cast
+from typing import Annotated, Protocol, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Path, Query
+from fastapi.responses import StreamingResponse
 
-from llm_gateway.auth.admin_deps import require_audit_read
+from llm_gateway.auth.admin_auth import AdminPrincipal
+from llm_gateway.auth.admin_deps import require_audit_read, require_owner
 from llm_gateway.container import Container, get_container
 from llm_gateway.errors import ApiError, ApiErrorCode
+from llm_gateway.metrics import current_metrics
 from llm_gateway.schemas.audit import (
     AuditChangeType,
+    AuditDeleteResponse,
     AuditDiff,
+    AuditExportFormat,
     AuditRequestDetail,
     AuditRequestDetailResponse,
     AuditSessionDetailResponse,
@@ -41,6 +49,7 @@ from llm_gateway.schemas.audit import (
     AuditStatus,
     AuditTurn,
 )
+from llm_gateway.services.admin_audit import record_admin_event_safely
 from llm_gateway.services.audit_diff import bound_parameter_changes
 from llm_gateway.storage.repositories import (
     AuditRequestRecord,
@@ -57,6 +66,46 @@ REQUEST_NOT_FOUND_MESSAGE = "Audit request was not found"
 CONTENT_TOO_LARGE_MESSAGE = (
     "Audit content exceeds the configured size limit; fetch requests individually"
 )
+
+EXPORT_BATCH_SIZE = 500
+
+_EXPORT_FIELDS: tuple[str, ...] = (
+    "request_id",
+    "session_id",
+    "parent_request_id",
+    "tenant_id",
+    "api_key_id",
+    "turn_index",
+    "match_method",
+    "change_type",
+    "model_id",
+    "provider",
+    "is_stream",
+    "request_messages",
+    "message_hashes",
+    "request_params",
+    "response_content",
+    "response_tool_calls",
+    "response_content_hash",
+    "finish_reason",
+    "status",
+    "prompt_tokens",
+    "completion_tokens",
+    "cached_tokens",
+    "total_tokens",
+    "truncated",
+    "trace_id",
+    "created_at",
+)
+
+_CSV_JSON_FIELDS = frozenset(
+    {"request_messages", "message_hashes", "request_params", "response_tool_calls"}
+)
+
+_EXPORT_MEDIA_TYPES: dict[AuditExportFormat, str] = {
+    "jsonl": "application/x-ndjson",
+    "csv": "text/csv; charset=utf-8",
+}
 
 
 def _require_aware(value: datetime, param: str) -> None:
@@ -76,6 +125,117 @@ def _validate_window(since: datetime, until: datetime | None) -> None:
             "since must be before until",
             param="since",
         )
+
+
+def _export_row(record: AuditRequestRecord) -> dict[str, object]:
+    return {
+        "request_id": record.request_id,
+        "session_id": str(record.session_id),
+        "parent_request_id": record.parent_request_id,
+        "tenant_id": str(record.tenant_id),
+        "api_key_id": str(record.api_key_id),
+        "turn_index": record.turn_index,
+        "match_method": record.match_method,
+        "change_type": record.change_type,
+        "model_id": record.model_id,
+        "provider": record.provider,
+        "is_stream": record.is_stream,
+        "request_messages": record.request_messages,
+        "message_hashes": record.message_hashes,
+        "request_params": record.request_params,
+        "response_content": record.response_content,
+        "response_tool_calls": record.response_tool_calls,
+        "response_content_hash": record.response_content_hash,
+        "finish_reason": record.finish_reason,
+        "status": record.status,
+        "prompt_tokens": record.prompt_tokens,
+        "completion_tokens": record.completion_tokens,
+        "cached_tokens": record.cached_tokens,
+        "total_tokens": record.total_tokens,
+        "truncated": record.truncated,
+        "trace_id": record.trace_id,
+        "created_at": record.created_at.isoformat(),
+    }
+
+
+def _compact_json(value: object) -> str:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def _jsonl_line(record: AuditRequestRecord) -> str:
+    return _compact_json(_export_row(record)) + "\n"
+
+
+def _csv_values(record: AuditRequestRecord) -> list[str]:
+    row = _export_row(record)
+    values: list[str] = []
+    for field in _EXPORT_FIELDS:
+        value = row[field]
+        if field in _CSV_JSON_FIELDS:
+            values.append(_compact_json(value))
+        elif value is None:
+            values.append("")
+        else:
+            values.append(str(value))
+    return values
+
+
+def _csv_line(values: Sequence[object]) -> str:
+    buffer = io.StringIO()
+    csv.writer(buffer, lineterminator="\n").writerow(values)
+    return buffer.getvalue()
+
+
+async def _export_chunks(
+    container: Container,
+    *,
+    tenant_id: UUID,
+    since: datetime,
+    until: datetime,
+    export_format: AuditExportFormat,
+) -> AsyncIterator[str]:
+    exported = 0
+    try:
+        if export_format == "csv":
+            yield _csv_line(_EXPORT_FIELDS)
+        async for record in container.audit.iter_requests_for_export(
+            tenant_id=tenant_id,
+            since=since,
+            until=until,
+            batch_size=EXPORT_BATCH_SIZE,
+        ):
+            exported += 1
+            if export_format == "jsonl":
+                yield _jsonl_line(record)
+            else:
+                yield _csv_line(_csv_values(record))
+    finally:
+        current_metrics().audit_export_rows.add(exported, {"format": export_format})
+
+
+class _BatchDeleter(Protocol):
+    async def __call__(self, *, tenant_id: UUID, cutoff: datetime, batch_size: int) -> int: ...
+
+
+async def _delete_in_batches(
+    deleter: _BatchDeleter,
+    *,
+    tenant_id: UUID,
+    cutoff: datetime,
+    batch_size: int,
+    max_batches: int,
+) -> int:
+    total = 0
+    for _ in range(max_batches):
+        deleted = await deleter(
+            tenant_id=tenant_id,
+            cutoff=cutoff,
+            batch_size=batch_size,
+        )
+        total += deleted
+        if deleted < batch_size:
+            break
+    return total
 
 
 async def _ensure_tenant(container: Container, tenant_id: UUID | None) -> None:
@@ -348,4 +508,108 @@ async def get_audit_request(
         request=detail,
         diff=diff,
         truncated=record.truncated,
+    )
+
+
+@router.get("/audit/export", response_class=StreamingResponse)
+async def export_audit_requests(
+    container: Annotated[Container, Depends(get_container)],
+    tenant_id: UUID,
+    since: datetime,
+    until: datetime,
+    export_format: Annotated[AuditExportFormat, Query(alias="format")] = "jsonl",
+) -> StreamingResponse:
+    _validate_window(since, until)
+    await _ensure_tenant(container, tenant_id)
+
+    filename = (
+        f"audit-{tenant_id}-{since.date().isoformat()}-{until.date().isoformat()}.{export_format}"
+    )
+    return StreamingResponse(
+        _export_chunks(
+            container,
+            tenant_id=tenant_id,
+            since=since,
+            until=until,
+            export_format=export_format,
+        ),
+        media_type=_EXPORT_MEDIA_TYPES[export_format],
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.delete("/audit", response_model=AuditDeleteResponse)
+async def delete_audit_requests(
+    principal: Annotated[AdminPrincipal, Depends(require_owner)],
+    container: Annotated[Container, Depends(get_container)],
+    tenant_id: UUID,
+    before: datetime,
+    dry_run: bool = False,
+    batch_size: Annotated[int, Query(ge=1, le=5000)] = 5000,
+    max_batches: Annotated[int, Query(ge=1, le=100)] = 20,
+) -> AuditDeleteResponse:
+    _require_aware(before, "before")
+    await _ensure_tenant(container, tenant_id)
+
+    if dry_run:
+        pending = await container.audit.count_requests(
+            tenant_id=tenant_id,
+            since=None,
+            until=before,
+        )
+        return AuditDeleteResponse(
+            tenant_id=tenant_id,
+            before=before,
+            dry_run=True,
+            requests_deleted=pending,
+            sessions_deleted=0,
+            requests_remaining=pending,
+        )
+
+    requests_deleted = await _delete_in_batches(
+        container.audit.delete_requests_before,
+        tenant_id=tenant_id,
+        cutoff=before,
+        batch_size=batch_size,
+        max_batches=max_batches,
+    )
+    sessions_deleted = await _delete_in_batches(
+        container.audit.delete_orphan_sessions_before,
+        tenant_id=tenant_id,
+        cutoff=before,
+        batch_size=batch_size,
+        max_batches=max_batches,
+    )
+    remaining = await container.audit.count_requests(
+        tenant_id=tenant_id,
+        since=None,
+        until=before,
+    )
+
+    metrics = current_metrics()
+    metrics.audit_cleanup_rows.add(requests_deleted, {"kind": "requests"})
+    metrics.audit_cleanup_rows.add(sessions_deleted, {"kind": "sessions"})
+
+    await record_admin_event_safely(
+        container=container,
+        principal=principal,
+        action="audit.deleted",
+        target_type="audit",
+        target_id=str(tenant_id),
+        before={
+            "tenant_id": str(tenant_id),
+            "before": before.isoformat(),
+            "requests_deleted": requests_deleted,
+            "sessions_deleted": sessions_deleted,
+            "requests_remaining": remaining,
+        },
+    )
+
+    return AuditDeleteResponse(
+        tenant_id=tenant_id,
+        before=before,
+        dry_run=False,
+        requests_deleted=requests_deleted,
+        sessions_deleted=sessions_deleted,
+        requests_remaining=remaining,
     )

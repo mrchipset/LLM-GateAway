@@ -52,6 +52,7 @@ class TenantRow(Base):
         Numeric(18, 6),
         nullable=True,
     )
+    audit_retention_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     __table_args__ = (
         Index("ix_tenants_name", "name", unique=True),
@@ -74,6 +75,10 @@ class TenantRow(Base):
         CheckConstraint(
             "monthly_cost_budget IS NULL OR monthly_cost_budget >= 0",
             name="ck_tenants_monthly_cost_budget_non_negative",
+        ),
+        CheckConstraint(
+            "audit_retention_days IS NULL OR audit_retention_days >= 0",
+            name="ck_tenants_audit_retention_days_non_negative",
         ),
     )
 

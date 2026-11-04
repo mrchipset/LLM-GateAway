@@ -22,6 +22,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, SerializerFunctionWrapHandler, model_serializer
 
 AuditChangeType = Literal["new_session", "continuation", "regeneration", "edit", "truncation"]
+AuditExportFormat = Literal["jsonl", "csv"]
 AuditStatus = Literal[
     "completed",
     "upstream_error",
@@ -241,3 +242,20 @@ class AuditRequestDetailResponse(BaseModel):
     request: AuditRequestDetail
     diff: AuditDiff | None
     truncated: bool
+
+
+class AuditDeleteResponse(BaseModel):
+    """Outcome of an audit deletion; a dry run performs no writes.
+
+    ``requests_remaining`` counts rows still older than ``before`` after the
+    run, so a bounded (``max_batches``) deletion is visible as a non-zero value.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    tenant_id: UUID
+    before: datetime
+    dry_run: bool
+    requests_deleted: int
+    sessions_deleted: int
+    requests_remaining: int

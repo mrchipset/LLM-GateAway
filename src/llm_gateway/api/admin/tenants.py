@@ -48,6 +48,7 @@ def _detail(tenant: Tenant) -> TenantDetail:
         plan_tokens=tenant.plan_tokens,
         plan_allow_overage=tenant.plan_allow_overage,
         monthly_cost_budget=tenant.monthly_cost_budget,
+        audit_retention_days=tenant.audit_retention_days,
     )
 
 
@@ -74,6 +75,7 @@ async def create_tenant(
         monthly_token_quota=payload.monthly_token_quota,
         requests_per_minute=payload.requests_per_minute,
         audit_enabled=payload.audit_enabled,
+        audit_retention_days=payload.audit_retention_days,
     )
     try:
         created = await container.tenants.create_tenant(tenant)
@@ -112,12 +114,14 @@ async def update_tenant_limits(
         plan_tokens=payload.plan_tokens,
         plan_allow_overage=payload.plan_allow_overage,
         monthly_cost_budget=payload.monthly_cost_budget,
+        audit_retention_days=payload.audit_retention_days,
         set_monthly_token_quota="monthly_token_quota" in provided,
         set_requests_per_minute="requests_per_minute" in provided,
         set_audit_enabled=payload.audit_enabled is not None,
         set_plan_tokens="plan_tokens" in provided,
         set_plan_allow_overage=payload.plan_allow_overage is not None,
         set_monthly_cost_budget="monthly_cost_budget" in provided,
+        set_audit_retention_days="audit_retention_days" in provided,
     )
     existing = await container.tenants.get_tenant(tenant_id)
     if existing is None:
