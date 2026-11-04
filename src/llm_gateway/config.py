@@ -55,6 +55,11 @@ class Settings(BaseSettings):
     metrics_port: int = Field(default=9464, ge=1, le=65535)
     metrics_service_name: str = "llm-gateway"
     billing_currency: str = "USD"
+    max_request_bytes: int = Field(default=1_048_576, ge=1024)
+    max_messages: int = Field(default=200, ge=1)
+    max_prompt_chars: int = Field(default=1_000_000, ge=1)
+    max_tokens_limit: int = Field(default=32_768, ge=1)
+    max_tools: int = Field(default=128, ge=1)
     session_ttl_hours: int = Field(default=12, ge=1, le=720)
     master_key_enabled: bool = True
     bootstrap_admin_username: str | None = None

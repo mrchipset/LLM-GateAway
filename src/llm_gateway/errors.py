@@ -17,6 +17,8 @@ logger = get_logger(__name__)
 
 class ApiErrorCode(StrEnum):
     INVALID_REQUEST_BODY = "invalid_request_body"
+    REQUEST_TOO_LARGE = "request_too_large"
+    REQUEST_LIMIT_EXCEEDED = "request_limit_exceeded"
     MISSING_API_KEY = "missing_api_key"
     INVALID_API_KEY = "invalid_api_key"
     MASTER_KEY_REQUIRED = "master_key_required"

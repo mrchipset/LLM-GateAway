@@ -323,6 +323,18 @@ Invoke-RestMethod `
 
 It returns `used_tokens`, `covered_tokens`, `billable_tokens`, `list_cost`, `billed_cost`, `budget_remaining`, and the half-open `[period_start, period_end)` window. `PATCH /api/v1/tenants/{id}` accepts `plan_tokens`, `plan_allow_overage`, and `monthly_cost_budget`; an explicit `null` clears a limit.
 
+## Request limits
+
+Chat requests are bounded before any upstream call, so one request cannot exhaust memory or blow through a monthly budget in a single shot:
+
+- Body larger than `GATEWAY_MAX_REQUEST_BYTES` returns 413 `request_too_large`. The `Content-Length` header is checked first and chunked bodies are counted while streaming.
+- More than `GATEWAY_MAX_MESSAGES` messages, more than `GATEWAY_MAX_PROMPT_CHARS` serialized message characters, or more than `GATEWAY_MAX_TOOLS` tools returns 400 `request_limit_exceeded` with `param` naming the field.
+- A requested `max_tokens` / `max_completion_tokens` above `GATEWAY_MAX_TOKENS_LIMIT` returns 400 `request_limit_exceeded`.
+
+The prompt budget is measured in characters because the gateway has no provider tokenizer; it is an explicit approximation, not a token count. Guards run after authentication, the token quota check, and rate limiting, so a rejected oversized request still counts against the tenant's request rate, and before billing or upstream work.
+
+These limits bound one request. Concurrency remains governed by rate limits and the cost budget; there is no separate in-flight request cap yet.
+
 ## Tenant model access
 
 Every tenant defaults to `mode=all`, so existing deployments need no migration step. Switch a tenant to an explicit allowlist to restrict which registered models it can call:
@@ -459,6 +471,11 @@ Invoke-RestMethod -Uri http://127.0.0.1:4000/api/v1/tenants -WebSession $session
 | `GATEWAY_METRICS_PORT` | Metrics bind port, default `9464` |
 | `GATEWAY_METRICS_SERVICE_NAME` | `service.name` resource attribute, default `llm-gateway` |
 | `GATEWAY_BILLING_CURRENCY` | Currency for prices and billing summaries, default `USD` |
+| `GATEWAY_MAX_REQUEST_BYTES` | Request body limit, default `1048576`; larger bodies get 413 `request_too_large` |
+| `GATEWAY_MAX_MESSAGES` | Maximum messages per chat request, default 200 |
+| `GATEWAY_MAX_PROMPT_CHARS` | Character budget for the serialized messages, default 1,000,000 |
+| `GATEWAY_MAX_TOKENS_LIMIT` | Maximum requested `max_tokens` / `max_completion_tokens`, default 32768 |
+| `GATEWAY_MAX_TOOLS` | Maximum tools per request, default 128 |
 | `GATEWAY_MASTER_KEY_ENABLED` | Accept the master key as a break-glass owner credential, default `true` |
 | `GATEWAY_SESSION_TTL_HOURS` | Admin session lifetime, default 12 |
 | `GATEWAY_BOOTSTRAP_ADMIN_USERNAME` | Optional first-run owner username (3–64 chars, `a-z0-9._-`) |

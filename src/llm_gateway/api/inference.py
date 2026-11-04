@@ -30,6 +30,7 @@ from llm_gateway.services.audit import (
 )
 from llm_gateway.services.billing import BillingService
 from llm_gateway.services.chat import ChatService, ChatStream, map_provider_error
+from llm_gateway.services.guards import enforce_chat_request_limits, limits_from_settings
 from llm_gateway.services.limits import InferenceAccess, enforce_inference_limits
 from llm_gateway.services.usage import (
     USAGE_WRITE_TIMEOUT_SECONDS,
@@ -225,6 +226,10 @@ async def create_chat_completion(
     audit_service: Annotated[AuditService, Depends(get_audit_service)],
 ) -> ChatCompletionResponse | StreamingResponse:
     request_id = get_request_id() or ""
+    enforce_chat_request_limits(
+        payload,
+        limits=limits_from_settings(container.settings),
+    )
     annotate_current_span(
         {
             "llm.tenant_id": str(access.api_key.record.tenant_id),

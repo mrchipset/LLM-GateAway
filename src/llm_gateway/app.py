@@ -9,6 +9,7 @@ from llm_gateway import __version__
 from llm_gateway.api.admin import router as admin_router
 from llm_gateway.api.health import router as health_router
 from llm_gateway.api.inference import router as inference_router
+from llm_gateway.body_limit import RequestBodyLimitMiddleware
 from llm_gateway.config import Settings
 from llm_gateway.container import Container, build_container
 from llm_gateway.errors import register_error_handlers
@@ -53,6 +54,10 @@ def create_app(
     telemetry = resolved_container.telemetry
     if telemetry is None:
         telemetry = configure_telemetry(resolved_settings)
+    app.add_middleware(
+        RequestBodyLimitMiddleware,
+        max_bytes=resolved_settings.max_request_bytes,
+    )
     app.add_middleware(RequestContextMiddleware, telemetry=telemetry)
     register_error_handlers(app)
     app.include_router(health_router)

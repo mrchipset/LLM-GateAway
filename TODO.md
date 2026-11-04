@@ -4,7 +4,7 @@
 
 ## 现状基线
 
-- 后端已具备：租户创建/列表/限额 PATCH、API key 创建/列表/吊销、模型注册与版本化价格、用量汇总/按 key/时间序列、租户配额与限流、租户模型授权、token 套餐与成本预算。
+- 后端已具备：租户创建/列表/限额 PATCH、API key 创建/列表/吊销、模型注册与版本化价格、用量汇总/按 key/时间序列、租户配额与限流、租户模型授权、token 套餐与成本预算、单请求输入边界护栏。
 - 管理台已具备：健康状态、模型列表与注册/删除、用量面板、Access 标签（租户创建/列表/限额编辑、租户模型授权、API key 创建/列表/吊销）。
 - 尚缺：租户删除/重命名、P1e 运维项（保留期清理/导出/删除/指标/分区），以及 P2 中的其他项。
 - 当前 chat 请求是无状态的，没有 session/终端用户标识；会话审计需要显式 session header 或消息前缀启发式，且默认关闭。
@@ -252,6 +252,8 @@
   - 现状：请求体、messages 长度、`max_tokens` 均无上限；未知字段全量透传上游。
   - 范围：请求体大小上限、单请求 token 估算上限、`max_tokens` 上限、并发上限、按模型的上下文窗口校验、参数白名单（区分“允许透传”和“拒绝”的字段）。
   - 验收：超限请求返回 4xx 且错误码稳定，不触达上游；单客户端无法通过超长 prompt 或无限 `max_tokens` 打穿内存与成本。
+  - 进度（2026-11-04）：已落地单请求边界——`GATEWAY_MAX_REQUEST_BYTES`（Content-Length + 流式计数）超限 413 `request_too_large`；`GATEWAY_MAX_MESSAGES` / `GATEWAY_MAX_PROMPT_CHARS` / `GATEWAY_MAX_TOOLS` / `GATEWAY_MAX_TOKENS_LIMIT` 超限 400 `request_limit_exceeded` 并带 `param`；护栏在认证/配额/限流之后、计费与上游调用之前执行，超限不写 usage、不触达上游。
+  - 剩余：并发（in-flight）上限归 G1.2；按模型的上下文窗口需要先有模型能力表（归 G2.1）；参数白名单暂不做（`extra="allow"` 是为兼容 provider 专有字段），保持现状并在 README 说明。
 
 ### G1 生产可靠性
 
@@ -292,7 +294,14 @@
   - 范围：压测脚本（非流式 + 流式 + 断连 + 上游慢/错），容量模型（连接数、内存、DB 写入放大），SLO（可用性、P95、错误率预算），告警阈值。
   - 验收：给定 QPS 与并发能给出资源需求与瓶颈结论；每次性能相关改动有前后对比数据。
   - 进度（2026-11-04）：工装已就绪，见 `scripts/loadtest/`（可控上游 stub、seed、用量预热、k6 脚本、一键编排）。冒烟验证通过：非流式 50 请求 0 错误；流式 25 请求 0 错误且 `gateway_upstream_ttft_seconds` 正常；开启套餐/预算/价格后 50 请求 0 错误。
-  - 待做：在 PostgreSQL + 预热用量的机器上跑四轮（基线 / 计费对照 / 流式 / 故障注入），把数字填入 `notes/load-baseline.md`，据此决定 G1.3 的优化顺序。
+  - 待做（需要一台独立机器 + PostgreSQL，k6 已装）：
+    - [ ] 预热用量：`uv run python scripts/loadtest/warm_usage.py --rows 200000`
+    - [ ] 基线：`run_loadtest.py --storage postgres --rate 50 --duration 120s`，记录 p50/p95/p99、错误率、DB 连接数、CPU
+    - [ ] 计费对照：同一租户加 `--plan-tokens/--monthly-cost-budget/--price-*` 再跑一次，比较 p95 增幅
+    - [ ] 流式：`--stream`，看流时长分布、`gateway_upstream_ttft_seconds`、断连记账
+    - [ ] 故障注入：`STUB_ERROR_RATE=0.05`（500 与 429 各一次），看重试放大与错误预算
+    - [ ] 把四轮数字填入 `notes/load-baseline.md` 的结果表，据此决定 G1.3 顺序
+  - 决策规则（已写在 `notes/load-baseline.md`）：同 RPS 下计费开启使 p95 增长 >30%，或连接数先于 CPU 饱和，则 G1.3 先做当月计数器 + 价格缓存；<10% 则暂缓。
 
 ### G2 规模化与生态
 
