@@ -483,7 +483,10 @@ Invoke-RestMethod -Uri http://127.0.0.1:4000/api/v1/tenants -WebSession $session
 | `GATEWAY_DATABASE_MAX_OVERFLOW` | Extra connections above the pool size, default 5 (0-100) |
 | `GATEWAY_DATABASE_POOL_TIMEOUT_SECONDS` | Wait for a pool slot before failing, default 10 |
 | `GATEWAY_DATABASE_STATEMENT_TIMEOUT_MS` | Server-side `statement_timeout`, default 30000; `0` leaves the server default |
-| `GATEWAY_REDIS_URL` | Reserved; unused for now |
+| `GATEWAY_REDIS_URL` | Redis DSN; required when `GATEWAY_RATE_LIMIT_BACKEND=redis` |
+| `GATEWAY_RATE_LIMIT_BACKEND` | `storage` (default: per-process counter, single worker only) or `redis` (shared token bucket across replicas) |
+| `GATEWAY_RATE_LIMIT_FAIL_OPEN` | Admit traffic when the limiter backend is unreachable, default `true`; set `false` for 503 plus a readiness gate |
+| `GATEWAY_RATE_LIMIT_REDIS_TIMEOUT_SECONDS` | Per-call Redis budget before treating the limiter as unavailable, default 0.2 |
 | `GATEWAY_OPENAI_API_KEY` | When empty, the OpenAI provider is not registered |
 | `GATEWAY_OPENAI_BASE_URL` | Defaults to `https://api.openai.com/v1` |
 | `GATEWAY_DEEPSEEK_API_KEY` | When empty, the DeepSeek provider is not registered |
@@ -545,6 +548,25 @@ The container runs `uvicorn` with `--workers ${GATEWAY_WORKERS:-1}` and
   settled for what was delivered. `0` disables the guard.
 - `GATEWAY_DATABASE_STATEMENT_TIMEOUT_MS` is enforced by PostgreSQL, not the client, so a
   runaway aggregate fails as an error instead of pinning a connection.
+
+## Rate limiting
+
+`GATEWAY_RATE_LIMIT_BACKEND=redis` moves tenant request limits to a **token bucket** in Redis,
+shared by every gateway process. The whole refill-and-take is one Lua script, so replicas cannot
+interleave; the bucket holds one minute of tokens (`limit`), refills at `limit/60` per second, and
+therefore cannot admit a second full batch at a window boundary the way a fixed-window counter
+does.
+
+- `Retry-After` is the time until one token exists, rounded up to seconds.
+- `storage` keeps the previous behavior (a single-row counter in PostgreSQL, or in-memory), which
+  is only consistent inside one process. Keep `GATEWAY_WORKERS=1` on that backend.
+- If Redis is unreachable for longer than `GATEWAY_RATE_LIMIT_REDIS_TIMEOUT_SECONDS`, the request
+  is admitted and `gateway_rate_limit_degraded` increments (fail-open, the default). With
+  `GATEWAY_RATE_LIMIT_FAIL_OPEN=false` the request gets 503 `rate_limiter_unavailable` and
+  `/readyz` also fails while Redis is down, so an orchestrator stops routing to the instance.
+- Limits are still tenant-level. Per-key limits, per-model limits, TPM, and in-flight concurrency
+  are the next stage; the token bucket already exposes `limit` as both capacity and refill rate so
+  those can reuse it.
 
 ## Database and migrations
 

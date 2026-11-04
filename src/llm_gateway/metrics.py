@@ -62,6 +62,7 @@ class Metrics:
     audit_redactions: Counter
     audit_export_rows: Counter
     forced_shutdowns: Counter
+    rate_limit_degraded: Counter
 
 
 def build_metrics(meter: Meter) -> Metrics:
@@ -150,6 +151,11 @@ def build_metrics(meter: Meter) -> Metrics:
             "gateway_forced_shutdowns",
             unit="{request}",
             description="In-flight requests still active when the shutdown grace expired",
+        ),
+        rate_limit_degraded=meter.create_counter(
+            "gateway_rate_limit_degraded",
+            unit="{request}",
+            description="Requests admitted while the rate limiter backend was unavailable",
         ),
     )
 

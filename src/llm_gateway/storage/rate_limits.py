@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import math
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
 from uuid import UUID
 
+from redis.asyncio import Redis
+from redis.exceptions import RedisError
 from sqlalchemy import case, func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
@@ -16,6 +19,40 @@ from llm_gateway.storage.sql import _is_foreign_key_violation
 from llm_gateway.storage.tables import TenantRateLimitRow
 
 _WINDOW_SECONDS = 60
+_BURST_WINDOW_SECONDS = 60.0
+_REDIS_TAKE_SCRIPT = """
+local key = KEYS[1]
+local capacity = tonumber(ARGV[1])
+local refill_per_ms = tonumber(ARGV[2])
+local now_ms = tonumber(ARGV[3])
+local cost = tonumber(ARGV[4])
+
+local data = redis.call('HMGET', key, 'tokens', 'ts')
+local tokens = tonumber(data[1])
+local stored_ms = tonumber(data[2])
+if tokens == nil or stored_ms == nil then
+  tokens = capacity
+  stored_ms = now_ms
+end
+-- A clock that moves backwards must not create tokens.
+if now_ms < stored_ms then
+  now_ms = stored_ms
+end
+tokens = math.min(capacity, tokens + (now_ms - stored_ms) * refill_per_ms)
+
+local allowed = 0
+local wait_ms = 0
+if tokens >= cost then
+  tokens = tokens - cost
+  allowed = 1
+else
+  wait_ms = math.ceil((cost - tokens) / refill_per_ms)
+end
+
+redis.call('HSET', key, 'tokens', tokens, 'ts', now_ms)
+redis.call('PEXPIRE', key, math.ceil(capacity / refill_per_ms) + 1000)
+return {allowed, math.floor(tokens), wait_ms}
+"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,6 +60,14 @@ class RateLimitResult:
     allowed: bool
     remaining: int
     retry_after_seconds: float
+
+
+class RateLimiterUnavailable(Exception):
+    """The limiter backend could not answer; callers decide fail-open or fail-closed."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__("rate limiter backend is unavailable")
+        self.reason = reason
 
 
 class RateLimiter(Protocol):
@@ -53,29 +98,83 @@ def _result(*, count: int, limit: int, window_start: datetime, now: datetime) ->
 
 
 class InMemoryRateLimiter:
-    """Process-local fixed-window counter for tests and single-process dev."""
+    """Process-local token bucket for tests and single-process dev.
+
+    ``limit`` is the burst capacity and the per-minute refill rate, so two
+    consecutive fixed windows cannot each admit a full batch (the 2x burst a
+    fixed-window counter allows). The bucket is keyed by tenant only.
+    """
 
     def __init__(self) -> None:
-        self._windows: dict[UUID, tuple[datetime, int]] = {}
+        self._buckets: dict[UUID, tuple[float, float]] = {}
         self._lock = asyncio.Lock()
 
     async def hit(self, *, tenant_id: UUID, limit: int, now: datetime) -> RateLimitResult:
         _validate_hit(limit=limit, now=now)
-        window_start = _window_start(now)
+        rate = limit / _BURST_WINDOW_SECONDS
+        current = now.timestamp()
         async with self._lock:
-            current = self._windows.get(tenant_id)
-            if current is None or window_start > current[0]:
-                count = 1
-                stored_window_start = window_start
+            tokens, stored = self._buckets.get(tenant_id, (float(limit), current))
+            if current < stored:
+                current = stored
+            tokens = min(float(limit), tokens + (current - stored) * rate)
+            if tokens >= 1.0:
+                tokens -= 1.0
+                allowed = True
+                wait = 0.0
             else:
-                count = current[1] + 1
-                stored_window_start = current[0]
-            self._windows[tenant_id] = (stored_window_start, count)
-        return _result(
-            count=count,
-            limit=limit,
-            window_start=stored_window_start,
-            now=now,
+                allowed = False
+                wait = (1.0 - tokens) / rate
+            self._buckets[tenant_id] = (tokens, current)
+        return RateLimitResult(
+            allowed=allowed,
+            remaining=math.floor(tokens),
+            retry_after_seconds=wait,
+        )
+
+
+class RedisRateLimiter:
+    """Shared token bucket in Redis, consistent across gateway processes.
+
+    The whole refill-and-take runs inside one Lua script, so replicas cannot
+    interleave between reading and writing the bucket. ``now`` comes from the
+    injected clock; a backwards clock is clamped to the stored timestamp and
+    therefore can only under-refill, never over-grant.
+    """
+
+    def __init__(
+        self,
+        *,
+        client: Redis,
+        key_prefix: str = "llm-gateway:rate",
+        timeout_seconds: float = 0.2,
+    ) -> None:
+        if timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be > 0")
+        self._client = client
+        self._key_prefix = key_prefix
+        self._timeout_seconds = timeout_seconds
+        self._script = client.register_script(_REDIS_TAKE_SCRIPT)
+
+    async def hit(self, *, tenant_id: UUID, limit: int, now: datetime) -> RateLimitResult:
+        _validate_hit(limit=limit, now=now)
+        key = f"{self._key_prefix}:tenant:{tenant_id}"
+        now_ms = int(now.timestamp() * 1000)
+        try:
+            async with asyncio.timeout(self._timeout_seconds):
+                raw = await self._script(
+                    keys=[key],
+                    args=[limit, limit / (_BURST_WINDOW_SECONDS * 1000), now_ms, 1],
+                )
+        except TimeoutError as exc:
+            raise RateLimiterUnavailable("timeout") from exc
+        except (RedisError, OSError) as exc:
+            raise RateLimiterUnavailable("error") from exc
+        allowed, remaining, wait_ms = (int(value) for value in raw)
+        return RateLimitResult(
+            allowed=bool(allowed),
+            remaining=max(remaining, 0),
+            retry_after_seconds=max(wait_ms, 0) / 1000.0,
         )
 
 

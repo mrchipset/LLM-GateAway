@@ -5,9 +5,10 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
 from fastapi import Request
+from redis.asyncio import Redis
 
 from llm_gateway.clock import Clock, SystemClock
-from llm_gateway.config import Settings, StorageBackend
+from llm_gateway.config import RateLimitBackend, Settings, StorageBackend
 from llm_gateway.lifecycle import InFlightTracker
 from llm_gateway.metrics import configure_metrics, shutdown_metrics
 from llm_gateway.providers.factory import build_providers
@@ -28,7 +29,7 @@ from llm_gateway.storage.memory import (
     InMemoryTenantRepository,
     InMemoryUsageRepository,
 )
-from llm_gateway.storage.rate_limits import InMemoryRateLimiter, RateLimiter
+from llm_gateway.storage.rate_limits import InMemoryRateLimiter, RateLimiter, RedisRateLimiter
 from llm_gateway.storage.repositories import (
     AdminAuditRepository,
     AdminSessionRepository,
@@ -83,6 +84,7 @@ class Container:
     router: ModelRouter | None = None
     telemetry: Telemetry | None = None
     inflight: InFlightTracker = field(default_factory=InFlightTracker)
+    redis_client: Redis | None = None
 
     def __post_init__(self) -> None:
         seen: set[str] = set()
@@ -113,11 +115,15 @@ class Container:
         try:
             await self.providers.aclose()
         finally:
-            if self.database is not None:
-                await self.database.aclose()
-            if self.telemetry is not None:
-                self.telemetry.shutdown()
-            shutdown_metrics()
+            try:
+                if self.redis_client is not None:
+                    await self.redis_client.aclose()
+            finally:
+                if self.database is not None:
+                    await self.database.aclose()
+                if self.telemetry is not None:
+                    self.telemetry.shutdown()
+                shutdown_metrics()
 
 
 def get_container(request: Request) -> Container:
@@ -187,4 +193,23 @@ def build_container(settings: Settings, *, telemetry: Telemetry | None = None) -
         tracer=resolved_telemetry.tracer,
         max_attempts=settings.route_max_attempts,
     )
+    if settings.rate_limit_backend is RateLimitBackend.REDIS:
+        if settings.redis_url is None:  # guarded by Settings validation
+            raise ValueError("redis_url is required when rate_limit_backend is redis")
+        redis_client = Redis.from_url(settings.redis_url)
+        container.rate_limiter = RedisRateLimiter(
+            client=redis_client,
+            timeout_seconds=settings.rate_limit_redis_timeout_seconds,
+        )
+        container.redis_client = redis_client
+        if not settings.rate_limit_fail_open:
+            # Fail-closed only: when the limiter is down every request is rejected,
+            # so the instance must also stop advertising readiness.
+            async def _ping_redis() -> bool:
+                return bool(await redis_client.ping())
+
+            container.readiness_checks = (
+                *container.readiness_checks,
+                ReadinessCheck(name="rate_limiter", check=_ping_redis),
+            )
     return container

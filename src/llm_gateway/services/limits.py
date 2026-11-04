@@ -12,6 +12,7 @@ from llm_gateway.errors import ApiError, ApiErrorCode
 from llm_gateway.logging import get_logger
 from llm_gateway.metrics import current_metrics
 from llm_gateway.services.billing import month_window
+from llm_gateway.storage.rate_limits import RateLimiterUnavailable
 from llm_gateway.storage.repositories import Tenant
 
 logger = get_logger(__name__)
@@ -67,28 +68,48 @@ async def enforce_inference_limits(
             )
 
     if tenant.requests_per_minute is not None:
-        limit_result = await container.rate_limiter.hit(
-            tenant_id=tenant.id,
-            limit=tenant.requests_per_minute,
-            now=now,
-        )
-        if not limit_result.allowed:
-            retry_after = max(1, math.ceil(limit_result.retry_after_seconds))
+        try:
+            limit_result = await container.rate_limiter.hit(
+                tenant_id=tenant.id,
+                limit=tenant.requests_per_minute,
+                now=now,
+            )
+        except RateLimiterUnavailable as exc:
+            current_metrics().rate_limit_degraded.add(1, {"reason": exc.reason})
             logger.warning(
-                "tenant_rate_limited",
+                "rate_limit_unavailable",
                 extra={
                     "tenant_id": str(tenant.id),
-                    "limit": tenant.requests_per_minute,
-                    "retry_after": retry_after,
+                    "reason": exc.reason,
+                    "fail_open": container.settings.rate_limit_fail_open,
                 },
             )
-            current_metrics().rejections.add(1, {"reason": "rate_limit"})
-            raise ApiError(
-                status_code=429,
-                code=ApiErrorCode.RATE_LIMITED,
-                message="Tenant request rate limit exceeded",
-                error_type="rate_limit_error",
-                headers={"Retry-After": str(retry_after)},
-            )
+            if not container.settings.rate_limit_fail_open:
+                raise ApiError(
+                    status_code=503,
+                    code=ApiErrorCode.RATE_LIMITER_UNAVAILABLE,
+                    message="Rate limiter is unavailable",
+                    error_type="server_error",
+                    headers={"Retry-After": "1"},
+                ) from exc
+        else:
+            if not limit_result.allowed:
+                retry_after = max(1, math.ceil(limit_result.retry_after_seconds))
+                logger.warning(
+                    "tenant_rate_limited",
+                    extra={
+                        "tenant_id": str(tenant.id),
+                        "limit": tenant.requests_per_minute,
+                        "retry_after": retry_after,
+                    },
+                )
+                current_metrics().rejections.add(1, {"reason": "rate_limit"})
+                raise ApiError(
+                    status_code=429,
+                    code=ApiErrorCode.RATE_LIMITED,
+                    message="Tenant request rate limit exceeded",
+                    error_type="rate_limit_error",
+                    headers={"Retry-After": str(retry_after)},
+                )
 
     return InferenceAccess(api_key=api_key, tenant=tenant)

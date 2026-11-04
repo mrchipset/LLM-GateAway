@@ -35,6 +35,7 @@ class ApiErrorCode(StrEnum):
     METHOD_NOT_ALLOWED = "method_not_allowed"
     PERMISSION_DENIED = "permission_denied"
     RATE_LIMITED = "rate_limited"
+    RATE_LIMITER_UNAVAILABLE = "rate_limiter_unavailable"
     TENANT_QUOTA_EXCEEDED = "tenant_quota_exceeded"
     PLAN_ALLOWANCE_EXHAUSTED = "plan_allowance_exhausted"
     BUDGET_EXCEEDED = "budget_exceeded"

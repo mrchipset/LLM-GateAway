@@ -21,6 +21,11 @@ class StorageBackend(StrEnum):
     POSTGRES = "postgres"
 
 
+class RateLimitBackend(StrEnum):
+    STORAGE = "storage"
+    REDIS = "redis"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="GATEWAY_",
@@ -40,6 +45,9 @@ class Settings(BaseSettings):
     database_pool_timeout_seconds: float = Field(default=10.0, gt=0)
     database_statement_timeout_ms: int = Field(default=30_000, ge=0, le=600_000)
     redis_url: str | None = None
+    rate_limit_backend: RateLimitBackend = RateLimitBackend.STORAGE
+    rate_limit_fail_open: bool = True
+    rate_limit_redis_timeout_seconds: float = Field(default=0.2, ge=0.01, le=10)
     openai_api_key: SecretStr | None = None
     openai_base_url: str = "https://api.openai.com/v1"
     deepseek_api_key: SecretStr | None = None
@@ -150,6 +158,8 @@ class Settings(BaseSettings):
 
         if self.storage_backend is StorageBackend.POSTGRES and not self.database_url:
             raise ValueError("database_url is required when storage_backend is postgres")
+        if self.rate_limit_backend is RateLimitBackend.REDIS and not self.redis_url:
+            raise ValueError("redis_url is required when rate_limit_backend is redis")
 
         if self.environment is Environment.PRODUCTION:
             if len(secret) < 32:

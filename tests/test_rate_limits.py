@@ -101,3 +101,52 @@ async def test_in_memory_rate_limiter_ignores_stale_clock_window() -> None:
     assert stale.allowed is False
     assert still_stored.allowed is False
     assert 0 <= stale.retry_after_seconds <= 60
+
+
+async def test_token_bucket_does_not_double_the_window_boundary() -> None:
+    limiter = InMemoryRateLimiter()
+    tenant_id = uuid4()
+    start = NOW.replace(second=0, microsecond=0)
+
+    for _ in range(60):
+        await limiter.hit(tenant_id=tenant_id, limit=60, now=start + timedelta(seconds=59))
+
+    admitted = 0
+    for _ in range(5):
+        result = await limiter.hit(
+            tenant_id=tenant_id,
+            limit=60,
+            now=start + timedelta(seconds=60.5),
+        )
+        admitted += 1 if result.allowed else 0
+
+    assert admitted == 1, "a 1.5s refill must admit one request, not a fresh 60"
+
+
+async def test_denied_request_reports_the_time_until_one_token() -> None:
+    limiter = InMemoryRateLimiter()
+    tenant_id = uuid4()
+
+    await limiter.hit(tenant_id=tenant_id, limit=2, now=NOW)
+    await limiter.hit(tenant_id=tenant_id, limit=2, now=NOW)
+
+    denied = await limiter.hit(tenant_id=tenant_id, limit=2, now=NOW)
+
+    assert denied.allowed is False
+    assert 25 < denied.retry_after_seconds <= 30, "limit 2/min refills one token in 30s"
+
+
+async def test_a_backwards_clock_never_refills_the_bucket() -> None:
+    limiter = InMemoryRateLimiter()
+    tenant_id = uuid4()
+
+    await limiter.hit(tenant_id=tenant_id, limit=2, now=NOW)
+    await limiter.hit(tenant_id=tenant_id, limit=2, now=NOW)
+
+    denied = await limiter.hit(
+        tenant_id=tenant_id,
+        limit=2,
+        now=NOW - timedelta(seconds=30),
+    )
+
+    assert denied.allowed is False

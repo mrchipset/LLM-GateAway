@@ -13,7 +13,7 @@ from llm_gateway.config import Settings
 from llm_gateway.container import Container
 from llm_gateway.errors import ApiError, ApiErrorCode
 from llm_gateway.services.limits import enforce_inference_limits, month_window
-from llm_gateway.storage.rate_limits import RateLimitResult
+from llm_gateway.storage.rate_limits import RateLimiterUnavailable, RateLimitResult
 from llm_gateway.storage.repositories import (
     ApiKeyRecord,
     ModelAccess,
@@ -21,7 +21,7 @@ from llm_gateway.storage.repositories import (
     Tenant,
     TenantLimitPatch,
 )
-from support import CapturingUsageRepository
+from support import CapturingUsageRepository, seed_api_key, seed_tenant
 
 NOW = datetime(2026, 12, 31, 23, 59, 59, tzinfo=UTC)
 
@@ -106,3 +106,48 @@ async def test_missing_tenant_is_a_403_without_touching_limits(
     assert info.value.message == "Tenant is not available"
     assert rate_limiter.calls == []
     assert usage.records == []
+
+
+class UnavailableRateLimiter:
+    def __init__(self, reason: str = "timeout") -> None:
+        self.reason = reason
+
+    async def hit(self, *, tenant_id: UUID, limit: int, now: datetime) -> RateLimitResult:
+        raise RateLimiterUnavailable(self.reason)
+
+
+async def _authenticated_key(container: Container) -> AuthenticatedKey:
+    secret = await seed_api_key(container)
+    record = await container.api_keys.get_key_by_hash(hash_api_key(secret))
+    assert record is not None
+    return AuthenticatedKey(record=record)
+
+
+async def test_unavailable_limiter_fails_open_with_a_warning(
+    settings: Settings,
+    make_container: Any,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    container: Container = make_container(settings, rate_limiter=UnavailableRateLimiter("timeout"))
+    tenant = await seed_tenant(container, requests_per_minute=10)
+
+    access = await enforce_inference_limits(await _authenticated_key(container), container)
+
+    assert access.tenant.id == tenant.id
+    assert any(record.message == "rate_limit_unavailable" for record in caplog.records)
+
+
+async def test_unavailable_limiter_fails_closed_when_configured(
+    settings: Settings,
+    make_container: Any,
+) -> None:
+    closed = settings.model_copy(update={"rate_limit_fail_open": False})
+    container: Container = make_container(closed, rate_limiter=UnavailableRateLimiter("error"))
+    await seed_tenant(container, requests_per_minute=10)
+
+    with pytest.raises(ApiError) as info:
+        await enforce_inference_limits(await _authenticated_key(container), container)
+
+    assert info.value.status_code == 503
+    assert info.value.code is ApiErrorCode.RATE_LIMITER_UNAVAILABLE
+    assert info.value.headers == {"Retry-After": "1"}

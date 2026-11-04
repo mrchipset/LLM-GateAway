@@ -50,6 +50,13 @@ def create_app(
                     )
                 },
             )
+        logger.info(
+            "rate_limit_configured",
+            extra={
+                "backend": resolved_settings.rate_limit_backend.value,
+                "fail_open": resolved_settings.rate_limit_fail_open,
+            },
+        )
         await bootstrap_admin(resolved_container)
         try:
             yield
