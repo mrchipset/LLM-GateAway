@@ -109,6 +109,22 @@ a conditional monthly counter row, not Redis.
 Order of checks: quota, rate limit, plan allowance, budget. The quota is checked first because
 it is an absolute cap; the plan check only fires when overage is disabled.
 
+### 2.8 Kill switch
+
+`GATEWAY_BILLING_ENABLED=false` skips plan/budget authorization entirely for inference
+requests: no month aggregate, no price lookup, no 429. Usage rows still record token counts,
+but `covered_tokens`, `billable_tokens`, `list_cost`, and `billed_cost` stay unset, and
+`GET /tenants/{id}/billing` reports `enabled: false` so the zeros are not mistaken for real
+spend. The process logs `billing_disabled` at startup.
+
+This exists because the month aggregate is the measured hot-path bottleneck (see
+`notes/load-baseline.md`). It is an escape hatch for environments where enforcement is not yet
+required, not a production mode:
+
+- costs are not settled while it is off, so budget enforcement must not be re-enabled mid-period
+  without backfilling the unset rows from versioned prices;
+- turning it off does not delete plan configuration; it only bypasses the check.
+
 ## 3. Consequences
 
 Positive:

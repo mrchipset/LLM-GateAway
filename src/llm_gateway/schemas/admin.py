@@ -129,6 +129,7 @@ class TenantBillingResponse(BaseModel):
 
     tenant_id: UUID
     currency: str
+    enabled: bool = True
     period_start: datetime
     period_end: datetime
     plan_tokens: int | None = None

@@ -28,7 +28,7 @@ from llm_gateway.services.audit import (
     begin_audit_safely,
     record_audit_safely,
 )
-from llm_gateway.services.billing import BillingService
+from llm_gateway.services.billing import BillingAllowance, BillingService
 from llm_gateway.services.chat import ChatService, ChatStream, map_provider_error
 from llm_gateway.services.guards import enforce_chat_request_limits, limits_from_settings
 from llm_gateway.services.limits import InferenceAccess, enforce_inference_limits
@@ -242,14 +242,16 @@ async def create_chat_completion(
         }
     )
     session_header = request.headers.get(AUDIT_SESSION_HEADER)
-    allowance = await BillingService(
-        usage=container.usage,
-        prices=container.prices,
-    ).authorize(
-        tenant=access.tenant,
-        model_id=payload.model,
-        now=container.clock.now(),
-    )
+    allowance: BillingAllowance | None = None
+    if container.settings.billing_enabled:
+        allowance = await BillingService(
+            usage=container.usage,
+            prices=container.prices,
+        ).authorize(
+            tenant=access.tenant,
+            model_id=payload.model,
+            now=container.clock.now(),
+        )
     audit_turn = await begin_audit_safely(
         service=audit_service,
         tenant_id=access.api_key.record.tenant_id,

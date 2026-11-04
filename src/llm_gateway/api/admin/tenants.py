@@ -174,6 +174,7 @@ async def tenant_billing(
     return TenantBillingResponse(
         tenant_id=tenant.id,
         currency=container.settings.billing_currency,
+        enabled=container.settings.billing_enabled,
         period_start=period_start,
         period_end=period_end,
         plan_tokens=tenant.plan_tokens,

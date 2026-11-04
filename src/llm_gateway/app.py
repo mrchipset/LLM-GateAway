@@ -13,11 +13,13 @@ from llm_gateway.body_limit import RequestBodyLimitMiddleware
 from llm_gateway.config import Settings
 from llm_gateway.container import Container, build_container
 from llm_gateway.errors import register_error_handlers
-from llm_gateway.logging import configure_logging
+from llm_gateway.logging import configure_logging, get_logger
 from llm_gateway.metrics import configure_metrics
 from llm_gateway.request_context import RequestContextMiddleware
 from llm_gateway.services.bootstrap import bootstrap_admin
 from llm_gateway.telemetry import configure_telemetry
+
+logger = get_logger(__name__)
 
 
 def create_app(
@@ -38,6 +40,16 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        if not resolved_settings.billing_enabled:
+            logger.warning(
+                "billing_disabled",
+                extra={
+                    "consequence": (
+                        "plan and budget enforcement are skipped; "
+                        "usage costs are not settled"
+                    )
+                },
+            )
         await bootstrap_admin(resolved_container)
         try:
             yield

@@ -497,6 +497,7 @@ Invoke-RestMethod -Uri http://127.0.0.1:4000/api/v1/tenants -WebSession $session
 | `GATEWAY_METRICS_HOST` | Metrics bind address, default `127.0.0.1` |
 | `GATEWAY_METRICS_PORT` | Metrics bind port, default `9464` |
 | `GATEWAY_METRICS_SERVICE_NAME` | `service.name` resource attribute, default `llm-gateway` |
+| `GATEWAY_BILLING_ENABLED` | Plan/budget enforcement and cost settlement; `false` skips both, default `true` |
 | `GATEWAY_BILLING_CURRENCY` | Currency for prices and billing summaries, default `USD` |
 | `GATEWAY_MAX_REQUEST_BYTES` | Request body limit, default `1048576`; larger bodies get 413 `request_too_large` |
 | `GATEWAY_MAX_MESSAGES` | Maximum messages per chat request, default 200 |

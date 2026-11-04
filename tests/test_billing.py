@@ -376,6 +376,58 @@ async def test_billed_tenant_without_a_price_fails_closed(
     assert provider.calls == 0
 
 
+async def test_disabled_billing_lets_an_exhausted_plan_through(
+    settings: Settings,
+    make_container: Callable[..., Container],
+    make_client: Callable[..., AbstractAsyncContextManager[httpx.AsyncClient]],
+) -> None:
+    disabled = settings.model_copy(update={"billing_enabled": False})
+    container, provider, secret = await _stack(make_container, disabled, plan_tokens=1)
+    tenant = (await container.tenants.list_tenants(limit=1, offset=0))[0][0]
+    key = (await container.api_keys.list_keys(limit=1, offset=0))[0][0]
+    await seed_usage(
+        container,
+        tenant_id=tenant.id,
+        api_key_id=key.id,
+        model_id=MODEL_ID,
+        prompt_tokens=1,
+        completion_tokens=0,
+    )
+
+    async with make_client(disabled, container) as client:
+        response = await _chat(client, secret)
+
+    assert response.status_code == 200
+    assert provider.calls == 1
+    summary = await container.usage.summary_by_model(
+        tenant_id=None, model_id=None, since=None, until=None
+    )
+    assert summary[0].total_tokens == 1 + TOTAL_TOKENS
+
+
+async def test_disabled_billing_skips_the_price_lookup(
+    settings: Settings,
+    make_container: Callable[..., Container],
+    make_client: Callable[..., AbstractAsyncContextManager[httpx.AsyncClient]],
+) -> None:
+    disabled = settings.model_copy(update={"billing_enabled": False})
+    container, provider, secret = await _stack(
+        make_container, disabled, plan_tokens=10_000, with_price=False
+    )
+
+    async with make_client(disabled, container) as client:
+        response = await _chat(client, secret)
+
+    assert response.status_code == 200
+    assert provider.calls == 1
+    summary = await container.usage.summary_by_model(
+        tenant_id=None, model_id=None, since=None, until=None
+    )
+    assert summary[0].total_tokens == TOTAL_TOKENS
+    assert summary[0].list_cost == Decimal("0")
+    assert summary[0].billed_cost == Decimal("0")
+
+
 # ---------------------------------------------------------------- admin api
 
 
@@ -456,6 +508,7 @@ async def test_billing_summary_reports_the_period(
     assert response.status_code == 200
     body = response.json()
     assert body["currency"] == "USD"
+    assert body["enabled"] is True
     assert body["used_tokens"] == 1300
     assert body["covered_tokens"] == 800
     assert body["billable_tokens"] == 500

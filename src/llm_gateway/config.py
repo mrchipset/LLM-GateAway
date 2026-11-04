@@ -54,6 +54,7 @@ class Settings(BaseSettings):
     metrics_host: str = "127.0.0.1"
     metrics_port: int = Field(default=9464, ge=1, le=65535)
     metrics_service_name: str = "llm-gateway"
+    billing_enabled: bool = True
     billing_currency: str = "USD"
     max_request_bytes: int = Field(default=1_048_576, ge=1024)
     max_messages: int = Field(default=200, ge=1)
