@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 from enum import StrEnum
 from typing import Any, Literal, Protocol
 from uuid import UUID
@@ -66,6 +67,24 @@ def _require_optional_aware(value: datetime | None, field: str) -> None:
         _require_aware(value, field)
 
 
+def _require_money(value: object, field: str, *, allow_zero: bool = True) -> None:
+    if not isinstance(value, Decimal) or not value.is_finite():
+        raise ValueError(f"{field} must be a finite Decimal")
+    if value < 0 or (value == 0 and not allow_zero):
+        raise ValueError(f"{field} must be {'non-negative' if allow_zero else 'positive'}")
+
+
+def _require_optional_money(value: object, field: str) -> None:
+    if value is None:
+        return
+    _require_money(value, field)
+
+
+def _require_currency(value: object, field: str) -> None:
+    if not isinstance(value, str) or len(value) != 3 or not value.isupper():
+        raise ValueError(f"{field} must be a 3-letter uppercase currency code")
+
+
 @dataclass(frozen=True, slots=True)
 class Tenant:
     """An organizational label that owns API keys."""
@@ -77,6 +96,9 @@ class Tenant:
     requests_per_minute: int | None = None
     audit_enabled: bool = False
     model_access_mode: ModelAccessMode = ModelAccessMode.ALL
+    plan_tokens: int | None = None
+    plan_allow_overage: bool = False
+    monthly_cost_budget: Decimal | None = None
 
     def __post_init__(self) -> None:
         _require_uuid(self.id, "id")
@@ -84,6 +106,10 @@ class Tenant:
         _require_aware(self.created_at, "created_at")
         _require_optional_positive_int(self.monthly_token_quota, "monthly_token_quota")
         _require_optional_positive_int(self.requests_per_minute, "requests_per_minute")
+        _require_optional_positive_int(self.plan_tokens, "plan_tokens")
+        if not isinstance(self.plan_allow_overage, bool):
+            raise ValueError("plan_allow_overage must be a boolean")
+        _require_optional_money(self.monthly_cost_budget, "monthly_cost_budget")
         if not isinstance(self.model_access_mode, ModelAccessMode):
             raise ValueError("model_access_mode must be a ModelAccessMode")
 
@@ -122,6 +148,34 @@ class ModelConfig:
     def __post_init__(self) -> None:
         _require_non_blank(self.id, "id")
         _require_non_blank(self.upstream_model, "upstream_model")
+        _require_aware(self.created_at, "created_at")
+
+
+@dataclass(frozen=True, slots=True)
+class ModelPrice:
+    """A versioned price list for one model, in the deployment currency.
+
+    Prices are per million tokens. ``cached_input_per_million`` falls back to
+    ``input_per_million`` when unset.
+    """
+
+    id: UUID
+    model_id: str
+    input_per_million: Decimal
+    output_per_million: Decimal
+    cached_input_per_million: Decimal | None
+    currency: str
+    effective_from: datetime
+    created_at: datetime
+
+    def __post_init__(self) -> None:
+        _require_uuid(self.id, "id")
+        _require_non_blank(self.model_id, "model_id")
+        _require_money(self.input_per_million, "input_per_million")
+        _require_money(self.output_per_million, "output_per_million")
+        _require_optional_money(self.cached_input_per_million, "cached_input_per_million")
+        _require_currency(self.currency, "currency")
+        _require_aware(self.effective_from, "effective_from")
         _require_aware(self.created_at, "created_at")
 
 
@@ -176,6 +230,10 @@ class UsageRecord:
     cached_tokens: int
     created_at: datetime
     trace_id: str | None = None
+    covered_tokens: int = 0
+    billable_tokens: int = 0
+    list_cost: Decimal | None = None
+    billed_cost: Decimal | None = None
 
     def __post_init__(self) -> None:
         _require_uuid(self.id, "id")
@@ -188,6 +246,10 @@ class UsageRecord:
         _require_non_negative_int(self.completion_tokens, "completion_tokens")
         _require_non_negative_int(self.total_tokens, "total_tokens")
         _require_non_negative_int(self.cached_tokens, "cached_tokens")
+        _require_non_negative_int(self.covered_tokens, "covered_tokens")
+        _require_non_negative_int(self.billable_tokens, "billable_tokens")
+        _require_optional_money(self.list_cost, "list_cost")
+        _require_optional_money(self.billed_cost, "billed_cost")
         _require_aware(self.created_at, "created_at")
 
 
@@ -198,6 +260,10 @@ class UsageTotals:
     cached_tokens: int = 0
     total_tokens: int = 0
     requests: int = 0
+    covered_tokens: int = 0
+    billable_tokens: int = 0
+    list_cost: Decimal = Decimal("0")
+    billed_cost: Decimal = Decimal("0")
 
     def __post_init__(self) -> None:
         for field in (
@@ -206,8 +272,30 @@ class UsageTotals:
             "cached_tokens",
             "total_tokens",
             "requests",
+            "covered_tokens",
+            "billable_tokens",
         ):
             _require_non_negative_int(getattr(self, field), field)
+        _require_money(self.list_cost, "list_cost")
+        _require_money(self.billed_cost, "billed_cost")
+
+
+@dataclass(frozen=True, slots=True)
+class MonthlyUsage:
+    """Aggregated usage for one billing period, used by enforcement and reporting."""
+
+    total_tokens: int = 0
+    covered_tokens: int = 0
+    billable_tokens: int = 0
+    billed_cost: Decimal = Decimal("0")
+    list_cost: Decimal = Decimal("0")
+    requests: int = 0
+
+    def __post_init__(self) -> None:
+        for field in ("total_tokens", "covered_tokens", "billable_tokens", "requests"):
+            _require_non_negative_int(getattr(self, field), field)
+        _require_money(self.billed_cost, "billed_cost")
+        _require_money(self.list_cost, "list_cost")
 
 
 @dataclass(frozen=True, slots=True)
@@ -219,6 +307,10 @@ class ModelUsage:
     cached_tokens: int
     total_tokens: int
     requests: int
+    covered_tokens: int = 0
+    billable_tokens: int = 0
+    list_cost: Decimal = Decimal("0")
+    billed_cost: Decimal = Decimal("0")
 
     def __post_init__(self) -> None:
         _require_non_blank(self.model_id, "model_id")
@@ -229,8 +321,12 @@ class ModelUsage:
             "cached_tokens",
             "total_tokens",
             "requests",
+            "covered_tokens",
+            "billable_tokens",
         ):
             _require_non_negative_int(getattr(self, field), field)
+        _require_money(self.list_cost, "list_cost")
+        _require_money(self.billed_cost, "billed_cost")
 
 
 @dataclass(frozen=True, slots=True)
@@ -241,6 +337,10 @@ class KeyUsage:
     cached_tokens: int
     total_tokens: int
     requests: int
+    covered_tokens: int = 0
+    billable_tokens: int = 0
+    list_cost: Decimal = Decimal("0")
+    billed_cost: Decimal = Decimal("0")
 
     def __post_init__(self) -> None:
         _require_uuid(self.api_key_id, "api_key_id")
@@ -250,8 +350,12 @@ class KeyUsage:
             "cached_tokens",
             "total_tokens",
             "requests",
+            "covered_tokens",
+            "billable_tokens",
         ):
             _require_non_negative_int(getattr(self, field), field)
+        _require_money(self.list_cost, "list_cost")
+        _require_money(self.billed_cost, "billed_cost")
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,6 +366,10 @@ class UsagePoint:
     cached_tokens: int
     total_tokens: int
     requests: int
+    covered_tokens: int = 0
+    billable_tokens: int = 0
+    list_cost: Decimal = Decimal("0")
+    billed_cost: Decimal = Decimal("0")
 
     def __post_init__(self) -> None:
         _require_aware(self.bucket_start, "bucket_start")
@@ -271,8 +379,12 @@ class UsagePoint:
             "cached_tokens",
             "total_tokens",
             "requests",
+            "covered_tokens",
+            "billable_tokens",
         ):
             _require_non_negative_int(getattr(self, field), field)
+        _require_money(self.list_cost, "list_cost")
+        _require_money(self.billed_cost, "billed_cost")
 
 
 class DuplicateModelError(Exception):
@@ -303,6 +415,17 @@ class UnknownModelError(Exception):
         self.model_id = model_id
 
 
+class DuplicatePriceError(Exception):
+    """Raised when two prices share a model and effective timestamp."""
+
+    def __init__(self, model_id: str, effective_from: datetime) -> None:
+        super().__init__(
+            f"model '{model_id}' already has a price effective at {effective_from.isoformat()}"
+        )
+        self.model_id = model_id
+        self.effective_from = effective_from
+
+
 class DuplicateApiKeyError(Exception):
     def __init__(self) -> None:
         super().__init__("an API key with the same hash already exists")
@@ -315,9 +438,15 @@ class TenantLimitPatch:
     monthly_token_quota: int | None = None
     requests_per_minute: int | None = None
     audit_enabled: bool | None = None
+    plan_tokens: int | None = None
+    plan_allow_overage: bool | None = None
+    monthly_cost_budget: Decimal | None = None
     set_monthly_token_quota: bool = False
     set_requests_per_minute: bool = False
     set_audit_enabled: bool = False
+    set_plan_tokens: bool = False
+    set_plan_allow_overage: bool = False
+    set_monthly_cost_budget: bool = False
 
 
 class TenantRepository(Protocol):
@@ -349,6 +478,10 @@ class UsageRepository(Protocol):
     async def record(self, record: UsageRecord) -> None: ...
 
     async def token_total(self, *, tenant_id: UUID, since: datetime, until: datetime) -> int: ...
+
+    async def monthly_totals(
+        self, *, tenant_id: UUID, since: datetime, until: datetime
+    ) -> MonthlyUsage: ...
 
     async def summary_by_model(
         self,
@@ -389,6 +522,16 @@ class ModelRepository(Protocol):
     async def create_model(self, model: ModelConfig) -> ModelConfig: ...
 
     async def delete_model(self, model_id: str) -> bool: ...
+
+
+class ModelPriceRepository(Protocol):
+    async def get_effective_price(self, *, model_id: str, at: datetime) -> ModelPrice | None: ...
+
+    async def create_price(self, price: ModelPrice) -> ModelPrice: ...
+
+    async def list_prices(
+        self, *, model_id: str, limit: int, offset: int
+    ) -> tuple[Sequence[ModelPrice], int]: ...
 
 
 class ApiKeyRepository(Protocol):

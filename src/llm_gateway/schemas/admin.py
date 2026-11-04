@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -101,6 +102,9 @@ class UpdateTenantLimitsRequest(BaseModel):
     monthly_token_quota: int | None = Field(default=None, ge=1)
     requests_per_minute: int | None = Field(default=None, ge=1)
     audit_enabled: bool | None = None
+    plan_tokens: int | None = Field(default=None, ge=1)
+    plan_allow_overage: bool | None = None
+    monthly_cost_budget: Decimal | None = Field(default=None, ge=0)
 
 
 class TenantDetail(BaseModel):
@@ -113,6 +117,67 @@ class TenantDetail(BaseModel):
     requests_per_minute: int | None = None
     audit_enabled: bool = False
     model_access_mode: ModelAccessMode = ModelAccessMode.ALL
+    plan_tokens: int | None = None
+    plan_allow_overage: bool = False
+    monthly_cost_budget: Decimal | None = None
+
+
+class TenantBillingResponse(BaseModel):
+    """Current-period billing state for one tenant."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    tenant_id: UUID
+    currency: str
+    period_start: datetime
+    period_end: datetime
+    plan_tokens: int | None = None
+    plan_allow_overage: bool = False
+    monthly_cost_budget: Decimal | None = None
+    used_tokens: int
+    covered_tokens: int
+    billable_tokens: int
+    requests: int
+    list_cost: Decimal
+    billed_cost: Decimal
+    budget_remaining: Decimal | None = None
+
+
+class CreateModelPriceRequest(BaseModel):
+    """Body for `POST /api/v1/models/{model_id}/prices`.
+
+    Prices are per million tokens; ``cached_input_per_million`` falls back to the
+    input price when omitted. A new row is appended, so history stays repriced-free.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    input_per_million: Decimal = Field(ge=0)
+    cached_input_per_million: Decimal | None = Field(default=None, ge=0)
+    output_per_million: Decimal = Field(ge=0)
+    effective_from: datetime | None = None
+
+
+class ModelPriceDetail(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: UUID
+    model_id: str
+    input_per_million: Decimal
+    cached_input_per_million: Decimal | None = None
+    output_per_million: Decimal
+    currency: str
+    effective_from: datetime
+    created_at: datetime
+
+
+class ModelPriceListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    items: list[ModelPriceDetail]
+    total: int
+    limit: int
+    offset: int
 
 
 class ModelAccessResponse(BaseModel):

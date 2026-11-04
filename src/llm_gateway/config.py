@@ -54,6 +54,7 @@ class Settings(BaseSettings):
     metrics_host: str = "127.0.0.1"
     metrics_port: int = Field(default=9464, ge=1, le=65535)
     metrics_service_name: str = "llm-gateway"
+    billing_currency: str = "USD"
 
     @field_validator("log_level")
     @classmethod
@@ -61,6 +62,14 @@ class Settings(BaseSettings):
         normalized = value.upper()
         if normalized not in logging.getLevelNamesMapping():
             raise ValueError(f"unknown log level: {value}")
+        return normalized
+
+    @field_validator("billing_currency")
+    @classmethod
+    def _validate_billing_currency(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if len(normalized) != 3 or not normalized.isalpha():
+            raise ValueError("billing_currency must be a 3-letter currency code")
         return normalized
 
     @field_validator("tracing_endpoint")

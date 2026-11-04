@@ -4,7 +4,7 @@
 
 ## 现状基线
 
-- 后端已具备：租户创建/列表/限额 PATCH、API key 创建/列表/吊销、模型注册、用量汇总/按 key/时间序列、租户配额与限流。
+- 后端已具备：租户创建/列表/限额 PATCH、API key 创建/列表/吊销、模型注册与版本化价格、用量汇总/按 key/时间序列、租户配额与限流、租户模型授权、token 套餐与成本预算。
 - 管理台已具备：健康状态、模型列表与注册/删除、用量面板、Access 标签（租户创建/列表/限额编辑、租户模型授权、API key 创建/列表/吊销）。
 - 尚缺：租户删除/重命名、P1e 运维项（保留期清理/导出/删除/指标/分区），以及 P2 中的其他项。
 - 当前 chat 请求是无状态的，没有 session/终端用户标识；会话审计需要显式 session header 或消息前缀启发式，且默认关闭。
@@ -267,11 +267,13 @@
   - 范围：key/tenant 短期缓存（含显式失效）、`last_used_at` 采样或批量、usage 异步批量写入、日/月预聚合表、聚合查询走预聚合而非明细扫描。
   - 验收：单请求 DB 往返次数有明确预算并可测；P95 延迟在目标 QPS 下不随月内累计用量增长而退化。
 
-- [ ] **G1.4 成本与预算**
+- [x] **G1.4 成本与预算**
   - 现状：只有 token，无价格表、无货币、无成本聚合。
   - 范围：model → 价格（输入/输出/缓存命中，按币种与生效时间版本化）、请求级成本、按 tenant/key/model/时间聚合、预算窗口与超额策略（拒绝或告警）、价格变更不影响历史记录。
   - 验收：同一请求的 token 与成本可复算一致；历史账单不受调价影响；预算超额返回稳定错误码并有指标。
   - 注意：不要硬编码第三方当前价格，价格来自配置或数据库。
+  - 进度（2026-11-04）：`model_prices` 生效时间版本化（迁移 `0008`，唯一 `(model_id, effective_from)`）；`usage_records` 记录 `covered_tokens`/`billable_tokens`/`list_cost`/`billed_cost`（Decimal，6 位）；租户级 `plan_tokens`（月度 token 套餐、不结转）+ `plan_allow_overage` + `monthly_cost_budget`；429 `plan_allowance_exhausted` / `budget_exceeded`，无价时 503 `model_price_missing`；用量 API 与 `GET /tenants/{id}/billing` 暴露成本；指标 `gateway_rejections{reason}`。
+  - 未做：并发预扣（当前允许一个请求级超支窗口）、开票/多币种/per-key 预算、充值包与结转、管理台编辑价格与套餐、成本图表。设计说明见 `notes/billing.md`。
 
 - [ ] **G1.5 运行时与生命周期参数化**
   - 现状：连接池大小硬编码、无语句超时、启动未配 workers、无优雅停机排空、流式无 keepalive/空闲超时。

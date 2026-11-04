@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
@@ -19,6 +20,10 @@ class UsageModelSummary(BaseModel):
     cached_tokens: int
     total_tokens: int
     requests: int
+    covered_tokens: int = 0
+    billable_tokens: int = 0
+    list_cost: Decimal = Decimal("0")
+    billed_cost: Decimal = Decimal("0")
 
 
 class UsageSummaryResponse(BaseModel):
@@ -29,6 +34,10 @@ class UsageSummaryResponse(BaseModel):
     cached_tokens: int
     total_tokens: int
     requests: int
+    covered_tokens: int = 0
+    billable_tokens: int = 0
+    list_cost: Decimal = Decimal("0")
+    billed_cost: Decimal = Decimal("0")
     by_model: list[UsageModelSummary]
 
 
@@ -43,6 +52,10 @@ class KeyUsageSummary(BaseModel):
     cached_tokens: int
     total_tokens: int
     requests: int
+    covered_tokens: int = 0
+    billable_tokens: int = 0
+    list_cost: Decimal = Decimal("0")
+    billed_cost: Decimal = Decimal("0")
 
 
 class KeyUsageResponse(BaseModel):
@@ -61,6 +74,10 @@ class UsagePointSummary(BaseModel):
     cached_tokens: int
     total_tokens: int
     requests: int
+    covered_tokens: int = 0
+    billable_tokens: int = 0
+    list_cost: Decimal = Decimal("0")
+    billed_cost: Decimal = Decimal("0")
 
 
 class UsageSeriesResponse(BaseModel):

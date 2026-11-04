@@ -1,6 +1,6 @@
-# LLM-GateAway
+﻿# LLM-GateAway
 
-**English** | [简体中文](README.zh-CN.md)
+**English** | [绠€浣撲腑鏂嘳(README.zh-CN.md)
 
 A self-hosted, multi-provider, OpenAI-compatible LLM gateway. Current state: a runnable backend, OpenAI / DeepSeek (OpenAI-compatible) / Fake providers, tenant-scoped API keys, a model registry, PostgreSQL persistence, token usage accounting, tenant quotas and rate limiting, opt-in request/session auditing with deterministic turn diffs, and an admin console with usage, access, and audit panels.
 
@@ -13,6 +13,7 @@ A self-hosted, multi-provider, OpenAI-compatible LLM gateway. Current state: a r
 - Token usage records and aggregates: input, output, and cache-hit tokens, attributed to tenant, key, and model
 - Tenant-level monthly token quotas and per-minute request limits (429 + `Retry-After`)
 - Tenant-scoped model access control (default allow-all, or an explicit allowlist)
+- Versioned per-model prices, per-request cost, monthly token plans with optional overage, and a monthly cost budget
 - Management API: `/api/v1/keys`, `/api/v1/models`, `/api/v1/tenants`, `/api/v1/usage/{summary,by-key,series}`, `/api/v1/audit/*`, protected by the master key
 - PostgreSQL persistence (SQLAlchemy 2 async + Alembic), with an in-memory mode for local development
 - Structured JSON logs, request ids, optional W3C trace-context tracing (OTLP/HTTP), `/healthz`, and `/readyz`
@@ -260,7 +261,7 @@ Invoke-RestMethod `
 
 - `since` / `until` default to the last 30 days; passing only `since` makes `until` the current time.
 - `bucket` supports `hour` and `day`; `points` are UTC-aligned and **zero-filled** (max 1000 buckets), ready for charting.
-- The console now provides the usage panel; there is no cost conversion.
+- The console provides the usage panel; cost fields are returned by the usage API but the console does not chart them yet.
 
 ## Tenant quotas and rate limits
 
@@ -275,12 +276,51 @@ Invoke-RestMethod -Method Patch `
 ```
 
 - `monthly_token_quota`: cumulative upstream-reported `total_tokens` in the UTC calendar month. Once reached, `POST /v1/chat/completions` returns 429 `tenant_quota_exceeded`.
-- `requests_per_minute`: fixed 60-second window. Excess requests return 429 `rate_limited` with `Retry-After` (seconds, 1–60).
+- `requests_per_minute`: fixed 60-second window. Excess requests return 429 `rate_limited` with `Retry-After` (seconds, 1鈥?0).
 - PATCH only writes the fields present in the body; an explicit `null` clears that limit.
 - Quotas are soft: they are checked before the request, so concurrent or in-flight requests can slightly overshoot, and usage write failures can cause drift.
 - Rejected requests (rate-limited or over quota) do not create usage records.
 - Rate limiting applies only to `POST /v1/chat/completions`; `/v1/models`, health checks, and the management API are not tenant-limited.
 - The PostgreSQL backend uses a single-row atomic counter and supports multiple workers; the memory backend is for local development and tests only.
+
+## Cost, plans, and budgets
+
+Cost is computed per request from a versioned price list and stored on the usage row.
+
+- Prices are per million tokens: input, cached input (falls back to the input price when unset), and output. `POST /api/v1/models/{id}/prices` appends a version with an `effective_from`; changing a price never rewrites historical rows. `GET` lists versions newest first.
+- Every usage row stores `list_cost` (what the traffic would cost) and `billed_cost` (what the tenant owes), plus `covered_tokens` and `billable_tokens`.
+- A tenant plan is a monthly **token** allowance that resets on the 1st at 00:00 UTC and does not roll over. Tokens inside the allowance are free; the excess is priced at list price only when `plan_allow_overage` is true.
+  - `plan_allow_overage=false` (default): once the allowance is used, inference returns 429 `plan_allowance_exhausted`.
+  - `plan_allow_overage=true`: traffic continues, the excess is billed, and `monthly_cost_budget` (when set) returns 429 `budget_exceeded` once the billed cost reaches it.
+- A tenant that has a plan or a budget but whose model has no price gets 503 `model_price_missing`. A budget that cannot be priced must not pass traffic silently; tenants without a plan or budget can still use unpriced models (cost fields stay `null`).
+- The allowance is split across prompt/completion/cached buckets pro rata, so the request that crosses the boundary is not charged full price for every token.
+- Enforcement reads the period total before the request and settles afterwards, so concurrent in-flight requests can overshoot by at most their own usage.
+
+Set a price and a monthly plan:
+
+```powershell
+Invoke-RestMethod -Method Post `
+  -Uri http://127.0.0.1:4000/api/v1/models/deepseek-flash/prices `
+  -Headers @{ Authorization = "Bearer $master" } `
+  -ContentType "application/json" `
+  -Body '{"input_per_million":"0.28","cached_input_per_million":"0.028","output_per_million":"0.42"}'
+
+Invoke-RestMethod -Method Patch `
+  -Uri http://127.0.0.1:4000/api/v1/tenants/$($tenant.id) `
+  -Headers @{ Authorization = "Bearer $master" } `
+  -ContentType "application/json" `
+  -Body '{"plan_tokens":1000000,"plan_allow_overage":true,"monthly_cost_budget":"50"}'
+```
+
+Read the current period:
+
+```powershell
+Invoke-RestMethod `
+  -Uri "http://127.0.0.1:4000/api/v1/tenants/$($tenant.id)/billing" `
+  -Headers @{ Authorization = "Bearer $master" }
+```
+
+It returns `used_tokens`, `covered_tokens`, `billable_tokens`, `list_cost`, `billed_cost`, `budget_remaining`, and the half-open `[period_start, period_end)` window. `PATCH /api/v1/tenants/{id}` accepts `plan_tokens`, `plan_allow_overage`, and `monthly_cost_budget`; an explicit `null` clears a limit.
 
 ## Tenant model access
 
@@ -302,7 +342,7 @@ Invoke-RestMethod -Method Put `
 
 ## Request audit
 
-Request auditing is opt-in twice: set `GATEWAY_AUDIT_ENABLED=true` globally and enable `audit_enabled` for a tenant (Access → Tenants in the console, or `PATCH /api/v1/tenants/{id}`). Either switch being off means zero capture.
+Request auditing is opt-in twice: set `GATEWAY_AUDIT_ENABLED=true` globally and enable `audit_enabled` for a tenant (Access 鈫?Tenants in the console, or `PATCH /api/v1/tenants/{id}`). Either switch being off means zero capture.
 
 - Clients may send `x-llm-gateway-session-id` (1..64 chars, `[A-Za-z0-9._:-]`) to group requests. Without it, the gateway falls back to a 24-hour, 200-request prefix match scoped to the same tenant and API key; conversations that share only a system prompt are not merged.
 - Requests are stored with bounded content (default 256 KiB) and deterministic turn diffs (`new_session`, `continuation`, `regeneration`, `edit`, `truncation`). Hashes and diffs use the original content, and `truncated=true` is explicit.
@@ -342,7 +382,7 @@ Metrics are off by default. When enabled, Prometheus scrapes a dedicated port (n
 | `gateway_upstream_ttft_seconds` | histogram | `provider`, `model` |
 | `gateway_rejections` | counter | `reason` |
 | `gateway_usage_write_failures` | counter | `reason` |
-| `gateway_audit_write_failures` | counter | — |
+| `gateway_audit_write_failures` | counter | 鈥?|
 
 ```dotenv
 GATEWAY_METRICS_ENABLED=true
@@ -384,6 +424,7 @@ GATEWAY_METRICS_PORT=9464
 | `GATEWAY_METRICS_HOST` | Metrics bind address, default `127.0.0.1` |
 | `GATEWAY_METRICS_PORT` | Metrics bind port, default `9464` |
 | `GATEWAY_METRICS_SERVICE_NAME` | `service.name` resource attribute, default `llm-gateway` |
+| `GATEWAY_BILLING_CURRENCY` | Currency for prices and billing summaries, default `USD` |
 
 `production` requires the `postgres` backend, disables the fake provider, and rejects placeholder or short master keys, so sample configuration cannot be deployed by accident.
 
@@ -552,11 +593,11 @@ design.md            LLM-GateAway design guidance
 
 - Only OpenAI, DeepSeek (OpenAI-compatible), and the fake provider are implemented; Anthropic, Bedrock, Vertex, and other non-OpenAI protocols are not.
 - Each model maps to a single upstream model; no multi-deployment, weights, fallback, or cooldown.
-- No billing/invoicing, per-key or per-model limits, or burst shaping (token bucket); quotas are soft.
+- No invoicing, per-key or per-model budgets, or burst shaping (token bucket); quotas and budgets are soft against concurrent requests.
 - Rate limiting uses a fixed 60-second window at tenant level only; the memory backend counts per process.
 - Creating a key requires `tenant_id` (a breaking change for old callers); there is no tenant delete or rename API.
 - Model access is tenant-scoped only: no per-key scoping and no per-model rate limits.
-- `usage_records` has no retention or archival job and grows with traffic; there is no cost conversion.
+- `usage_records` has no retention or archival job and grows with traffic; cost is computed and stored per request, but there is no invoicing, no currency conversion, and no multi-currency price list.
 - Tracing covers the server span and per-attempt upstream spans only: no database spans and no tail-based sampling.
 - Metrics expose counters and histograms but ship without dashboards, alert rules, or OTLP metric export; database pool occupancy is not exported yet.
 - A stream that disconnects before usage arrives leaves no record; write timeouts or failures only log a warning.
@@ -582,4 +623,5 @@ Repository-level skill: [`.opencode/skills/llm-gateway/SKILL.md`](.opencode/skil
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT 鈥?see [LICENSE](LICENSE).
+

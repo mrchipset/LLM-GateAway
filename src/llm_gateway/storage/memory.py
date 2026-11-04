@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
+from decimal import Decimal
 from uuid import UUID
 
 from llm_gateway.storage.repositories import (
@@ -17,12 +18,15 @@ from llm_gateway.storage.repositories import (
     AuditTurnDiffRecord,
     DuplicateApiKeyError,
     DuplicateModelError,
+    DuplicatePriceError,
     DuplicateTenantError,
     KeyUsage,
     ModelAccess,
     ModelAccessMode,
     ModelConfig,
+    ModelPrice,
     ModelUsage,
+    MonthlyUsage,
     Tenant,
     TenantLimitPatch,
     TimeBucket,
@@ -125,6 +129,12 @@ class InMemoryTenantRepository:
                 changes["requests_per_minute"] = patch.requests_per_minute
             if patch.set_audit_enabled and patch.audit_enabled is not None:
                 changes["audit_enabled"] = patch.audit_enabled
+            if patch.set_plan_tokens:
+                changes["plan_tokens"] = patch.plan_tokens
+            if patch.set_plan_allow_overage and patch.plan_allow_overage is not None:
+                changes["plan_allow_overage"] = patch.plan_allow_overage
+            if patch.set_monthly_cost_budget:
+                changes["monthly_cost_budget"] = patch.monthly_cost_budget
             if not changes:
                 return tenant
             updated = replace(tenant, **changes)  # pyright: ignore[reportArgumentType]
@@ -163,6 +173,47 @@ class InMemoryTenantRepository:
                 mode=mode,
                 model_ids=unique_ids if mode is ModelAccessMode.ALLOWLIST else (),
             )
+
+
+class InMemoryModelPriceRepository:
+    """Process-local price versions with the same caveats as the other memory stores."""
+
+    def __init__(self) -> None:
+        self._prices: dict[tuple[str, datetime], ModelPrice] = {}
+        self._lock = asyncio.Lock()
+
+    async def get_effective_price(self, *, model_id: str, at: datetime) -> ModelPrice | None:
+        candidates = [
+            price
+            for (stored_model_id, _), price in self._prices.items()
+            if stored_model_id == model_id and price.effective_from <= at
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda price: price.effective_from)
+
+    async def create_price(self, price: ModelPrice) -> ModelPrice:
+        async with self._lock:
+            key = (price.model_id, price.effective_from)
+            if key in self._prices:
+                raise DuplicatePriceError(price.model_id, price.effective_from)
+            self._prices[key] = price
+            return price
+
+    async def list_prices(
+        self, *, model_id: str, limit: int, offset: int
+    ) -> tuple[Sequence[ModelPrice], int]:
+        _validate_page(limit=limit, offset=offset)
+        prices = sorted(
+            (
+                price
+                for (stored_model_id, _), price in self._prices.items()
+                if stored_model_id == model_id
+            ),
+            key=lambda price: price.effective_from,
+            reverse=True,
+        )
+        return prices[offset : offset + limit], len(prices)
 
 
 class InMemoryApiKeyRepository:
@@ -277,6 +328,26 @@ class InMemoryUsageRepository:
             and record.created_at < until
         )
 
+    async def monthly_totals(
+        self, *, tenant_id: UUID, since: datetime, until: datetime
+    ) -> MonthlyUsage:
+        _validate_token_window(since=since, until=until)
+        records = [
+            record
+            for record in self._records
+            if record.tenant_id == tenant_id
+            and record.created_at >= since
+            and record.created_at < until
+        ]
+        return MonthlyUsage(
+            total_tokens=sum(record.prompt_tokens + record.completion_tokens for record in records),
+            covered_tokens=sum(record.covered_tokens for record in records),
+            billable_tokens=sum(record.billable_tokens for record in records),
+            list_cost=sum((_cost(record.list_cost) for record in records), Decimal("0")),
+            billed_cost=sum((_cost(record.billed_cost) for record in records), Decimal("0")),
+            requests=len(records),
+        )
+
     def _select(
         self,
         *,
@@ -320,6 +391,10 @@ class InMemoryUsageRepository:
                     cached_tokens=record.cached_tokens,
                     total_tokens=record.total_tokens,
                     requests=1,
+                    covered_tokens=record.covered_tokens,
+                    billable_tokens=record.billable_tokens,
+                    list_cost=_cost(record.list_cost),
+                    billed_cost=_cost(record.billed_cost),
                 )
                 continue
             aggregated[key] = ModelUsage(
@@ -330,6 +405,10 @@ class InMemoryUsageRepository:
                 cached_tokens=current.cached_tokens + record.cached_tokens,
                 total_tokens=current.total_tokens + record.total_tokens,
                 requests=current.requests + 1,
+                covered_tokens=current.covered_tokens + record.covered_tokens,
+                billable_tokens=current.billable_tokens + record.billable_tokens,
+                list_cost=current.list_cost + _cost(record.list_cost),
+                billed_cost=current.billed_cost + _cost(record.billed_cost),
             )
         return sorted(
             aggregated.values(),
@@ -357,6 +436,10 @@ class InMemoryUsageRepository:
                     cached_tokens=record.cached_tokens,
                     total_tokens=record.total_tokens,
                     requests=1,
+                    covered_tokens=record.covered_tokens,
+                    billable_tokens=record.billable_tokens,
+                    list_cost=_cost(record.list_cost),
+                    billed_cost=_cost(record.billed_cost),
                 )
                 continue
             aggregated[record.api_key_id] = KeyUsage(
@@ -366,6 +449,10 @@ class InMemoryUsageRepository:
                 cached_tokens=current.cached_tokens + record.cached_tokens,
                 total_tokens=current.total_tokens + record.total_tokens,
                 requests=current.requests + 1,
+                covered_tokens=current.covered_tokens + record.covered_tokens,
+                billable_tokens=current.billable_tokens + record.billable_tokens,
+                list_cost=current.list_cost + _cost(record.list_cost),
+                billed_cost=current.billed_cost + _cost(record.billed_cost),
             )
         return sorted(
             aggregated.values(),
@@ -395,6 +482,10 @@ class InMemoryUsageRepository:
                     cached_tokens=record.cached_tokens,
                     total_tokens=record.total_tokens,
                     requests=1,
+                    covered_tokens=record.covered_tokens,
+                    billable_tokens=record.billable_tokens,
+                    list_cost=_cost(record.list_cost),
+                    billed_cost=_cost(record.billed_cost),
                 )
                 continue
             aggregated[bucket_start] = UsagePoint(
@@ -404,8 +495,16 @@ class InMemoryUsageRepository:
                 cached_tokens=current.cached_tokens + record.cached_tokens,
                 total_tokens=current.total_tokens + record.total_tokens,
                 requests=current.requests + 1,
+                covered_tokens=current.covered_tokens + record.covered_tokens,
+                billable_tokens=current.billable_tokens + record.billable_tokens,
+                list_cost=current.list_cost + _cost(record.list_cost),
+                billed_cost=current.billed_cost + _cost(record.billed_cost),
             )
         return sorted(aggregated.values(), key=lambda item: item.bucket_start)
+
+
+def _cost(value: Decimal | None) -> Decimal:
+    return value if value is not None else Decimal("0")
 
 
 def _bucket_start(created_at: datetime, bucket: TimeBucket) -> datetime:

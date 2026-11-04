@@ -13,6 +13,7 @@ from llm_gateway.container import Container
 from llm_gateway.providers.registry import ProviderRegistry
 from llm_gateway.storage.memory import (
     InMemoryApiKeyRepository,
+    InMemoryModelPriceRepository,
     InMemoryModelRepository,
     InMemoryTenantRepository,
     InMemoryUsageRepository,
@@ -29,6 +30,7 @@ class _TrackingContainer(Container):
             clock=SystemClock(),
             api_keys=InMemoryApiKeyRepository(),
             models=InMemoryModelRepository(),
+            prices=InMemoryModelPriceRepository(),
             tenants=InMemoryTenantRepository(),
             usage=InMemoryUsageRepository(),
             rate_limiter=InMemoryRateLimiter(),

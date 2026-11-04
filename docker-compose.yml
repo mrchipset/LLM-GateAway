@@ -1,4 +1,4 @@
-name: llm-gateaway
+﻿name: llm-gateaway
 
 services:
   postgres:
@@ -85,6 +85,7 @@ services:
       GATEWAY_METRICS_HOST: 0.0.0.0
       GATEWAY_METRICS_PORT: ${GATEWAY_METRICS_PORT:-9464}
       GATEWAY_METRICS_SERVICE_NAME: ${GATEWAY_METRICS_SERVICE_NAME:-llm-gateway}
+      GATEWAY_BILLING_CURRENCY: ${GATEWAY_BILLING_CURRENCY:-USD}
     ports:
       # Scrape port only, bound to loopback. The API stays behind the UI proxy.
       - "127.0.0.1:${GATEWAY_METRICS_PORT:-9464}:${GATEWAY_METRICS_PORT:-9464}"
@@ -130,3 +131,4 @@ services:
 
 volumes:
   pgdata:
+

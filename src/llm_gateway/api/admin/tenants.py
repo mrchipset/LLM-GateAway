@@ -11,11 +11,13 @@ from llm_gateway.errors import ApiError, ApiErrorCode
 from llm_gateway.schemas.admin import (
     CreateTenantRequest,
     ModelAccessResponse,
+    TenantBillingResponse,
     TenantDetail,
     TenantListResponse,
     UpdateModelAccessRequest,
     UpdateTenantLimitsRequest,
 )
+from llm_gateway.services.billing import budget_remaining, month_window
 from llm_gateway.storage.repositories import (
     DuplicateTenantError,
     ModelAccessMode,
@@ -38,6 +40,9 @@ def _detail(tenant: Tenant) -> TenantDetail:
         requests_per_minute=tenant.requests_per_minute,
         audit_enabled=tenant.audit_enabled,
         model_access_mode=tenant.model_access_mode,
+        plan_tokens=tenant.plan_tokens,
+        plan_allow_overage=tenant.plan_allow_overage,
+        monthly_cost_budget=tenant.monthly_cost_budget,
     )
 
 
@@ -88,9 +93,15 @@ async def update_tenant_limits(
         monthly_token_quota=payload.monthly_token_quota,
         requests_per_minute=payload.requests_per_minute,
         audit_enabled=payload.audit_enabled,
+        plan_tokens=payload.plan_tokens,
+        plan_allow_overage=payload.plan_allow_overage,
+        monthly_cost_budget=payload.monthly_cost_budget,
         set_monthly_token_quota="monthly_token_quota" in provided,
         set_requests_per_minute="requests_per_minute" in provided,
         set_audit_enabled=payload.audit_enabled is not None,
+        set_plan_tokens="plan_tokens" in provided,
+        set_plan_allow_overage=payload.plan_allow_overage is not None,
+        set_monthly_cost_budget="monthly_cost_budget" in provided,
     )
     updated = await container.tenants.set_tenant_limits(tenant_id, patch=patch)
     if updated is None:
@@ -110,6 +121,39 @@ async def list_tenants(
         total=total,
         limit=limit,
         offset=offset,
+    )
+
+
+@router.get("/tenants/{tenant_id}/billing", response_model=TenantBillingResponse)
+async def tenant_billing(
+    tenant_id: UUID,
+    container: Annotated[Container, Depends(get_container)],
+) -> TenantBillingResponse:
+    tenant = await container.tenants.get_tenant(tenant_id)
+    if tenant is None:
+        raise _not_found(tenant_id)
+
+    period_start, period_end = month_window(container.clock.now())
+    usage = await container.usage.monthly_totals(
+        tenant_id=tenant_id,
+        since=period_start,
+        until=period_end,
+    )
+    return TenantBillingResponse(
+        tenant_id=tenant.id,
+        currency=container.settings.billing_currency,
+        period_start=period_start,
+        period_end=period_end,
+        plan_tokens=tenant.plan_tokens,
+        plan_allow_overage=tenant.plan_allow_overage,
+        monthly_cost_budget=tenant.monthly_cost_budget,
+        used_tokens=usage.total_tokens,
+        covered_tokens=usage.covered_tokens,
+        billable_tokens=usage.billable_tokens,
+        requests=usage.requests,
+        list_cost=usage.list_cost,
+        billed_cost=usage.billed_cost,
+        budget_remaining=budget_remaining(tenant, usage),
     )
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
@@ -11,6 +12,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     Uuid,
@@ -40,6 +42,16 @@ class TenantRow(Base):
         nullable=False,
         server_default=text("'all'"),
     )
+    plan_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    plan_allow_overage: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default=false(),
+    )
+    monthly_cost_budget: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 6),
+        nullable=True,
+    )
 
     __table_args__ = (
         Index("ix_tenants_name", "name", unique=True),
@@ -54,6 +66,14 @@ class TenantRow(Base):
         CheckConstraint(
             "model_access_mode IN ('all', 'allowlist')",
             name="ck_tenants_model_access_mode",
+        ),
+        CheckConstraint(
+            "plan_tokens IS NULL OR plan_tokens >= 1",
+            name="ck_tenants_plan_tokens_positive",
+        ),
+        CheckConstraint(
+            "monthly_cost_budget IS NULL OR monthly_cost_budget >= 0",
+            name="ck_tenants_monthly_cost_budget_non_negative",
         ),
     )
 
@@ -285,6 +305,18 @@ class UsageRow(Base):
     total_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
     cached_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
     trace_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    covered_tokens: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        server_default=text("0"),
+    )
+    billable_tokens: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        server_default=text("0"),
+    )
+    list_cost: Mapped[Decimal | None] = mapped_column(Numeric(18, 6), nullable=True)
+    billed_cost: Mapped[Decimal | None] = mapped_column(Numeric(18, 6), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     __table_args__ = (
@@ -305,3 +337,46 @@ class ModelRow(Base):
     upstream_model: Mapped[str] = mapped_column(String(256), nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=true())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ModelPriceRow(Base):
+    """Versioned price list; the effective row is the newest ``effective_from <= now``."""
+
+    __tablename__ = "model_prices"
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    model_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey(
+            "models.id",
+            name="fk_model_prices_model_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    input_per_million: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
+    cached_input_per_million: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 6),
+        nullable=True,
+    )
+    output_per_million: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    effective_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        Index(
+            "ix_model_prices_model_effective",
+            "model_id",
+            "effective_from",
+            unique=True,
+        ),
+        CheckConstraint(
+            "input_per_million >= 0 AND output_per_million >= 0",
+            name="ck_model_prices_non_negative",
+        ),
+        CheckConstraint(
+            "cached_input_per_million IS NULL OR cached_input_per_million >= 0",
+            name="ck_model_prices_cached_non_negative",
+        ),
+    )

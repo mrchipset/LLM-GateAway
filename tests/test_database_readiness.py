@@ -64,6 +64,7 @@ async def test_readyz_returns_503_when_database_is_unreachable(
         clock=SystemClock(),
         api_keys=database.api_keys,
         models=database.models,
+        prices=database.prices,
         tenants=database.tenants,
         usage=database.usage,
         rate_limiter=InMemoryRateLimiter(),

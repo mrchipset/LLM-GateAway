@@ -6,6 +6,7 @@ import os
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -29,10 +30,12 @@ from llm_gateway.storage.repositories import (
     AuditTurnDiffRecord,
     DuplicateApiKeyError,
     DuplicateModelError,
+    DuplicatePriceError,
     DuplicateTenantError,
     ModelAccess,
     ModelAccessMode,
     ModelConfig,
+    ModelPrice,
     Tenant,
     TenantLimitPatch,
     TimeBucket,
@@ -566,6 +569,183 @@ async def test_migration_adds_model_access_column_and_table(
     assert default_mode == "'all'::character varying"
     assert nullable == "NO"
     assert table_name == "tenant_model_access"
+
+
+def _price(
+    index: int,
+    *,
+    model_id: str,
+    effective_from: datetime | None = None,
+    input_per_million: Decimal = Decimal("1"),
+    output_per_million: Decimal = Decimal("2"),
+    cached_input_per_million: Decimal | None = None,
+) -> ModelPrice:
+    return ModelPrice(
+        id=uuid4(),
+        model_id=model_id,
+        input_per_million=input_per_million,
+        cached_input_per_million=cached_input_per_million,
+        output_per_million=output_per_million,
+        currency="USD",
+        effective_from=effective_from
+        if effective_from is not None
+        else BASE + timedelta(days=index),
+        created_at=BASE + timedelta(days=index),
+    )
+
+
+async def test_model_price_versions_pick_the_effective_row(database: Database) -> None:
+    await database.models.create_model(_model(1))
+    await database.prices.create_price(
+        _price(0, model_id="model-1", effective_from=BASE, input_per_million=Decimal("1"))
+    )
+    await database.prices.create_price(
+        _price(
+            5,
+            model_id="model-1",
+            effective_from=BASE + timedelta(days=5),
+            input_per_million=Decimal("2"),
+        )
+    )
+
+    assert await database.prices.get_effective_price(model_id="model-1", at=BASE) is not None
+    before = await database.prices.get_effective_price(
+        model_id="model-1", at=BASE + timedelta(days=1)
+    )
+    assert before is not None
+    assert before.input_per_million == Decimal("1.000000")
+
+    after = await database.prices.get_effective_price(
+        model_id="model-1", at=BASE + timedelta(days=6)
+    )
+    assert after is not None
+    assert after.input_per_million == Decimal("2.000000")
+
+    items, total = await database.prices.list_prices(model_id="model-1", limit=10, offset=0)
+    assert total == 2
+    assert [item.input_per_million for item in items] == [
+        Decimal("2.000000"),
+        Decimal("1.000000"),
+    ]
+
+
+async def test_duplicate_price_effective_time_is_rejected(database: Database) -> None:
+    await database.models.create_model(_model(1))
+    price = _price(0, model_id="model-1", effective_from=BASE)
+    await database.prices.create_price(price)
+
+    with pytest.raises(DuplicatePriceError):
+        await database.prices.create_price(replace(price, id=uuid4()))
+
+
+async def test_monthly_totals_sums_tokens_and_costs(database: Database) -> None:
+    tenant = await database.tenants.create_tenant(_tenant(1))
+    key = _key(1, tenant_id=tenant.id)
+    await database.api_keys.create_key(key)
+    first = _usage(1, tenant_id=tenant.id, api_key_id=key.id)
+    await database.usage.record(
+        replace(
+            first,
+            prompt_tokens=100,
+            completion_tokens=50,
+            total_tokens=150,
+            covered_tokens=100,
+            billable_tokens=50,
+            list_cost=Decimal("0.002000"),
+            billed_cost=Decimal("0.001000"),
+        )
+    )
+    second = _usage(2, tenant_id=tenant.id, api_key_id=key.id)
+    await database.usage.record(
+        replace(
+            second,
+            prompt_tokens=200,
+            completion_tokens=100,
+            total_tokens=300,
+            covered_tokens=0,
+            billable_tokens=300,
+            list_cost=Decimal("0.004000"),
+            billed_cost=Decimal("0.004000"),
+        )
+    )
+
+    totals = await database.usage.monthly_totals(
+        tenant_id=tenant.id,
+        since=BASE - timedelta(days=1),
+        until=BASE + timedelta(days=1),
+    )
+
+    assert totals.total_tokens == 450
+    assert totals.covered_tokens == 100
+    assert totals.billable_tokens == 350
+    assert totals.list_cost == Decimal("0.006000")
+    assert totals.billed_cost == Decimal("0.005000")
+    assert totals.requests == 2
+
+
+async def test_tenant_plan_and_budget_round_trip(database: Database) -> None:
+    tenant = await database.tenants.create_tenant(_tenant(1))
+
+    updated = await database.tenants.set_tenant_limits(
+        tenant.id,
+        patch=TenantLimitPatch(
+            plan_tokens=10_000,
+            plan_allow_overage=True,
+            monthly_cost_budget=Decimal("25.5"),
+            set_plan_tokens=True,
+            set_plan_allow_overage=True,
+            set_monthly_cost_budget=True,
+        ),
+    )
+
+    assert updated is not None
+    assert updated.plan_tokens == 10_000
+    assert updated.plan_allow_overage is True
+    assert updated.monthly_cost_budget == Decimal("25.500000")
+
+    cleared = await database.tenants.set_tenant_limits(
+        tenant.id,
+        patch=TenantLimitPatch(
+            set_plan_tokens=True,
+            set_monthly_cost_budget=True,
+        ),
+    )
+    assert cleared is not None
+    assert cleared.plan_tokens is None
+    assert cleared.monthly_cost_budget is None
+    assert cleared.plan_allow_overage is True
+
+
+async def test_migration_adds_billing_columns_and_price_table(
+    migrated_schema: None,
+) -> None:
+    engine = create_async_engine(_test_url())
+    try:
+        async with engine.connect() as connection:
+            plan_nullable = await connection.scalar(
+                text(
+                    "SELECT is_nullable FROM information_schema.columns "
+                    "WHERE table_name = 'tenants' AND column_name = 'plan_tokens'"
+                )
+            )
+            billable_nullable = await connection.scalar(
+                text(
+                    "SELECT is_nullable FROM information_schema.columns "
+                    "WHERE table_name = 'usage_records' AND column_name = 'billed_cost'"
+                )
+            )
+            table_name = await connection.scalar(
+                text(
+                    "SELECT table_name FROM information_schema.tables "
+                    "WHERE table_name = 'model_prices'"
+                )
+            )
+    finally:
+        await engine.dispose()
+
+    assert plan_nullable == "YES"
+    assert billable_nullable == "YES"
+    assert table_name == "model_prices"
 
 
 async def test_tenant_set_limits_round_trip_and_clear(database: Database) -> None:

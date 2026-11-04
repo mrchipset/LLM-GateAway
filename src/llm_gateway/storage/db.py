@@ -16,6 +16,7 @@ from llm_gateway.storage.rate_limits import RateLimiter, SqlAlchemyRateLimiter
 from llm_gateway.storage.repositories import (
     ApiKeyRepository,
     AuditRepository,
+    ModelPriceRepository,
     ModelRepository,
     TenantRepository,
     UsageRepository,
@@ -23,6 +24,7 @@ from llm_gateway.storage.repositories import (
 from llm_gateway.storage.sql import (
     SqlAlchemyApiKeyRepository,
     SqlAlchemyAuditRepository,
+    SqlAlchemyModelPriceRepository,
     SqlAlchemyModelRepository,
     SqlAlchemyTenantRepository,
     SqlAlchemyUsageRepository,
@@ -47,6 +49,7 @@ class Database:
         )
         self._api_keys = SqlAlchemyApiKeyRepository(session_factory=self._session_factory)
         self._models = SqlAlchemyModelRepository(session_factory=self._session_factory)
+        self._prices = SqlAlchemyModelPriceRepository(session_factory=self._session_factory)
         self._tenants = SqlAlchemyTenantRepository(session_factory=self._session_factory)
         self._usage = SqlAlchemyUsageRepository(session_factory=self._session_factory)
         self._audit = SqlAlchemyAuditRepository(session_factory=self._session_factory)
@@ -74,6 +77,10 @@ class Database:
     @property
     def models(self) -> ModelRepository:
         return self._models
+
+    @property
+    def prices(self) -> ModelPriceRepository:
+        return self._prices
 
     @property
     def tenants(self) -> TenantRepository:

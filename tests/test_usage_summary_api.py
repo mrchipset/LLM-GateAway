@@ -104,6 +104,10 @@ async def test_usage_summary_returns_totals_and_by_model(
         "cached_tokens": 3,
         "total_tokens": 25,
         "requests": 2,
+        "covered_tokens": 0,
+        "billable_tokens": 0,
+        "list_cost": "0",
+        "billed_cost": "0",
     }
 
 
@@ -152,6 +156,10 @@ async def test_usage_summary_filters_by_tenant_and_model(
         "cached_tokens": 0,
         "total_tokens": 0,
         "requests": 0,
+        "covered_tokens": 0,
+        "billable_tokens": 0,
+        "list_cost": "0",
+        "billed_cost": "0",
         "by_model": [],
     }
 

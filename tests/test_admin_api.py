@@ -579,9 +579,15 @@ async def test_create_tenant_returns_detail_and_rejects_duplicates(
         "requests_per_minute",
         "audit_enabled",
         "model_access_mode",
+        "plan_tokens",
+        "plan_allow_overage",
+        "monthly_cost_budget",
     }
     assert body["audit_enabled"] is False
     assert body["model_access_mode"] == "all"
+    assert body["plan_tokens"] is None
+    assert body["plan_allow_overage"] is False
+    assert body["monthly_cost_budget"] is None
     assert body["name"] == "acme"
     assert UUID(body["id"])
     assert body["created_at"]

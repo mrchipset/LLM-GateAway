@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import datetime
+from decimal import Decimal
 from typing import Any, cast
 from uuid import UUID
 
@@ -25,12 +26,15 @@ from llm_gateway.storage.repositories import (
     AuditTurnDiffRecord,
     DuplicateApiKeyError,
     DuplicateModelError,
+    DuplicatePriceError,
     DuplicateTenantError,
     KeyUsage,
     ModelAccess,
     ModelAccessMode,
     ModelConfig,
+    ModelPrice,
     ModelUsage,
+    MonthlyUsage,
     Tenant,
     TenantLimitPatch,
     TimeBucket,
@@ -44,6 +48,7 @@ from llm_gateway.storage.tables import (
     AuditRequestRow,
     AuditSessionRow,
     AuditTurnDiffRow,
+    ModelPriceRow,
     ModelRow,
     TenantModelAccessRow,
     TenantRow,
@@ -141,6 +146,11 @@ def _to_tenant(row: TenantRow) -> Tenant:
         requests_per_minute=row.requests_per_minute,
         audit_enabled=row.audit_enabled,
         model_access_mode=mode,
+        plan_tokens=row.plan_tokens,
+        plan_allow_overage=row.plan_allow_overage,
+        monthly_cost_budget=(
+            Decimal(row.monthly_cost_budget) if row.monthly_cost_budget is not None else None
+        ),
     )
 
 
@@ -220,6 +230,84 @@ class SqlAlchemyModelRepository:
             return result.rowcount == 1
 
 
+def _to_price(row: ModelPriceRow) -> ModelPrice:
+    return ModelPrice(
+        id=row.id,
+        model_id=row.model_id,
+        input_per_million=Decimal(row.input_per_million),
+        output_per_million=Decimal(row.output_per_million),
+        cached_input_per_million=(
+            Decimal(row.cached_input_per_million)
+            if row.cached_input_per_million is not None
+            else None
+        ),
+        currency=row.currency,
+        effective_from=row.effective_from,
+        created_at=row.created_at,
+    )
+
+
+class SqlAlchemyModelPriceRepository:
+    def __init__(self, *, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        self._session_factory = session_factory
+
+    async def get_effective_price(self, *, model_id: str, at: datetime) -> ModelPrice | None:
+        statement = (
+            select(ModelPriceRow)
+            .where(
+                ModelPriceRow.model_id == model_id,
+                ModelPriceRow.effective_from <= at,
+            )
+            .order_by(ModelPriceRow.effective_from.desc())
+            .limit(1)
+        )
+        async with self._session_factory() as session, session.begin():
+            row = await session.scalar(statement)
+        return _to_price(row) if row is not None else None
+
+    async def create_price(self, price: ModelPrice) -> ModelPrice:
+        row = ModelPriceRow(
+            id=price.id,
+            model_id=price.model_id,
+            input_per_million=price.input_per_million,
+            cached_input_per_million=price.cached_input_per_million,
+            output_per_million=price.output_per_million,
+            currency=price.currency,
+            effective_from=price.effective_from,
+            created_at=price.created_at,
+        )
+        try:
+            async with self._session_factory() as session, session.begin():
+                session.add(row)
+        except IntegrityError as exc:
+            if _is_unique_violation(exc):
+                raise DuplicatePriceError(price.model_id, price.effective_from) from exc
+            if _is_foreign_key_violation(exc):
+                raise UnknownModelError(price.model_id) from exc
+            raise
+        return price
+
+    async def list_prices(
+        self, *, model_id: str, limit: int, offset: int
+    ) -> tuple[Sequence[ModelPrice], int]:
+        _validate_page(limit=limit, offset=offset)
+        filters = (ModelPriceRow.model_id == model_id,)
+        async with self._session_factory() as session, session.begin():
+            rows = (
+                await session.scalars(
+                    select(ModelPriceRow)
+                    .where(*filters)
+                    .order_by(ModelPriceRow.effective_from.desc())
+                    .limit(limit)
+                    .offset(offset)
+                )
+            ).all()
+            total = await session.scalar(
+                select(func.count()).select_from(ModelPriceRow).where(*filters)
+            )
+        return [_to_price(row) for row in rows], total or 0
+
+
 class SqlAlchemyTenantRepository:
     def __init__(self, *, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._session_factory = session_factory
@@ -233,6 +321,9 @@ class SqlAlchemyTenantRepository:
             requests_per_minute=tenant.requests_per_minute,
             audit_enabled=tenant.audit_enabled,
             model_access_mode=tenant.model_access_mode.value,
+            plan_tokens=tenant.plan_tokens,
+            plan_allow_overage=tenant.plan_allow_overage,
+            monthly_cost_budget=tenant.monthly_cost_budget,
         )
         try:
             async with self._session_factory() as session, session.begin():
@@ -269,13 +360,19 @@ class SqlAlchemyTenantRepository:
         *,
         patch: TenantLimitPatch,
     ) -> Tenant | None:
-        values: dict[str, int | bool | None] = {}
+        values: dict[str, object] = {}
         if patch.set_monthly_token_quota:
             values["monthly_token_quota"] = patch.monthly_token_quota
         if patch.set_requests_per_minute:
             values["requests_per_minute"] = patch.requests_per_minute
         if patch.set_audit_enabled and patch.audit_enabled is not None:
             values["audit_enabled"] = patch.audit_enabled
+        if patch.set_plan_tokens:
+            values["plan_tokens"] = patch.plan_tokens
+        if patch.set_plan_allow_overage and patch.plan_allow_overage is not None:
+            values["plan_allow_overage"] = patch.plan_allow_overage
+        if patch.set_monthly_cost_budget:
+            values["monthly_cost_budget"] = patch.monthly_cost_budget
         async with self._session_factory() as session, session.begin():
             if not values:
                 row = await session.get(TenantRow, tenant_id)
@@ -452,6 +549,10 @@ class SqlAlchemyUsageRepository:
             total_tokens=record.total_tokens,
             cached_tokens=record.cached_tokens,
             trace_id=record.trace_id,
+            covered_tokens=record.covered_tokens,
+            billable_tokens=record.billable_tokens,
+            list_cost=record.list_cost,
+            billed_cost=record.billed_cost,
             created_at=record.created_at,
         )
         try:
@@ -473,6 +574,33 @@ class SqlAlchemyUsageRepository:
             total = await session.scalar(statement)
         return int(total or 0)
 
+    async def monthly_totals(
+        self, *, tenant_id: UUID, since: datetime, until: datetime
+    ) -> MonthlyUsage:
+        _validate_token_window(since=since, until=until)
+        statement = select(
+            func.coalesce(func.sum(UsageRow.prompt_tokens + UsageRow.completion_tokens), 0),
+            func.coalesce(func.sum(UsageRow.covered_tokens), 0),
+            func.coalesce(func.sum(UsageRow.billable_tokens), 0),
+            func.coalesce(func.sum(UsageRow.list_cost), 0),
+            func.coalesce(func.sum(UsageRow.billed_cost), 0),
+            func.count(),
+        ).where(
+            UsageRow.tenant_id == tenant_id,
+            UsageRow.created_at >= since,
+            UsageRow.created_at < until,
+        )
+        async with self._session_factory() as session, session.begin():
+            row = (await session.execute(statement)).one()
+        return MonthlyUsage(
+            total_tokens=int(row[0]),
+            covered_tokens=int(row[1]),
+            billable_tokens=int(row[2]),
+            list_cost=Decimal(row[3] or 0),
+            billed_cost=Decimal(row[4] or 0),
+            requests=int(row[5]),
+        )
+
     async def summary_by_model(
         self,
         *,
@@ -493,6 +621,10 @@ class SqlAlchemyUsageRepository:
                 func.coalesce(func.sum(UsageRow.cached_tokens), 0),
                 func.coalesce(total_tokens, 0),
                 func.count(),
+                func.coalesce(func.sum(UsageRow.covered_tokens), 0),
+                func.coalesce(func.sum(UsageRow.billable_tokens), 0),
+                func.coalesce(func.sum(UsageRow.list_cost), 0),
+                func.coalesce(func.sum(UsageRow.billed_cost), 0),
             )
             .where(*filters)
             .group_by(UsageRow.model_id, UsageRow.provider)
@@ -509,6 +641,10 @@ class SqlAlchemyUsageRepository:
                 cached_tokens=int(row[4]),
                 total_tokens=int(row[5]),
                 requests=int(row[6]),
+                covered_tokens=int(row[7]),
+                billable_tokens=int(row[8]),
+                list_cost=Decimal(row[9] or 0),
+                billed_cost=Decimal(row[10] or 0),
             )
             for row in rows
         ]
@@ -532,6 +668,10 @@ class SqlAlchemyUsageRepository:
                 func.coalesce(func.sum(UsageRow.cached_tokens), 0),
                 func.coalesce(total_tokens, 0),
                 func.count(),
+                func.coalesce(func.sum(UsageRow.covered_tokens), 0),
+                func.coalesce(func.sum(UsageRow.billable_tokens), 0),
+                func.coalesce(func.sum(UsageRow.list_cost), 0),
+                func.coalesce(func.sum(UsageRow.billed_cost), 0),
             )
             .where(*filters)
             .group_by(UsageRow.api_key_id)
@@ -547,6 +687,10 @@ class SqlAlchemyUsageRepository:
                 cached_tokens=int(row[3]),
                 total_tokens=int(row[4]),
                 requests=int(row[5]),
+                covered_tokens=int(row[6]),
+                billable_tokens=int(row[7]),
+                list_cost=Decimal(row[8] or 0),
+                billed_cost=Decimal(row[9] or 0),
             )
             for row in rows
         ]
@@ -576,6 +720,10 @@ class SqlAlchemyUsageRepository:
                 func.coalesce(func.sum(UsageRow.cached_tokens), 0),
                 func.coalesce(total_tokens, 0),
                 func.count(),
+                func.coalesce(func.sum(UsageRow.covered_tokens), 0),
+                func.coalesce(func.sum(UsageRow.billable_tokens), 0),
+                func.coalesce(func.sum(UsageRow.list_cost), 0),
+                func.coalesce(func.sum(UsageRow.billed_cost), 0),
             )
             .where(*filters)
             .group_by(bucket_start)
@@ -591,6 +739,10 @@ class SqlAlchemyUsageRepository:
                 cached_tokens=int(row[3]),
                 total_tokens=int(row[4]),
                 requests=int(row[5]),
+                covered_tokens=int(row[6]),
+                billable_tokens=int(row[7]),
+                list_cost=Decimal(row[8] or 0),
+                billed_cost=Decimal(row[9] or 0),
             )
             for row in rows
         ]

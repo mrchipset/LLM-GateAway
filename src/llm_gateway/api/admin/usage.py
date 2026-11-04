@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Annotated
 from uuid import UUID
 
@@ -96,6 +97,10 @@ async def usage_summary(
         cached_tokens=sum(item.cached_tokens for item in by_model),
         total_tokens=sum(item.total_tokens for item in by_model),
         requests=sum(item.requests for item in by_model),
+        covered_tokens=sum(item.covered_tokens for item in by_model),
+        billable_tokens=sum(item.billable_tokens for item in by_model),
+        list_cost=sum((item.list_cost for item in by_model), Decimal("0")),
+        billed_cost=sum((item.billed_cost for item in by_model), Decimal("0")),
         by_model=[
             UsageModelSummary(
                 model_id=item.model_id,
@@ -105,6 +110,10 @@ async def usage_summary(
                 cached_tokens=item.cached_tokens,
                 total_tokens=item.total_tokens,
                 requests=item.requests,
+                covered_tokens=item.covered_tokens,
+                billable_tokens=item.billable_tokens,
+                list_cost=item.list_cost,
+                billed_cost=item.billed_cost,
             )
             for item in by_model
         ],
@@ -145,6 +154,10 @@ async def usage_by_key(
                 cached_tokens=item.cached_tokens,
                 total_tokens=item.total_tokens,
                 requests=item.requests,
+                covered_tokens=item.covered_tokens,
+                billable_tokens=item.billable_tokens,
+                list_cost=item.list_cost,
+                billed_cost=item.billed_cost,
             )
             for item in by_key
         ],
@@ -201,6 +214,10 @@ async def usage_series(
                 cached_tokens=point.cached_tokens if point is not None else 0,
                 total_tokens=point.total_tokens if point is not None else 0,
                 requests=point.requests if point is not None else 0,
+                covered_tokens=point.covered_tokens if point is not None else 0,
+                billable_tokens=point.billable_tokens if point is not None else 0,
+                list_cost=point.list_cost if point is not None else Decimal("0"),
+                billed_cost=point.billed_cost if point is not None else Decimal("0"),
             )
         )
     return UsageSeriesResponse(bucket=bucket, points=points)

@@ -28,8 +28,9 @@ from llm_gateway.services.audit import (
     begin_audit_safely,
     record_audit_safely,
 )
+from llm_gateway.services.billing import BillingService
 from llm_gateway.services.chat import ChatService, ChatStream, map_provider_error
-from llm_gateway.services.limits import enforce_inference_limits
+from llm_gateway.services.limits import InferenceAccess, enforce_inference_limits
 from llm_gateway.services.usage import (
     USAGE_WRITE_TIMEOUT_SECONDS,
     UsageContext,
@@ -217,7 +218,8 @@ async def _stream_sse(
 async def create_chat_completion(
     request: Request,
     payload: ChatCompletionRequest,
-    api_key: Annotated[AuthenticatedKey, Depends(enforce_inference_limits)],
+    access: Annotated[InferenceAccess, Depends(enforce_inference_limits)],
+    container: Annotated[Container, Depends(get_container)],
     service: Annotated[ChatService, Depends(get_chat_service)],
     recorder: Annotated[UsageRecorder, Depends(get_usage_recorder)],
     audit_service: Annotated[AuditService, Depends(get_audit_service)],
@@ -225,17 +227,25 @@ async def create_chat_completion(
     request_id = get_request_id() or ""
     annotate_current_span(
         {
-            "llm.tenant_id": str(api_key.record.tenant_id),
-            "llm.api_key_id": str(api_key.record.id),
+            "llm.tenant_id": str(access.api_key.record.tenant_id),
+            "llm.api_key_id": str(access.api_key.record.id),
             "llm.model_id": payload.model,
             "llm.stream": payload.stream,
         }
     )
     session_header = request.headers.get(AUDIT_SESSION_HEADER)
+    allowance = await BillingService(
+        usage=container.usage,
+        prices=container.prices,
+    ).authorize(
+        tenant=access.tenant,
+        model_id=payload.model,
+        now=container.clock.now(),
+    )
     audit_turn = await begin_audit_safely(
         service=audit_service,
-        tenant_id=api_key.record.tenant_id,
-        api_key=api_key.record,
+        tenant_id=access.api_key.record.tenant_id,
+        api_key=access.api_key.record,
         request_id=request_id,
         model_id=payload.model,
         payload=payload,
@@ -245,7 +255,7 @@ async def create_chat_completion(
 
     if not payload.stream:
         try:
-            result = await service.complete(payload, tenant_id=api_key.record.tenant_id)
+            result = await service.complete(payload, tenant_id=access.api_key.record.tenant_id)
         except Exception as exc:
             if audit_turn is not None:
                 await record_audit_safely(
@@ -259,10 +269,11 @@ async def create_chat_completion(
             recorder=recorder,
             context=UsageContext(
                 request_id=request_id,
-                tenant_id=api_key.record.tenant_id,
-                api_key_id=api_key.record.id,
+                tenant_id=access.api_key.record.tenant_id,
+                api_key_id=access.api_key.record.id,
                 model_id=result.model.id,
                 provider=result.model.provider,
+                allowance=allowance,
             ),
             usage=result.response.usage,
         )
@@ -281,7 +292,7 @@ async def create_chat_completion(
         return result.response
 
     try:
-        stream = await service.open_stream(payload, tenant_id=api_key.record.tenant_id)
+        stream = await service.open_stream(payload, tenant_id=access.api_key.record.tenant_id)
     except Exception as exc:
         if audit_turn is not None:
             await record_audit_safely(
@@ -297,10 +308,11 @@ async def create_chat_completion(
             recorder=recorder,
             context=UsageContext(
                 request_id=request_id,
-                tenant_id=api_key.record.tenant_id,
-                api_key_id=api_key.record.id,
+                tenant_id=access.api_key.record.tenant_id,
+                api_key_id=access.api_key.record.id,
                 model_id=stream.model_id,
                 provider=stream.provider,
+                allowance=allowance,
             ),
             audit_turn=audit_turn,
             audit_service=audit_service,

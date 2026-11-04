@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Sequence
 from datetime import UTC, datetime
+from decimal import Decimal
 from uuid import UUID, uuid4
 
 from llm_gateway.auth.keys import generate_api_key
@@ -64,6 +65,9 @@ async def seed_tenant(
     monthly_token_quota: int | None = None,
     requests_per_minute: int | None = None,
     audit_enabled: bool = False,
+    plan_tokens: int | None = None,
+    plan_allow_overage: bool = False,
+    monthly_cost_budget: Decimal | None = None,
 ) -> Tenant:
     tenant = Tenant(
         id=tenant_id if tenant_id is not None else uuid4(),
@@ -72,6 +76,9 @@ async def seed_tenant(
         monthly_token_quota=monthly_token_quota,
         requests_per_minute=requests_per_minute,
         audit_enabled=audit_enabled,
+        plan_tokens=plan_tokens,
+        plan_allow_overage=plan_allow_overage,
+        monthly_cost_budget=monthly_cost_budget,
     )
     return await container.tenants.create_tenant(tenant)
 

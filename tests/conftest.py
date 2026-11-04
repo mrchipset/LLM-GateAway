@@ -14,6 +14,7 @@ from llm_gateway.providers.registry import ProviderRegistry
 from llm_gateway.storage.memory import (
     InMemoryApiKeyRepository,
     InMemoryAuditRepository,
+    InMemoryModelPriceRepository,
     InMemoryModelRepository,
     InMemoryTenantRepository,
     InMemoryUsageRepository,
@@ -52,6 +53,7 @@ def make_container(
         clock=clock if clock is not None else SystemClock(),
         api_keys=InMemoryApiKeyRepository(),
         models=InMemoryModelRepository(),
+        prices=InMemoryModelPriceRepository(),
         tenants=InMemoryTenantRepository(),
         usage=usage if usage is not None else InMemoryUsageRepository(),
         rate_limiter=rate_limiter if rate_limiter is not None else InMemoryRateLimiter(),

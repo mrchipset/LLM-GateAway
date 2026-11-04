@@ -9,6 +9,7 @@ from llm_gateway.logging import get_logger
 from llm_gateway.metrics import current_metrics
 from llm_gateway.providers.base import ProviderName
 from llm_gateway.schemas.chat import Usage
+from llm_gateway.services.billing import BillingAllowance, compute_usage_cost
 from llm_gateway.storage.repositories import UsageRecord, UsageRepository
 from llm_gateway.telemetry import current_trace_id
 
@@ -65,6 +66,7 @@ class UsageContext:
     api_key_id: UUID
     model_id: str
     provider: ProviderName
+    allowance: BillingAllowance | None = None
 
 
 class UsageRecorder:
@@ -77,6 +79,12 @@ class UsageRecorder:
         if counts is None:
             raise ValueError("usage must not be None")
 
+        cost = compute_usage_cost(
+            prompt_tokens=counts.prompt_tokens,
+            cached_tokens=counts.cached_tokens,
+            completion_tokens=counts.completion_tokens,
+            allowance=context.allowance,
+        )
         record = UsageRecord(
             id=uuid4(),
             request_id=context.request_id,
@@ -90,6 +98,10 @@ class UsageRecorder:
             cached_tokens=counts.cached_tokens,
             created_at=self._clock.now(),
             trace_id=current_trace_id(),
+            covered_tokens=cost.covered_tokens,
+            billable_tokens=cost.billable_tokens,
+            list_cost=cost.list_cost,
+            billed_cost=cost.billed_cost,
         )
         await self._repository.record(record)
 

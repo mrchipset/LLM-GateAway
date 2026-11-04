@@ -15,6 +15,7 @@ from llm_gateway.storage.db import Database
 from llm_gateway.storage.memory import (
     InMemoryApiKeyRepository,
     InMemoryAuditRepository,
+    InMemoryModelPriceRepository,
     InMemoryModelRepository,
     InMemoryTenantRepository,
     InMemoryUsageRepository,
@@ -23,6 +24,7 @@ from llm_gateway.storage.rate_limits import InMemoryRateLimiter, RateLimiter
 from llm_gateway.storage.repositories import (
     ApiKeyRepository,
     AuditRepository,
+    ModelPriceRepository,
     ModelRepository,
     TenantRepository,
     UsageRepository,
@@ -50,6 +52,7 @@ class Container:
     clock: Clock
     api_keys: ApiKeyRepository
     models: ModelRepository
+    prices: ModelPriceRepository
     tenants: TenantRepository
     usage: UsageRepository
     rate_limiter: RateLimiter
@@ -115,6 +118,7 @@ def build_container(settings: Settings, *, telemetry: Telemetry | None = None) -
             clock=clock,
             api_keys=database.api_keys,
             models=database.models,
+            prices=database.prices,
             tenants=database.tenants,
             usage=database.usage,
             audit=database.audit,
@@ -130,6 +134,7 @@ def build_container(settings: Settings, *, telemetry: Telemetry | None = None) -
         clock=clock,
         api_keys=InMemoryApiKeyRepository(),
         models=InMemoryModelRepository(),
+        prices=InMemoryModelPriceRepository(),
         tenants=InMemoryTenantRepository(),
         usage=InMemoryUsageRepository(),
         audit=InMemoryAuditRepository(),
