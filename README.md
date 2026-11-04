@@ -568,6 +568,8 @@ does.
 - Limits are still tenant-level. Per-key limits, per-model limits, TPM, and in-flight concurrency
   are the next stage; the token bucket already exposes `limit` as both capacity and refill rate so
   those can reuse it.
+- With Compose, start both profiles and switch the backend:
+  `docker compose --profile redis --profile app up -d` plus `GATEWAY_RATE_LIMIT_BACKEND=redis`.
 
 ## Database and migrations
 
