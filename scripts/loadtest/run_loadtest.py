@@ -146,9 +146,10 @@ def _python_smoke_load(
     asyncio.run(run())
 
 
-def _print_metrics(port: int) -> None:
+def _print_metrics(port: int, *, host: str = "127.0.0.1") -> None:
+    target = "127.0.0.1" if host in {"0.0.0.0", "::"} else host  # noqa: S104 - scrape target
     try:
-        text = httpx.get(f"http://127.0.0.1:{port}/metrics", timeout=5.0).text
+        text = httpx.get(f"http://{target}:{port}/metrics", timeout=5.0).text
     except httpx.HTTPError as exc:
         print(f"metrics unavailable: {exc}")
         return
@@ -177,6 +178,8 @@ def main() -> int:
     parser.add_argument("--token-ms", type=int, default=15)
     parser.add_argument("--tokens", type=int, default=64)
     parser.add_argument("--error-rate", type=float, default=0.0)
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--metrics-host", default="127.0.0.1")
     parser.add_argument("--skip-k6", action="store_true")
     parser.add_argument("--plan-tokens", type=int, default=None)
     parser.add_argument("--monthly-cost-budget", default=None)
@@ -205,6 +208,7 @@ def main() -> int:
             "GATEWAY_LOG_LEVEL": "WARNING",
             "GATEWAY_METRICS_ENABLED": "true",
             "GATEWAY_METRICS_PORT": str(metrics_port),
+            "GATEWAY_METRICS_HOST": args.metrics_host,
             "GATEWAY_TRACING_ENABLED": "false",
         }
     )
@@ -233,7 +237,7 @@ def main() -> int:
             "llm_gateway.app:create_app",
             "--factory",
             "--host",
-            "127.0.0.1",
+            args.host,
             "--port",
             str(gateway_port),
         ],
@@ -287,7 +291,7 @@ def main() -> int:
                 seconds=5.0,
                 stream=args.stream,
             )
-            _print_metrics(metrics_port)
+            _print_metrics(metrics_port, host=args.metrics_host)
             return 0
 
         k6_env = os.environ.copy() | {
@@ -300,11 +304,13 @@ def main() -> int:
             "VUS": str(args.users),
             "MAX_VUS": str(args.max_users),
         }
-        return subprocess.call(
+        result = subprocess.call(
             ["k6", "run", os.path.join(ROOT, "scripts", "loadtest", "k6", "chat.js")],
             cwd=ROOT,
             env=k6_env,
         )
+        _print_metrics(metrics_port, host=args.metrics_host)
+        return result
     finally:
         for process in (gateway, stub):
             process.terminate()

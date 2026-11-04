@@ -79,6 +79,27 @@ From the gateway `/metrics` (printed by the runner):
 Record the machine, worker count, DB size, and stub settings with every result; a number
 without those is not comparable.
 
+## Running the generator on another machine
+
+The runner binds to loopback by default. To drive the gateway from a second host, bind it
+to the LAN interface and keep metrics local:
+
+```powershell
+uv run python scripts/loadtest/run_loadtest.py --host 0.0.0.0 --rate 50 --duration 120s
+```
+
+- `--host` is the gateway bind address; `--metrics-host` (default `127.0.0.1`) is separate on
+  purpose: do not expose the scrape port to the LAN.
+- The runner scrapes `/metrics` itself right after k6 finishes and prints the route, upstream,
+  TTFT, and rejection series. If k6 runs elsewhere, pass `--skip-k6` and run it on that host
+  with `-e GATEWAY_URL=http://<gateway-ip>:<port>` using the key the runner printed.
+- Open only the gateway port in the firewall. On Ubuntu: `sudo ufw allow 4000/tcp`. On
+  Windows: `New-NetFirewallRule -DisplayName "llm-gateway loadtest" -Direction Inbound
+  -Action Allow -Protocol TCP -LocalPort 4000`.
+
+Cross-host runs measure the network honestly; co-located runs are a lower bound because the
+generator competes with the gateway.
+
 ## Caveats
 
 - single host: the load generator competes with the gateway; use two machines for a real ceiling
