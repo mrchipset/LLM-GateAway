@@ -243,7 +243,7 @@
   - 验收：故意引入 pyright 错误、失败测试、格式问题各一次，流水线必须红；合并保护开启。
   - 进度（2026-11-03）：`.github/workflows/ci.yml` 已落地（backend / integration / frontend / docker 四个 job），本地等价命令全绿（417 passed，52 个集成用例另跑全绿）。
   - 进度（2026-11-04）：仓库已推到 GitHub（`mrchipset/LLM-GateAway`，public），`main` 在 `18397c8` 上 CI 全绿（run `41848783274`）。三次红灯演练已在临时分支 `ci-red-check` 完成并删除：类型错误 → Backend 的 Type check 失败（run `41849170218`，其余三个 job 绿）；失败单测 → Run tests 失败（run `41849544183`）；格式问题 → Check formatting 失败（run `41849926543`）。Gitee 镜像同步到同一 SHA。
-  - 剩余：`main` 仍未受保护（GitHub API `branches/main` 返回 `protected: false`），需要在仓库设置里开启分支保护并要求上述四个检查通过。
+  - 剩余：`main` 仍未受保护（GitHub API `branches/main` 返回 `protected: false`）。**按 2026-11-04 决定暂缓开启**；四个检查的红/绿能力已验证，开启步骤见 `notes/session-2026-11-04.md` 的 Open items。
 
 - [x] **G0.7 审计数据合规闭环（原 P1e）**
   - 现状：存了内容但无保留期清理、无导出/删除、无分区、无 PII 脱敏。
