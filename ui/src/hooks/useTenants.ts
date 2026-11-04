@@ -10,30 +10,18 @@ export interface TenantPage {
   offset: number;
 }
 
-export function useTenants(masterKey: string | null) {
+export function useTenants() {
   return useQuery({
     queryKey: queryKeys.tenantPage(TENANT_SELECTOR_LIMIT, 0),
-    queryFn: ({ signal }) => {
-      if (masterKey === null) {
-        throw new Error('The tenants query started without a master key.');
-      }
-      return listTenants(masterKey, signal, { limit: TENANT_SELECTOR_LIMIT, offset: 0 });
-    },
-    enabled: masterKey !== null,
+    queryFn: ({ signal }) => listTenants(signal, { limit: TENANT_SELECTOR_LIMIT, offset: 0 }),
     retry: false,
   });
 }
 
-export function useTenantPage(masterKey: string | null, page: TenantPage) {
+export function useTenantPage(page: TenantPage) {
   return useQuery({
     queryKey: queryKeys.tenantPage(page.limit, page.offset),
-    queryFn: ({ signal }) => {
-      if (masterKey === null) {
-        throw new Error('The tenant page query started without a master key.');
-      }
-      return listTenants(masterKey, signal, { limit: page.limit, offset: page.offset });
-    },
-    enabled: masterKey !== null,
+    queryFn: ({ signal }) => listTenants(signal, { limit: page.limit, offset: page.offset }),
     retry: false,
   });
 }

@@ -3,8 +3,8 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 
 import type { CreateModelInput, ModelSummary } from '../api/client';
-import { connectWithKey } from './connectWithKey';
-import { installFetchMock, jsonResponse, toUrl } from './fetchMock';
+import { signIn } from './signIn';
+import { installFetchMock, readTestCsrfToken, jsonResponse, toUrl } from './fetchMock';
 import { renderApp } from './renderApp';
 
 const CHAT: ModelSummary = {
@@ -45,7 +45,7 @@ function deleteModelCalls(fetchMock: ReturnType<typeof installFetchMock>) {
 }
 
 async function openRegistry(user: ReturnType<typeof userEvent.setup>) {
-  await connectWithKey(user);
+  await signIn(user);
   return screen.findByRole('table', { name: 'Registered models' });
 }
 
@@ -94,7 +94,7 @@ describe('model registration', () => {
       upstream_model: 'deepseek-chat-v3',
       enabled: true,
     });
-    expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer mk_test_123');
+    expect(new Headers(init?.headers).get('x-csrf-token')).toBe(readTestCsrfToken());
 
     const table = await screen.findByRole('table', { name: 'Registered models' });
     expect(within(table).getByText('deepseek-chat')).toBeInTheDocument();

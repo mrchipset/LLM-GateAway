@@ -1,4 +1,14 @@
+import {
+  isUnsafeMethod,
+  readCsrfToken,
+  reportUnauthorized,
+  type AdminActorType,
+  type AdminRole,
+  type AdminSession,
+} from '../lib/session';
 import { withTimeout } from '../lib/timeout';
+
+export type { AdminActorType, AdminRole, AdminSession } from '../lib/session';
 
 export interface HealthResponse {
   status: 'ok';
@@ -368,6 +378,83 @@ export interface UsageByKeyResponse {
 export interface UsageWindow {
   tenantId: string | null;
   since: string;
+}
+
+export interface LoginInput {
+  username: string;
+  password: string;
+}
+
+export interface LoginResult {
+  username: string;
+  display_name: string;
+  role: AdminRole;
+  actor_type: AdminActorType;
+  expires_at: string;
+}
+
+export interface AdminSummary {
+  id: string;
+  username: string;
+  display_name: string;
+  role: AdminRole;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+  last_login_at: string | null;
+}
+
+export interface AdminListResponse {
+  items: AdminSummary[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface CreateAdminInput {
+  username: string;
+  display_name: string;
+  role: AdminRole;
+  password: string;
+}
+
+export interface UpdateAdminInput {
+  display_name?: string;
+  role?: AdminRole;
+  active?: boolean;
+  password?: string;
+}
+
+export interface AdminAuditEvent {
+  id: string;
+  actor_type: AdminActorType;
+  actor_id: string | null;
+  actor_name: string;
+  action: string;
+  target_type: string;
+  target_id: string;
+  before: Record<string, unknown> | null;
+  after: Record<string, unknown> | null;
+  request_id: string | null;
+  created_at: string;
+}
+
+export interface AdminAuditListResponse {
+  items: AdminAuditEvent[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface AdminAuditQuery {
+  actorId: string | null;
+  action: string | null;
+  targetType: string | null;
+  targetId: string | null;
+  since: string | null;
+  until: string | null;
+  limit: number;
+  offset: number;
 }
 
 export class ApiRequestError extends Error {
@@ -895,13 +982,87 @@ function parseAuditRequestDetail(value: unknown): AuditRequestDetail | null {
   };
 }
 
+function isAdminRole(value: unknown): value is AdminRole {
+  return value === 'owner' || value === 'operator' || value === 'auditor';
+}
+
+function isAdminActorType(value: unknown): value is AdminActorType {
+  return value === 'admin' || value === 'master' || value === 'bootstrap';
+}
+
+function isAdminSummary(value: unknown): value is AdminSummary {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.id === 'string' &&
+    typeof value.username === 'string' &&
+    typeof value.display_name === 'string' &&
+    isAdminRole(value.role) &&
+    typeof value.active === 'boolean' &&
+    typeof value.created_at === 'string' &&
+    typeof value.updated_at === 'string' &&
+    isNullableString(value.last_login_at)
+  );
+}
+
+function isAdminSession(value: unknown): value is AdminSession {
+  if (!isRecord(value)) return false;
+  return (
+    isAdminActorType(value.actor_type) &&
+    typeof value.name === 'string' &&
+    isAdminRole(value.role) &&
+    isNullableString(value.admin_id) &&
+    isNullableString(value.session_expires_at)
+  );
+}
+
+function isNullableRecord(value: unknown): value is Record<string, unknown> | null {
+  return value === null || value === undefined || isRecord(value);
+}
+
+function isAdminAuditEvent(value: unknown): value is AdminAuditEvent {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.id === 'string' &&
+    isAdminActorType(value.actor_type) &&
+    isNullableString(value.actor_id) &&
+    typeof value.actor_name === 'string' &&
+    typeof value.action === 'string' &&
+    typeof value.target_type === 'string' &&
+    typeof value.target_id === 'string' &&
+    isNullableRecord(value.before) &&
+    isNullableRecord(value.after) &&
+    isNullableString(value.request_id) &&
+    typeof value.created_at === 'string'
+  );
+}
+
+function parseListPage(
+  payload: unknown,
+): { items: unknown[]; total: number; limit: number; offset: number } | null {
+  if (
+    !isRecord(payload) ||
+    !Array.isArray(payload.items) ||
+    !isCount(payload.total) ||
+    !isCount(payload.limit) ||
+    !isCount(payload.offset)
+  ) {
+    return null;
+  }
+  return {
+    items: payload.items,
+    total: payload.total,
+    limit: payload.limit,
+    offset: payload.offset,
+  };
+}
+
 async function send(path: string, init: RequestInit = {}): Promise<Response> {
   const callerSignal = init.signal ?? undefined;
   let signal: AbortSignal | undefined;
 
   try {
     signal = withTimeout(callerSignal, REQUEST_TIMEOUT_MS);
-    return await fetch(path, { ...init, signal });
+    return await fetch(path, { ...init, credentials: 'include', signal });
   } catch (error) {
     if (callerSignal?.aborted) throw error;
     if (signal?.aborted) {
@@ -945,54 +1106,185 @@ function parseErrorEnvelope(
   };
 }
 
-async function sendAdmin(path: string, masterKey: string, signal?: AbortSignal): Promise<Response> {
+const ADMIN_HEADERS = { Accept: 'application/json' } as const;
+
+function adminHeaders(method: string, json: boolean): Headers {
+  const headers = new Headers(ADMIN_HEADERS);
+  if (json) headers.set('Content-Type', 'application/json');
+  if (isUnsafeMethod(method)) {
+    const csrfToken = readCsrfToken();
+    if (csrfToken !== null) headers.set('x-csrf-token', csrfToken);
+  }
+  return headers;
+}
+
+async function adminResponse(
+  path: string,
+  init: { method?: string; body?: unknown; signal?: AbortSignal },
+): Promise<Response> {
+  const method = init.method ?? 'GET';
   const response = await send(path, {
-    signal,
-    headers: {
-      Accept: 'application/json',
-      Authorization: `Bearer ${masterKey}`,
-    },
+    method,
+    signal: init.signal,
+    headers: adminHeaders(method, init.body !== undefined),
+    body: init.body === undefined ? undefined : JSON.stringify(init.body),
   });
+  if (response.status === 401) reportUnauthorized();
   if (!response.ok) throw await toRequestError(response);
   return response;
+}
+
+async function sendAdmin(path: string, signal?: AbortSignal): Promise<Response> {
+  return adminResponse(path, { signal });
 }
 
 async function sendAdminJson(
   path: string,
-  masterKey: string,
   method: 'POST' | 'PATCH' | 'PUT',
   body: unknown,
   signal?: AbortSignal,
 ): Promise<Response> {
-  const response = await send(path, {
-    method,
-    signal,
-    headers: {
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${masterKey}`,
-    },
-    body: JSON.stringify(body),
-  });
-  if (!response.ok) throw await toRequestError(response);
-  return response;
+  return adminResponse(path, { method, body, signal });
 }
 
-async function sendAdminDelete(
-  path: string,
-  masterKey: string,
-  signal?: AbortSignal,
-): Promise<Response> {
-  const response = await send(path, {
-    method: 'DELETE',
+async function sendAdminDelete(path: string, signal?: AbortSignal): Promise<Response> {
+  return adminResponse(path, { method: 'DELETE', signal });
+}
+
+export async function login(input: LoginInput, signal?: AbortSignal): Promise<LoginResult> {
+  const response = await send('/api/v1/auth/login', {
+    method: 'POST',
     signal,
-    headers: {
-      Accept: 'application/json',
-      Authorization: `Bearer ${masterKey}`,
-    },
+    headers: adminHeaders('POST', true),
+    body: JSON.stringify(input),
   });
   if (!response.ok) throw await toRequestError(response);
-  return response;
+
+  const payload = await readJson(response, '/api/v1/auth/login');
+  if (
+    !isRecord(payload) ||
+    typeof payload.username !== 'string' ||
+    typeof payload.display_name !== 'string' ||
+    !isAdminRole(payload.role) ||
+    !isAdminActorType(payload.actor_type) ||
+    typeof payload.expires_at !== 'string'
+  ) {
+    throw unexpectedPayload(response, 'login');
+  }
+  return {
+    username: payload.username,
+    display_name: payload.display_name,
+    role: payload.role,
+    actor_type: payload.actor_type,
+    expires_at: payload.expires_at,
+  };
+}
+
+export async function logout(signal?: AbortSignal): Promise<void> {
+  const response = await send('/api/v1/auth/logout', {
+    method: 'POST',
+    signal,
+    headers: adminHeaders('POST', false),
+  });
+  // A missing session still means the browser is signed out.
+  if (response.status === 401) return;
+  if (!response.ok) throw await toRequestError(response);
+}
+
+export async function getCurrentAdmin(signal?: AbortSignal): Promise<AdminSession | null> {
+  const response = await send('/api/v1/auth/me', {
+    signal,
+    headers: adminHeaders('GET', false),
+  });
+  if (response.status === 401) return null;
+  if (!response.ok) throw await toRequestError(response);
+
+  const payload = await readJson(response, '/api/v1/auth/me');
+  if (!isAdminSession(payload)) {
+    throw unexpectedPayload(response, 'current admin');
+  }
+  return payload;
+}
+
+export async function listAdmins(
+  options: { limit?: number; offset?: number } = {},
+  signal?: AbortSignal,
+): Promise<AdminListResponse> {
+  const limit = options.limit ?? 50;
+  const offset = options.offset ?? 0;
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  const response = await sendAdmin(`/api/v1/admins?${params.toString()}`, signal);
+  const payload = await readJson(response, '/api/v1/admins');
+  const page = parseListPage(payload);
+  if (page === null || !page.items.every(isAdminSummary)) {
+    throw unexpectedPayload(response, 'admin list');
+  }
+  return {
+    items: page.items,
+    total: page.total,
+    limit: page.limit,
+    offset: page.offset,
+  };
+}
+
+export async function createAdmin(
+  input: CreateAdminInput,
+  signal?: AbortSignal,
+): Promise<AdminSummary> {
+  const response = await sendAdminJson('/api/v1/admins', 'POST', input, signal);
+  const payload = await readJson(response, '/api/v1/admins');
+  if (!isAdminSummary(payload)) {
+    throw unexpectedPayload(response, 'admin');
+  }
+  return payload;
+}
+
+export async function updateAdmin(
+  adminId: string,
+  patch: UpdateAdminInput,
+  signal?: AbortSignal,
+): Promise<AdminSummary> {
+  const path = `/api/v1/admins/${encodeURIComponent(adminId)}`;
+  const response = await sendAdminJson(path, 'PATCH', patch, signal);
+  const payload = await readJson(response, path);
+  if (!isAdminSummary(payload)) {
+    throw unexpectedPayload(response, 'admin');
+  }
+  return payload;
+}
+
+function adminAuditQueryParams(query: AdminAuditQuery): URLSearchParams {
+  const params = new URLSearchParams();
+  if (query.actorId !== null && query.actorId !== '') params.set('actor_id', query.actorId);
+  if (query.action !== null && query.action !== '') params.set('action', query.action);
+  if (query.targetType !== null && query.targetType !== '') {
+    params.set('target_type', query.targetType);
+  }
+  if (query.targetId !== null && query.targetId !== '') params.set('target_id', query.targetId);
+  if (query.since !== null && query.since !== '') params.set('since', query.since);
+  if (query.until !== null && query.until !== '') params.set('until', query.until);
+  params.set('limit', String(query.limit));
+  params.set('offset', String(query.offset));
+  return params;
+}
+
+export async function listAdminAudit(
+  query: AdminAuditQuery,
+  signal?: AbortSignal,
+): Promise<AdminAuditListResponse> {
+  const path = `/api/v1/admin-audit?${adminAuditQueryParams(query).toString()}`;
+  const response = await sendAdmin(path, signal);
+  const payload = await readJson(response, '/api/v1/admin-audit');
+  const page = parseListPage(payload);
+  if (page === null || !page.items.every(isAdminAuditEvent)) {
+    throw unexpectedPayload(response, 'admin audit list');
+  }
+  return {
+    items: page.items,
+    total: page.total,
+    limit: page.limit,
+    offset: page.offset,
+  };
 }
 
 function unexpectedPayload(response: Response, label: string): ApiRequestError {
@@ -1075,11 +1367,8 @@ export async function getReadiness(signal?: AbortSignal): Promise<ReadinessRespo
   return { status: payload.status as ReadinessResponse['status'], checks: payload.checks };
 }
 
-export async function listModels(
-  masterKey: string,
-  signal?: AbortSignal,
-): Promise<ModelListResponse> {
-  const response = await sendAdmin('/api/v1/models?limit=100&offset=0', masterKey, signal);
+export async function listModels(signal?: AbortSignal): Promise<ModelListResponse> {
+  const response = await sendAdmin('/api/v1/models?limit=100&offset=0', signal);
   const payload = await readJson(response, '/api/v1/models');
   if (
     !isRecord(payload) ||
@@ -1101,14 +1390,13 @@ export async function listModels(
 }
 
 export async function listTenants(
-  masterKey: string,
   signal?: AbortSignal,
   options: TenantPageOptions = {},
 ): Promise<TenantListResponse> {
   const limit = options.limit ?? 100;
   const offset = options.offset ?? 0;
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
-  const response = await sendAdmin(`/api/v1/tenants?${params.toString()}`, masterKey, signal);
+  const response = await sendAdmin(`/api/v1/tenants?${params.toString()}`, signal);
   const payload = await readJson(response, '/api/v1/tenants');
   if (
     !isRecord(payload) ||
@@ -1130,11 +1418,10 @@ export async function listTenants(
 }
 
 export async function createModel(
-  masterKey: string,
   input: CreateModelInput,
   signal?: AbortSignal,
 ): Promise<ModelSummary> {
-  const response = await sendAdminJson('/api/v1/models', masterKey, 'POST', input, signal);
+  const response = await sendAdminJson('/api/v1/models', 'POST', input, signal);
   const payload = await readJson(response, '/api/v1/models');
   if (!isModelSummary(payload)) {
     throw unexpectedPayload(response, 'model');
@@ -1142,21 +1429,16 @@ export async function createModel(
   return payload;
 }
 
-export async function deleteModel(
-  masterKey: string,
-  modelId: string,
-  signal?: AbortSignal,
-): Promise<void> {
-  await sendAdminDelete(`/api/v1/models/${encodeURIComponent(modelId)}`, masterKey, signal);
+export async function deleteModel(modelId: string, signal?: AbortSignal): Promise<void> {
+  await sendAdminDelete(`/api/v1/models/${encodeURIComponent(modelId)}`, signal);
 }
 
 export async function getTenantModelAccess(
-  masterKey: string,
   tenantId: string,
   signal?: AbortSignal,
 ): Promise<TenantModelAccess> {
   const path = `/api/v1/tenants/${encodeURIComponent(tenantId)}/model-access`;
-  const response = await sendAdmin(path, masterKey, signal);
+  const response = await sendAdmin(path, signal);
   const payload = await readJson(response, path);
   if (!isTenantModelAccess(payload)) {
     throw unexpectedPayload(response, 'tenant model access');
@@ -1165,13 +1447,12 @@ export async function getTenantModelAccess(
 }
 
 export async function replaceTenantModelAccess(
-  masterKey: string,
   tenantId: string,
   input: TenantModelAccessInput,
   signal?: AbortSignal,
 ): Promise<TenantModelAccess> {
   const path = `/api/v1/tenants/${encodeURIComponent(tenantId)}/model-access`;
-  const response = await sendAdminJson(path, masterKey, 'PUT', input, signal);
+  const response = await sendAdminJson(path, 'PUT', input, signal);
   const payload = await readJson(response, path);
   if (!isTenantModelAccess(payload)) {
     throw unexpectedPayload(response, 'tenant model access');
@@ -1180,32 +1461,29 @@ export async function replaceTenantModelAccess(
 }
 
 export async function createTenant(
-  masterKey: string,
   input: CreateTenantInput,
   signal?: AbortSignal,
 ): Promise<TenantSummary> {
-  const response = await sendAdminJson('/api/v1/tenants', masterKey, 'POST', input, signal);
+  const response = await sendAdminJson('/api/v1/tenants', 'POST', input, signal);
   return readTenant(response, '/api/v1/tenants');
 }
 
 export async function updateTenantLimits(
-  masterKey: string,
   tenantId: string,
   patch: TenantLimitsPatch,
   signal?: AbortSignal,
 ): Promise<TenantSummary> {
   const path = `/api/v1/tenants/${encodeURIComponent(tenantId)}`;
-  const response = await sendAdminJson(path, masterKey, 'PATCH', patch, signal);
+  const response = await sendAdminJson(path, 'PATCH', patch, signal);
   return readTenant(response, path);
 }
 
 export async function getTenantBilling(
-  masterKey: string,
   tenantId: string,
   signal?: AbortSignal,
 ): Promise<TenantBillingSummary> {
   const path = `/api/v1/tenants/${encodeURIComponent(tenantId)}/billing`;
-  const response = await sendAdmin(path, masterKey, signal);
+  const response = await sendAdmin(path, signal);
   const payload = await readJson(response, path);
   if (!isTenantBillingSummary(payload)) {
     throw unexpectedPayload(response, 'tenant billing summary');
@@ -1214,12 +1492,11 @@ export async function getTenantBilling(
 }
 
 export async function listModelPrices(
-  masterKey: string,
   modelId: string,
   signal?: AbortSignal,
 ): Promise<ModelPriceListResponse> {
   const path = `/api/v1/models/${encodeURIComponent(modelId)}/prices?limit=50&offset=0`;
-  const response = await sendAdmin(path, masterKey, signal);
+  const response = await sendAdmin(path, signal);
   const payload = await readJson(response, path);
   if (
     !isRecord(payload) ||
@@ -1241,13 +1518,12 @@ export async function listModelPrices(
 }
 
 export async function createModelPrice(
-  masterKey: string,
   modelId: string,
   input: CreateModelPriceInput,
   signal?: AbortSignal,
 ): Promise<ModelPrice> {
   const path = `/api/v1/models/${encodeURIComponent(modelId)}/prices`;
-  const response = await sendAdminJson(path, masterKey, 'POST', input, signal);
+  const response = await sendAdminJson(path, 'POST', input, signal);
   const payload = await readJson(response, path);
   if (!isModelPrice(payload)) {
     throw unexpectedPayload(response, 'model price');
@@ -1256,7 +1532,6 @@ export async function createModelPrice(
 }
 
 export async function listKeys(
-  masterKey: string,
   signal?: AbortSignal,
   options: ApiKeyPageOptions = {},
 ): Promise<ApiKeyListResponse> {
@@ -1269,7 +1544,7 @@ export async function listKeys(
   params.set('limit', String(limit));
   params.set('offset', String(offset));
 
-  const response = await sendAdmin(`/api/v1/keys?${params.toString()}`, masterKey, signal);
+  const response = await sendAdmin(`/api/v1/keys?${params.toString()}`, signal);
   const payload = await readJson(response, '/api/v1/keys');
   if (
     !isRecord(payload) ||
@@ -1293,11 +1568,10 @@ export async function listKeys(
 }
 
 export async function createKey(
-  masterKey: string,
   input: CreateApiKeyInput,
   signal?: AbortSignal,
 ): Promise<CreatedApiKey> {
-  const response = await sendAdminJson('/api/v1/keys', masterKey, 'POST', input, signal);
+  const response = await sendAdminJson('/api/v1/keys', 'POST', input, signal);
   const payload = await readJson(response, '/api/v1/keys');
   if (!isCreatedApiKey(payload)) {
     throw unexpectedPayload(response, 'created API key');
@@ -1305,22 +1579,17 @@ export async function createKey(
   return payload;
 }
 
-export async function revokeKey(
-  masterKey: string,
-  keyId: string,
-  signal?: AbortSignal,
-): Promise<void> {
+export async function revokeKey(keyId: string, signal?: AbortSignal): Promise<void> {
   const path = `/api/v1/keys/${encodeURIComponent(keyId)}`;
-  await sendAdminDelete(path, masterKey, signal);
+  await sendAdminDelete(path, signal);
 }
 
 export async function getUsageSummary(
-  masterKey: string,
   window: UsageWindow,
   signal?: AbortSignal,
 ): Promise<UsageSummaryResponse> {
   const path = `/api/v1/usage/summary?${usageWindowQuery(window).toString()}`;
-  const response = await sendAdmin(path, masterKey, signal);
+  const response = await sendAdmin(path, signal);
   const payload = await readJson(response, '/api/v1/usage/summary');
   if (
     !isRecord(payload) ||
@@ -1346,14 +1615,13 @@ export async function getUsageSummary(
 }
 
 export async function getUsageSeries(
-  masterKey: string,
   window: UsageWindow,
   signal?: AbortSignal,
 ): Promise<UsageSeriesResponse> {
   const params = usageWindowQuery(window);
   params.set('bucket', 'day');
   const path = `/api/v1/usage/series?${params.toString()}`;
-  const response = await sendAdmin(path, masterKey, signal);
+  const response = await sendAdmin(path, signal);
   const payload = await readJson(response, '/api/v1/usage/series');
   if (
     !isRecord(payload) ||
@@ -1368,7 +1636,6 @@ export async function getUsageSeries(
 }
 
 export async function getUsageByKey(
-  masterKey: string,
   window: UsageWindow,
   signal?: AbortSignal,
   limit = 100,
@@ -1376,7 +1643,7 @@ export async function getUsageByKey(
   const params = usageWindowQuery(window);
   params.set('limit', String(limit));
   const path = `/api/v1/usage/by-key?${params.toString()}`;
-  const response = await sendAdmin(path, masterKey, signal);
+  const response = await sendAdmin(path, signal);
   const payload = await readJson(response, '/api/v1/usage/by-key');
   if (
     !isRecord(payload) ||
@@ -1406,12 +1673,11 @@ function auditSessionQueryParams(query: AuditSessionQuery): URLSearchParams {
 }
 
 export async function getAuditSessions(
-  masterKey: string,
   query: AuditSessionQuery,
   signal?: AbortSignal,
 ): Promise<AuditSessionPage> {
   const path = `/api/v1/audit/sessions?${auditSessionQueryParams(query).toString()}`;
-  const response = await sendAdmin(path, masterKey, signal);
+  const response = await sendAdmin(path, signal);
   const payload = await readJson(response, '/api/v1/audit/sessions');
   if (
     !isRecord(payload) ||
@@ -1433,7 +1699,6 @@ export async function getAuditSessions(
 }
 
 export async function getAuditSession(
-  masterKey: string,
   sessionId: string,
   includeContent: boolean,
   signal?: AbortSignal,
@@ -1442,7 +1707,7 @@ export async function getAuditSession(
   if (includeContent) params.set('include_content', 'true');
   const query = params.size > 0 ? `?${params.toString()}` : '';
   const path = `/api/v1/audit/sessions/${encodeURIComponent(sessionId)}${query}`;
-  const response = await sendAdmin(path, masterKey, signal);
+  const response = await sendAdmin(path, signal);
   const payload = await readJson(response, path);
   if (
     !isRecord(payload) ||
@@ -1463,12 +1728,11 @@ export async function getAuditSession(
 }
 
 export async function getAuditRequest(
-  masterKey: string,
   requestId: string,
   signal?: AbortSignal,
 ): Promise<AuditRequestDetailResponse> {
   const path = `/api/v1/audit/requests/${encodeURIComponent(requestId)}`;
-  const response = await sendAdmin(path, masterKey, signal);
+  const response = await sendAdmin(path, signal);
   const payload = await readJson(response, path);
   if (!isRecord(payload) || typeof payload.truncated !== 'boolean') {
     throw unexpectedPayload(response, 'audit request');

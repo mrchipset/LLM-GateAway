@@ -7,46 +7,20 @@ import { useKeyPage } from '../hooks/useKeys';
 import { TENANT_SELECTOR_LIMIT, useTenants } from '../hooks/useTenants';
 import { formatExactNumber, formatUpdatedAt } from '../lib/format';
 import { Button } from './Button';
-import { CheckCircleIcon, KeyIcon, RefreshIcon } from './Icons';
+import { CheckCircleIcon, RefreshIcon } from './Icons';
 import { KeyCreateDialog } from './KeyCreateDialog';
 import { KeyRevokeDialog } from './KeyRevokeDialog';
 import { KeySecretDialog } from './KeySecretDialog';
 import { EmptyKeys, KeysPagination, KeysSkeleton, KeysTable } from './KeysTable';
 import { Panel, PanelHeader } from './Panel';
 import { RequestErrorPanel } from './RequestErrorPanel';
+import { useAdminSession } from '../lib/adminSessionContext';
 
 export const KEY_PAGE_SIZE = 20;
 const STATUS_CLOCK_INTERVAL_MS = 60_000;
 
-interface KeysPanelProps {
-  masterKey: string | null;
-}
-
-export function KeysPanel({ masterKey }: KeysPanelProps) {
-  if (masterKey === null) return <DisconnectedKeysPanel />;
-  return <ConnectedKeysPanel masterKey={masterKey} />;
-}
-
-function DisconnectedKeysPanel() {
-  return (
-    <Panel labelledBy="keys-heading">
-      <PanelHeader id="keys-heading" eyebrow="Access" title="API keys" />
-      <div className="px-5 py-4">
-        <div className="flex min-h-40 flex-col items-start justify-center gap-1.5 py-4">
-          <KeyIcon className="size-5 text-ink-muted" />
-          <p className="mt-1 text-sm font-medium text-ink">
-            Connect a master key to manage API keys.
-          </p>
-          <p className="max-w-md text-[13px] text-ink-muted">
-            The key is sent only to the management API from this browser tab.
-          </p>
-        </div>
-      </div>
-    </Panel>
-  );
-}
-
-function ConnectedKeysPanel({ masterKey }: { masterKey: string }) {
+export function KeysPanel() {
+  const { canWrite } = useAdminSession();
   const [tenantFilter, setTenantFilter] = useState('');
   const [offset, setOffset] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
@@ -60,22 +34,22 @@ function ConnectedKeysPanel({ masterKey }: { masterKey: string }) {
   const revokeTriggerRef = useRef<HTMLElement | null>(null);
   const queryClient = useQueryClient();
 
-  const tenantsQuery = useTenants(masterKey);
+  const tenantsQuery = useTenants();
   const tenants = tenantsQuery.data?.items ?? [];
   const tenantTotal = tenantsQuery.data?.total ?? 0;
   const tenantsTruncated = tenantsQuery.status === 'success' && tenantTotal > tenants.length;
   const tenantTruncationNote = tenantsTruncated
     ? `Showing the first ${formatExactNumber(Math.min(tenantTotal, TENANT_SELECTOR_LIMIT))} of ${formatExactNumber(tenantTotal)} tenants; use the API for the rest.`
     : null;
-  const canCreate = tenantsQuery.status === 'success' && tenants.length > 0;
+  const canCreate = canWrite && tenantsQuery.status === 'success' && tenants.length > 0;
   const tenantNames = new Map(tenants.map((tenant) => [tenant.id, tenant.name]));
 
-  const keyPage = useKeyPage(masterKey, {
+  const keyPage = useKeyPage({
     tenantId: tenantFilter === '' ? null : tenantFilter,
     limit: KEY_PAGE_SIZE,
     offset,
   });
-  const createMutation = useCreateKey(masterKey);
+  const createMutation = useCreateKey();
 
   useEffect(() => {
     const interval = window.setInterval(() => {
@@ -195,14 +169,16 @@ function ConnectedKeysPanel({ masterKey }: { masterKey: string }) {
             )}
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            {tenantsQuery.status === 'success' && tenants.length === 0 && (
-              <p className="text-[11.5px] text-warn">Create a tenant first.</p>
-            )}
-            <Button ref={createButtonRef} onClick={openCreate} disabled={!canCreate}>
-              Create API key
-            </Button>
-          </div>
+          {canWrite && (
+            <div className="flex flex-wrap items-center gap-2">
+              {tenantsQuery.status === 'success' && tenants.length === 0 && (
+                <p className="text-[11.5px] text-warn">Create a tenant first.</p>
+              )}
+              <Button ref={createButtonRef} onClick={openCreate} disabled={!canCreate}>
+                Create API key
+              </Button>
+            </div>
+          )}
         </div>
 
         <div className="mt-5">
@@ -224,6 +200,7 @@ function ConnectedKeysPanel({ masterKey }: { masterKey: string }) {
             query={keyPage}
             tenants={tenantNames}
             statusNow={statusNow}
+            canWrite={canWrite}
             canCreate={canCreate}
             onCreate={openCreate}
             onRevoke={handleRevoke}
@@ -235,7 +212,7 @@ function ConnectedKeysPanel({ masterKey }: { masterKey: string }) {
         </div>
       </div>
 
-      {createOpen && (
+      {canWrite && createOpen && (
         <KeyCreateDialog
           tenants={tenants}
           initialTenantId={tenantFilter === '' ? null : tenantFilter}
@@ -246,13 +223,12 @@ function ConnectedKeysPanel({ masterKey }: { masterKey: string }) {
         />
       )}
 
-      {secret !== null && (
+      {canWrite && secret !== null && (
         <KeySecretDialog created={secret} returnFocusRef={createButtonRef} onClose={closeSecret} />
       )}
 
-      {revokingKey !== null && (
+      {canWrite && revokingKey !== null && (
         <KeyRevokeDialog
-          masterKey={masterKey}
           apiKey={revokingKey}
           returnFocusRef={revokeTriggerRef}
           onClose={() => setRevokingKey(null)}
@@ -270,6 +246,7 @@ interface KeyDirectoryProps {
   query: ReturnType<typeof useKeyPage>;
   tenants: ReadonlyMap<string, string>;
   statusNow: number | null;
+  canWrite: boolean;
   canCreate: boolean;
   onCreate: () => void;
   onRevoke: (apiKey: ApiKeySummary, trigger: HTMLButtonElement) => void;
@@ -281,6 +258,7 @@ function KeyDirectory({
   query,
   tenants,
   statusNow,
+  canWrite,
   canCreate,
   onCreate,
   onRevoke,
@@ -299,14 +277,20 @@ function KeyDirectory({
     );
   }
   if (query.data.items.length === 0) {
-    return <EmptyKeys createDisabled={!canCreate} onCreate={onCreate} />;
+    return <EmptyKeys createDisabled={!canCreate} canWrite={canWrite} onCreate={onCreate} />;
   }
 
   const now = statusNow ?? query.dataUpdatedAt;
 
   return (
     <>
-      <KeysTable keys={query.data.items} tenantNames={tenants} now={now} onRevoke={onRevoke} />
+      <KeysTable
+        keys={query.data.items}
+        tenantNames={tenants}
+        now={now}
+        canWrite={canWrite}
+        onRevoke={onRevoke}
+      />
       <KeysPagination
         total={query.data.total}
         offset={query.data.offset}

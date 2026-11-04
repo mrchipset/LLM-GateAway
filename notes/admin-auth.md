@@ -1,7 +1,7 @@
 # Management-plane identity, roles, and admin audit
 
-Status: implements TODO G0.1 and G0.3. Scope: backend and admin API. The console still
-uses the master key until the session UI lands.
+Status: implements TODO G0.1 and G0.3. Scope: backend, admin API, and the console
+(login, role-aware navigation, Admins and Admin audit panels).
 
 ## 1. Problem
 

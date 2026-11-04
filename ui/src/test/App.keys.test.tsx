@@ -3,8 +3,8 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ApiKeySummary, CreateApiKeyInput, CreatedApiKey, TenantSummary } from '../api/client';
-import { connectWithKey } from './connectWithKey';
-import { installFetchMock, jsonResponse, toUrl, type Routes } from './fetchMock';
+import { signIn } from './signIn';
+import { installFetchMock, jsonResponse, readTestCsrfToken, toUrl, type Routes } from './fetchMock';
 import { renderApp } from './renderApp';
 
 const FIXED_NOW = new Date('2026-10-25T12:00:00.000Z');
@@ -247,7 +247,7 @@ function keysRegion() {
 }
 
 async function openAccessKeys(user: ReturnType<typeof userEvent.setup>) {
-  await connectWithKey(user);
+  await signIn(user);
   await user.click(await screen.findByRole('tab', { name: 'Access' }));
   await screen.findByRole('heading', { name: 'API keys' });
 }
@@ -299,14 +299,11 @@ describe('API key management', () => {
     Reflect.deleteProperty(navigator, 'clipboard');
   });
 
-  it('does not request API keys before connecting and shows the connect prompt', async () => {
+  it('does not request API keys before sign-in', async () => {
     const fetchMock = installFetchMock();
-    const user = userEvent.setup();
     renderApp();
 
-    await user.click(screen.getByRole('tab', { name: 'Access' }));
-
-    expect(await screen.findByText('Connect a master key to manage API keys.')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
     expect(keyGetCalls(fetchMock)).toHaveLength(0);
   });
 
@@ -665,7 +662,7 @@ describe('API key management', () => {
     expect(Object.keys(createBodies[0] ?? {}).sort()).toEqual(['expires_at', 'name', 'tenant_id']);
 
     const createCall = createKeyCalls(fetchMock)[0];
-    expect(new Headers(createCall?.[1]?.headers).get('Authorization')).toBe('Bearer mk_test_123');
+    expect(new Headers(createCall?.[1]?.headers).get('x-csrf-token')).toBe(readTestCsrfToken());
 
     await user.click(within(secretDialog).getByRole('button', { name: 'Close' }));
     await user.click(within(secretDialog).getByRole('button', { name: 'Close without copying' }));
@@ -853,7 +850,7 @@ describe('API key management', () => {
     expect(screen.queryByText(CREATED_SECRET)).not.toBeInTheDocument();
     expect(localStorage.length).toBe(0);
     expect(sessionStorage.length).toBe(0);
-    expect(document.cookie).toBe('');
+    expect(document.cookie).not.toContain('gw_admin_session');
 
     const mutationCacheText = JSON.stringify(
       queryClient
@@ -943,7 +940,7 @@ describe('API key management', () => {
 
     expect(localStorage.length).toBe(0);
     expect(sessionStorage.length).toBe(0);
-    expect(document.cookie).toBe('');
+    expect(document.cookie).not.toContain('gw_admin_session');
     expect(window.location.href).not.toContain(CREATED_SECRET);
 
     const queryCacheText = JSON.stringify(
@@ -1012,7 +1009,7 @@ describe('API key management', () => {
 
     const deleteCall = deleteKeyCalls(fetchMock)[0];
     expect(deleteCall).toBeDefined();
-    expect(new Headers(deleteCall?.[1]?.headers).get('Authorization')).toBe('Bearer mk_test_123');
+    expect(new Headers(deleteCall?.[1]?.headers).get('x-csrf-token')).toBe(readTestCsrfToken());
 
     await waitFor(() => {
       const updatedTable = within(keysRegion()).getByRole('table', { name: 'API keys' });
@@ -1048,7 +1045,7 @@ describe('API key management', () => {
     expect(deleteKeyCalls(fetchMock)).toHaveLength(1);
   });
 
-  it('discards key data and the one-time secret on disconnect', async () => {
+  it('discards key data and the one-time secret on sign out', async () => {
     installKeyStore(KEYS);
     const { queryClient } = renderApp();
     const user = userEvent.setup();
@@ -1057,10 +1054,9 @@ describe('API key management', () => {
     const secretDialog = await createKeyThroughDialog(user);
     expect(within(secretDialog).getByText(CREATED_SECRET)).toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: 'Disconnect' }));
+    await user.click(screen.getByRole('button', { name: 'Sign out' }));
 
-    expect(await screen.findByText('Connect a master key to manage API keys.')).toBeInTheDocument();
-    expect(await screen.findByText('Connect a master key to manage tenants.')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
     expect(screen.queryByText(CREATED_SECRET)).not.toBeInTheDocument();
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
 
@@ -1072,12 +1068,6 @@ describe('API key management', () => {
       expect(remainingKeysQueries).toHaveLength(0);
     });
 
-    const mutationCacheText = JSON.stringify(
-      queryClient
-        .getMutationCache()
-        .getAll()
-        .map((mutation) => mutation.state),
-    );
-    expect(mutationCacheText).not.toContain(CREATED_SECRET);
+    expect(queryClient.getMutationCache().getAll()).toHaveLength(0);
   });
 });

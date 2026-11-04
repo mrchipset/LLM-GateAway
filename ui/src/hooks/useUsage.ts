@@ -4,48 +4,26 @@ import { getUsageByKey, getUsageSeries, getUsageSummary, type UsageWindow } from
 import { queryKeys } from '../lib/queryKeys';
 import { USAGE_BY_KEY_LIMIT } from '../lib/usage';
 
-export function useUsageSummary(masterKey: string | null, window: UsageWindow) {
+export function useUsageSummary(window: UsageWindow) {
   return useQuery({
     queryKey: queryKeys.usageSummary(window.tenantId, window.since),
-    queryFn: ({ signal }) => {
-      if (masterKey === null) {
-        throw new Error('The usage summary query started without a master key.');
-      }
-      return getUsageSummary(masterKey, window, signal);
-    },
-    enabled: masterKey !== null,
+    queryFn: ({ signal }) => getUsageSummary(window, signal),
     retry: false,
   });
 }
 
-export function useUsageSeries(masterKey: string | null, window: UsageWindow) {
+export function useUsageSeries(window: UsageWindow) {
   return useQuery({
     queryKey: queryKeys.usageSeries(window.tenantId, window.since),
-    queryFn: ({ signal }) => {
-      if (masterKey === null) {
-        throw new Error('The usage series query started without a master key.');
-      }
-      return getUsageSeries(masterKey, window, signal);
-    },
-    enabled: masterKey !== null,
+    queryFn: ({ signal }) => getUsageSeries(window, signal),
     retry: false,
   });
 }
 
-export function useUsageByKey(
-  masterKey: string | null,
-  window: UsageWindow,
-  limit = USAGE_BY_KEY_LIMIT,
-) {
+export function useUsageByKey(window: UsageWindow, limit = USAGE_BY_KEY_LIMIT) {
   return useQuery({
     queryKey: queryKeys.usageByKey(window.tenantId, window.since, limit),
-    queryFn: ({ signal }) => {
-      if (masterKey === null) {
-        throw new Error('The usage by key query started without a master key.');
-      }
-      return getUsageByKey(masterKey, window, signal, limit);
-    },
-    enabled: masterKey !== null,
+    queryFn: ({ signal }) => getUsageByKey(window, signal, limit),
     retry: false,
   });
 }

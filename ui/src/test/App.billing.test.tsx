@@ -9,8 +9,8 @@ import type {
   TenantLimitsPatch,
   TenantSummary,
 } from '../api/client';
-import { connectWithKey } from './connectWithKey';
-import { installFetchMock, jsonResponse, toUrl, type Routes } from './fetchMock';
+import { signIn } from './signIn';
+import { installFetchMock, jsonResponse, readTestCsrfToken, toUrl, type Routes } from './fetchMock';
 import { renderApp } from './renderApp';
 
 const FIXED_NOW = new Date('2026-10-25T12:00:00.000Z');
@@ -165,7 +165,7 @@ function lastJsonBody<T>(call: unknown[]): T {
 }
 
 async function openModels(user: ReturnType<typeof userEvent.setup>) {
-  await connectWithKey(user);
+  await signIn(user);
   return screen.findByRole('table', { name: 'Registered models' });
 }
 
@@ -176,7 +176,7 @@ async function openPricing(user: ReturnType<typeof userEvent.setup>) {
 }
 
 async function openAccess(user: ReturnType<typeof userEvent.setup>) {
-  await connectWithKey(user);
+  await signIn(user);
   await user.click(await screen.findByRole('tab', { name: 'Access' }));
   await screen.findByRole('heading', { name: 'Tenants' });
   return screen.findByRole('table', { name: 'Tenants' });
@@ -262,7 +262,7 @@ describe('model pricing', () => {
       output_per_million: '3',
       effective_from: new Date('2026-11-01T00:00').toISOString(),
     });
-    expect(new Headers(call[1]?.headers).get('Authorization')).toBe('Bearer mk_test_123');
+    expect(new Headers(call[1]?.headers).get('x-csrf-token')).toBe(readTestCsrfToken());
 
     await waitFor(() => {
       expect(priceRequests(fetchMock, 'GET')).toHaveLength(2);
@@ -613,7 +613,7 @@ describe('usage costs', () => {
     const user = userEvent.setup();
     renderApp();
 
-    await connectWithKey(user);
+    await signIn(user);
     await user.click(await screen.findByRole('tab', { name: 'Usage' }));
 
     const totals = await screen.findByRole('region', { name: 'Window totals' });

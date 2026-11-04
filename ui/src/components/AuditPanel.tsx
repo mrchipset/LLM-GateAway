@@ -12,7 +12,7 @@ import {
   type AuditRangeDays,
 } from '../lib/audit';
 import { formatExactNumber, formatUpdatedAt } from '../lib/format';
-import { AuditIcon, RefreshIcon } from './Icons';
+import { RefreshIcon } from './Icons';
 import { Panel, PanelHeader } from './Panel';
 import { RequestErrorPanel } from './RequestErrorPanel';
 import { AuditSessionDetail } from './AuditSessionDetail';
@@ -24,33 +24,8 @@ import {
 } from './AuditSessionsTable';
 import { Button } from './Button';
 
-interface AuditPanelProps {
-  masterKey: string | null;
-}
-
-export function AuditPanel({ masterKey }: AuditPanelProps) {
-  if (masterKey === null) return <DisconnectedAuditPanel />;
-  return <ConnectedAuditPanel masterKey={masterKey} />;
-}
-
-function DisconnectedAuditPanel() {
-  return (
-    <Panel labelledBy="audit-heading">
-      <PanelHeader id="audit-heading" eyebrow="History" title="Audit" />
-      <div className="px-5 py-4">
-        <div className="flex min-h-40 flex-col items-start justify-center gap-1.5 py-4">
-          <AuditIcon className="size-5 text-ink-muted" />
-          <p className="mt-1 text-sm font-medium text-ink">
-            Connect a master key to view the audit log.
-          </p>
-          <p className="max-w-md text-[13px] text-ink-muted">
-            The key is sent only to the management API from this browser tab. Audit history is
-            read-only here.
-          </p>
-        </div>
-      </div>
-    </Panel>
-  );
+export function AuditPanel() {
+  return <ConnectedAuditPanel />;
 }
 
 function InlineLoadError({
@@ -83,7 +58,7 @@ function InlineLoadError({
   );
 }
 
-function ConnectedAuditPanel({ masterKey }: { masterKey: string }) {
+function ConnectedAuditPanel() {
   const [tenantId, setTenantId] = useState('');
   const [apiKeyId, setApiKeyId] = useState('');
   const [modelId, setModelId] = useState('');
@@ -106,7 +81,7 @@ function ConnectedAuditPanel({ masterKey }: { masterKey: string }) {
   const noteId = useId();
 
   const since = useMemo(() => auditRangeSinceIso(rangeDays, anchor), [rangeDays, anchor]);
-  const sessionsQuery = useAuditSessions(masterKey, {
+  const sessionsQuery = useAuditSessions({
     tenantId: tenantId === '' ? null : tenantId,
     apiKeyId: apiKeyId === '' ? null : apiKeyId,
     modelId: modelId === '' ? null : modelId,
@@ -115,9 +90,9 @@ function ConnectedAuditPanel({ masterKey }: { masterKey: string }) {
     limit: AUDIT_PAGE_SIZE,
     offset,
   });
-  const tenantsQuery = useTenants(masterKey);
-  const keysQuery = useAuditKeyOptions(masterKey, tenantId === '' ? null : tenantId);
-  const modelsQuery = useModels(masterKey);
+  const tenantsQuery = useTenants();
+  const keysQuery = useAuditKeyOptions(tenantId === '' ? null : tenantId);
+  const modelsQuery = useModels();
 
   const tenants = tenantsQuery.data?.items ?? [];
   const tenantNames = new Map(tenants.map((tenant) => [tenant.id, tenant.name]));
@@ -220,7 +195,6 @@ function ConnectedAuditPanel({ masterKey }: { masterKey: string }) {
         </PanelHeader>
         <div className="px-5 py-4">
           <AuditSessionDetail
-            masterKey={masterKey}
             session={selectedSession}
             tenantName={tenantNames.get(selectedSession.tenant_id) ?? null}
             onBack={handleBackToSessions}

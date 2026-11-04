@@ -196,7 +196,7 @@
   - 范围：管理员主体（本地账号，后续可接 OIDC）、角色（owner/operator/auditor/read-only）、路由级权限表、服务端校验（前端只做展示）。
   - 验收：只读角色调用写接口返回 403 且错误码稳定；master key 保留为 break-glass 路径，可显式关闭，使用时写告警日志；角色变更即时生效，无需重启。
   - 进度（2026-11-04）：本地管理员 + `owner/operator/auditor` 三角色（迁移 `0009`）；scrypt 密码、opaque session（库内只存哈希）、`HttpOnly` cookie + double-submit CSRF；`POST /auth/login|logout`、`GET /auth/me`、`GET/POST/PATCH /admins`；master key 映射 owner 且可用 `GATEWAY_MASTER_KEY_ENABLED=false` 关闭；首个 owner 支持 `bootstrap_admin_*`；最后一名 owner 不可降级/停用；改密撤销会话；登录按用户名 5 次/15 分钟限流。
-  - 未做：OIDC/SSO、按资源的细粒度权限、控制台登录/会话 UI（当前控制台仍用 master key，后端已支持会话）。
+  - 未做：OIDC/SSO、按资源的细粒度权限、控制台登录/会话 UI 已完成（2026-11-04：登录页、CSRF、角色化导航、Admins 与 Admin audit 面板）。
 
 - [x] **G0.2 租户级模型访问控制**
   - 现状：模型解析只校验“存在且启用”，不校验调用方是否有权使用；任意租户都能调用最贵的模型。

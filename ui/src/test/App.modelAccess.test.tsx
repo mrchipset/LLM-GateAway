@@ -8,7 +8,7 @@ import type {
   TenantModelAccessInput,
   TenantSummary,
 } from '../api/client';
-import { connectWithKey } from './connectWithKey';
+import { signIn } from './signIn';
 import { installFetchMock, jsonResponse, toUrl } from './fetchMock';
 import { renderApp } from './renderApp';
 
@@ -110,7 +110,7 @@ function installAccessMock({
 }
 
 async function openAccess(user: ReturnType<typeof userEvent.setup>) {
-  await connectWithKey(user);
+  await signIn(user);
   await user.click(await screen.findByRole('tab', { name: 'Access' }));
   return screen.findByRole('table', { name: 'Tenants' });
 }

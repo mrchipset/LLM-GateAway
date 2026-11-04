@@ -1,15 +1,11 @@
 import { KeysPanel } from './KeysPanel';
 import { TenantsPanel } from './TenantsPanel';
 
-interface AccessPanelProps {
-  masterKey: string | null;
-}
-
-export function AccessPanel({ masterKey }: AccessPanelProps) {
+export function AccessPanel() {
   return (
     <div className="space-y-5">
-      <TenantsPanel masterKey={masterKey} />
-      <KeysPanel masterKey={masterKey} />
+      <TenantsPanel />
+      <KeysPanel />
     </div>
   );
 }

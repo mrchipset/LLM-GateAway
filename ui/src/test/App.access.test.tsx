@@ -3,8 +3,15 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { TenantLimitsPatch, TenantSummary } from '../api/client';
-import { connectWithKey } from './connectWithKey';
-import { installFetchMock, jsonResponse, toUrl, type Routes } from './fetchMock';
+import { signIn } from './signIn';
+import {
+  DEFAULT_ADMIN_PASSWORD,
+  installFetchMock,
+  jsonResponse,
+  readTestCsrfToken,
+  toUrl,
+  type Routes,
+} from './fetchMock';
 import { renderApp } from './renderApp';
 
 const FIXED_NOW = new Date('2026-10-25T12:00:00.000Z');
@@ -145,7 +152,7 @@ function tenantRegion() {
 }
 
 async function openAccess(user: ReturnType<typeof userEvent.setup>) {
-  await connectWithKey(user);
+  await signIn(user);
   await user.click(await screen.findByRole('tab', { name: 'Access' }));
   await screen.findByRole('heading', { name: 'Tenants' });
 }
@@ -161,14 +168,11 @@ describe('tenant management', () => {
     document.body.style.overflow = '';
   });
 
-  it('does not request tenants before connecting and shows the connect prompt', async () => {
+  it('does not request tenants before sign-in', async () => {
     const fetchMock = installFetchMock();
-    const user = userEvent.setup();
     renderApp();
 
-    await user.click(screen.getByRole('tab', { name: 'Access' }));
-
-    expect(await screen.findByText('Connect a master key to manage tenants.')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
     expect(tenantGetCalls(fetchMock)).toHaveLength(0);
   });
 
@@ -342,12 +346,12 @@ describe('tenant management', () => {
     if (call === undefined) return;
     const [, init] = call;
     expect(JSON.parse(String(init?.body))).toEqual({ name: 'New Tenant' });
-    expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer mk_test_123');
+    expect(new Headers(init?.headers).get('x-csrf-token')).toBe(readTestCsrfToken());
 
     expect(localStorage.length).toBe(0);
     expect(sessionStorage.length).toBe(0);
-    expect(document.cookie).toBe('');
-    expect(document.body.textContent).not.toContain('mk_test_123');
+    expect(document.cookie).not.toContain('gw_admin_session');
+    expect(document.body.textContent).not.toContain(DEFAULT_ADMIN_PASSWORD);
 
     await user.click(screen.getByRole('tab', { name: 'Usage' }));
     expect(await screen.findByRole('option', { name: 'New Tenant' })).toBeInTheDocument();
@@ -540,8 +544,8 @@ describe('tenant management', () => {
 
     expect(localStorage.length).toBe(0);
     expect(sessionStorage.length).toBe(0);
-    expect(document.cookie).toBe('');
-    expect(document.body.textContent).not.toContain('mk_test_123');
+    expect(document.cookie).not.toContain('gw_admin_session');
+    expect(document.body.textContent).not.toContain(DEFAULT_ADMIN_PASSWORD);
   });
 
   it('refreshes the Usage tenant selector after editing limits in Access', async () => {

@@ -18,7 +18,6 @@ const DOT_CLASSES: Record<AuditStatus, string> = {
 };
 
 interface AuditSessionDetailProps {
-  masterKey: string;
   session: AuditSessionSummary;
   tenantName: string | null;
   onBack: () => void;
@@ -50,14 +49,9 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-export function AuditSessionDetail({
-  masterKey,
-  session,
-  tenantName,
-  onBack,
-}: AuditSessionDetailProps) {
+export function AuditSessionDetail({ session, tenantName, onBack }: AuditSessionDetailProps) {
   const [includeContent, setIncludeContent] = useState(false);
-  const query = useAuditSession(masterKey, session.id, includeContent);
+  const query = useAuditSession(session.id, includeContent);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const privacyId = useId();
 
@@ -238,7 +232,6 @@ export function AuditSessionDetail({
                     className={`absolute -left-[1.32rem] top-4 size-2 rounded-full border ${DOT_CLASSES[turn.status]}`}
                   />
                   <AuditTurnCard
-                    masterKey={masterKey}
                     turn={turn}
                     includeContent={includeContent}
                     contentReady={!loadingContent}

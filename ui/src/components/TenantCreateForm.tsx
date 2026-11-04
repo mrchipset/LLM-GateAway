@@ -7,17 +7,16 @@ import { RequestErrorPanel } from './RequestErrorPanel';
 const NAME_MAX_LENGTH = 100;
 
 interface TenantCreateFormProps {
-  masterKey: string;
   onStart: () => void;
   onCreated: () => void;
 }
 
-export function TenantCreateForm({ masterKey, onStart, onCreated }: TenantCreateFormProps) {
+export function TenantCreateForm({ onStart, onCreated }: TenantCreateFormProps) {
   const [name, setName] = useState('');
   const [clientError, setClientError] = useState<string | null>(null);
   const inputId = useId();
   const errorId = useId();
-  const createMutation = useCreateTenant(masterKey);
+  const createMutation = useCreateTenant();
 
   const handleNameChange = (value: string) => {
     setName(value);

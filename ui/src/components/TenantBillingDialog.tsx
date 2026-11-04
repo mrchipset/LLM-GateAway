@@ -10,7 +10,6 @@ import { Modal } from './Modal';
 import { RequestErrorPanel } from './RequestErrorPanel';
 
 interface TenantBillingDialogProps {
-  masterKey: string;
   tenant: TenantSummary;
   returnFocusRef: RefObject<HTMLElement | null>;
   onClose: () => void;
@@ -71,7 +70,6 @@ function money(amount: string, currency: string): string {
 }
 
 export function TenantBillingDialog({
-  masterKey,
   tenant,
   returnFocusRef,
   onClose,
@@ -93,8 +91,8 @@ export function TenantBillingDialog({
   const planErrorId = useId();
   const budgetErrorId = useId();
   const planRef = useRef<HTMLInputElement>(null);
-  const billingQuery = useTenantBilling(masterKey, tenant.id);
-  const updateMutation = useUpdateTenantLimits(masterKey);
+  const billingQuery = useTenantBilling(tenant.id);
+  const updateMutation = useUpdateTenantLimits();
 
   const pending = updateMutation.isPending;
   const planDirty = plan.trim() !== originalPlan;

@@ -15,7 +15,6 @@ import { Modal } from './Modal';
 import { RequestErrorPanel } from './RequestErrorPanel';
 
 interface TenantModelAccessDialogProps {
-  masterKey: string;
   tenant: TenantSummary;
   returnFocusRef: RefObject<HTMLElement | null>;
   onClose: () => void;
@@ -23,16 +22,15 @@ interface TenantModelAccessDialogProps {
 }
 
 export function TenantModelAccessDialog({
-  masterKey,
   tenant,
   returnFocusRef,
   onClose,
   onSaved,
 }: TenantModelAccessDialogProps) {
   const titleId = useId();
-  const accessQuery = useTenantModelAccess(masterKey, tenant.id);
-  const modelsQuery = useModels(masterKey);
-  const replaceMutation = useReplaceTenantModelAccess(masterKey);
+  const accessQuery = useTenantModelAccess(tenant.id);
+  const modelsQuery = useModels();
+  const replaceMutation = useReplaceTenantModelAccess();
 
   return (
     <Modal

@@ -8,7 +8,6 @@ import { Modal } from './Modal';
 import { RequestErrorPanel } from './RequestErrorPanel';
 
 interface ModelDeleteDialogProps {
-  masterKey: string;
   model: ModelSummary;
   returnFocusRef: RefObject<HTMLElement | null>;
   onClose: () => void;
@@ -17,7 +16,6 @@ interface ModelDeleteDialogProps {
 }
 
 export function ModelDeleteDialog({
-  masterKey,
   model,
   returnFocusRef,
   onClose,
@@ -26,7 +24,7 @@ export function ModelDeleteDialog({
 }: ModelDeleteDialogProps) {
   const titleId = useId();
   const cancelRef = useRef<HTMLButtonElement>(null);
-  const deleteMutation = useDeleteModel(masterKey);
+  const deleteMutation = useDeleteModel();
   const pending = deleteMutation.isPending;
 
   const handleDelete = () => {

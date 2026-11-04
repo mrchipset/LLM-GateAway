@@ -9,7 +9,6 @@ import { AuditRequestDetail } from './AuditRequestDetail';
 import { Button } from './Button';
 
 interface AuditTurnCardProps {
-  masterKey: string;
   turn: AuditTurn;
   includeContent: boolean;
   contentReady?: boolean;
@@ -43,12 +42,7 @@ function Metric({ label, value }: { label: string; value: string }) {
   );
 }
 
-export function AuditTurnCard({
-  masterKey,
-  turn,
-  includeContent,
-  contentReady = true,
-}: AuditTurnCardProps) {
+export function AuditTurnCard({ turn, includeContent, contentReady = true }: AuditTurnCardProps) {
   const [requestOpen, setRequestOpen] = useState(false);
   const change = CHANGE_TYPE_META[turn.change_type];
   const status = STATUS_META[turn.status];
@@ -144,11 +138,7 @@ export function AuditTurnCard({
       </div>
 
       {requestOpen && (
-        <AuditRequestDetail
-          masterKey={masterKey}
-          requestId={turn.request_id}
-          onClose={() => setRequestOpen(false)}
-        />
+        <AuditRequestDetail requestId={turn.request_id} onClose={() => setRequestOpen(false)} />
       )}
     </article>
   );

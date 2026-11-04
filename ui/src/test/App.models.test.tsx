@@ -2,7 +2,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 
-import { connectWithKey } from './connectWithKey';
+import { signIn } from './signIn';
 import { installFetchMock, jsonResponse, toUrl } from './fetchMock';
 import { renderApp } from './renderApp';
 
@@ -39,7 +39,7 @@ describe('model registry', () => {
     const user = userEvent.setup();
     renderApp();
 
-    await connectWithKey(user);
+    await signIn(user);
     const table = await screen.findByRole('table', { name: 'Registered models' });
 
     expect(await screen.findByText('2 models')).toBeInTheDocument();
@@ -55,7 +55,7 @@ describe('model registry', () => {
     const user = userEvent.setup();
     renderApp();
 
-    await connectWithKey(user);
+    await signIn(user);
 
     expect(await screen.findByText('Showing 2 of 150')).toBeInTheDocument();
     expect(screen.queryByText('150 models')).not.toBeInTheDocument();
@@ -66,7 +66,7 @@ describe('model registry', () => {
     const user = userEvent.setup();
     renderApp();
 
-    await connectWithKey(user);
+    await signIn(user);
 
     expect(await screen.findByText('No models registered')).toBeInTheDocument();
     expect(screen.getByText('0 models')).toBeInTheDocument();
@@ -83,26 +83,26 @@ describe('model registry', () => {
         jsonResponse(
           {
             error: {
-              message: 'Invalid API key',
-              type: 'authentication_error',
+              message: 'The model registry is unavailable',
+              type: 'server_error',
               param: null,
-              code: 'invalid_api_key',
+              code: 'provider_error',
               request_id: 'req_abc123',
             },
           },
-          401,
+          500,
           { 'x-request-id': 'req_abc123' },
         ),
     });
     const user = userEvent.setup();
     renderApp();
 
-    await connectWithKey(user);
+    await signIn(user);
 
     expect(await screen.findByText('Could not load models')).toBeInTheDocument();
-    expect(screen.getByText('HTTP 401')).toBeInTheDocument();
-    expect(screen.getByText('Invalid API key')).toBeInTheDocument();
-    expect(screen.getByText('invalid_api_key')).toBeInTheDocument();
+    expect(screen.getByText('HTTP 500')).toBeInTheDocument();
+    expect(screen.getByText('The model registry is unavailable')).toBeInTheDocument();
+    expect(screen.getByText('provider_error')).toBeInTheDocument();
     expect(screen.getByText('req_abc123')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Retry loading models' }));
@@ -121,7 +121,7 @@ describe('model registry', () => {
     const user = userEvent.setup();
     renderApp();
 
-    await connectWithKey(user);
+    await signIn(user);
     await screen.findByRole('table', { name: 'Registered models' });
 
     const list = screen.getByRole('list');
@@ -141,7 +141,7 @@ describe('model registry', () => {
     const user = userEvent.setup();
     renderApp();
 
-    await connectWithKey(user);
+    await signIn(user);
     expect(await screen.findByRole('table', { name: 'Registered models' })).toBeInTheDocument();
 
     expect(screen.getAllByText('Oct 24, 2026, 17:24 UTC').length).toBeGreaterThan(0);

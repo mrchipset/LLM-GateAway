@@ -1,4 +1,4 @@
-import type { AuditSessionQuery } from '../api/client';
+import type { AdminAuditQuery, AuditSessionQuery } from '../api/client';
 
 const modelsPrefix = ['admin-models'] as const;
 const modelPricesPrefix = ['admin-model-prices'] as const;
@@ -6,6 +6,10 @@ const tenantsPrefix = ['admin-tenants'] as const;
 const tenantBillingPrefix = ['admin-tenant-billing'] as const;
 const keysPrefix = ['admin-keys'] as const;
 const modelAccessPrefix = ['admin-model-access'] as const;
+export const adminsPrefix = ['admin-admins'] as const;
+export const adminAuditPrefix = ['admin-audit-events'] as const;
+
+export const adminSessionKey = ['admin-session'] as const;
 
 export const usageSummaryPrefix = ['usage-summary'] as const;
 export const usageSeriesPrefix = ['usage-series'] as const;
@@ -48,6 +52,21 @@ export const queryKeys = {
   auditSession: (sessionId: string, includeContent: boolean) =>
     [...auditSessionPrefix, sessionId, includeContent] as const,
   auditRequest: (requestId: string) => [...auditRequestPrefix, requestId] as const,
+  admins: (limit: number, offset: number) => [...adminsPrefix, { limit, offset }] as const,
+  adminAudit: (query: AdminAuditQuery) =>
+    [
+      ...adminAuditPrefix,
+      {
+        actorId: query.actorId,
+        action: query.action,
+        targetType: query.targetType,
+        targetId: query.targetId,
+        since: query.since,
+        until: query.until,
+        limit: query.limit,
+        offset: query.offset,
+      },
+    ] as const,
 };
 
 export const adminQueryPrefixes = [
@@ -63,4 +82,6 @@ export const adminQueryPrefixes = [
   auditSessionsPrefix,
   auditSessionPrefix,
   auditRequestPrefix,
+  adminsPrefix,
+  adminAuditPrefix,
 ] as const;

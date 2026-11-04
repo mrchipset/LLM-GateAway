@@ -72,10 +72,11 @@ interface KeysTableProps {
   keys: ApiKeySummary[];
   tenantNames: ReadonlyMap<string, string>;
   now: number;
+  canWrite: boolean;
   onRevoke: (apiKey: ApiKeySummary, trigger: HTMLButtonElement) => void;
 }
 
-export function KeysTable({ keys, tenantNames, now, onRevoke }: KeysTableProps) {
+export function KeysTable({ keys, tenantNames, now, canWrite, onRevoke }: KeysTableProps) {
   return (
     <>
       <div className="hidden md:block">
@@ -86,8 +87,8 @@ export function KeysTable({ keys, tenantNames, now, onRevoke }: KeysTableProps) 
             <col className="w-[15%]" />
             <col className="w-[17%]" />
             <col className="w-[17%]" />
-            <col className="w-[23%]" />
-            <col className="w-[7%]" />
+            <col className={canWrite ? 'w-[23%]' : 'w-[30%]'} />
+            {canWrite && <col className="w-[7%]" />}
           </colgroup>
           <thead>
             <tr className="border-b border-line">
@@ -97,13 +98,13 @@ export function KeysTable({ keys, tenantNames, now, onRevoke }: KeysTableProps) 
                 'Created (UTC)',
                 'Expires (UTC)',
                 'Status / last used',
-                'Action',
-              ].map((label, index) => (
+                ...(canWrite ? ['Action'] : []),
+              ].map((label, index, labels) => (
                 <th
                   key={label}
                   scope="col"
                   className={`py-2 pr-3 font-mono text-[10px] font-medium uppercase tracking-[0.1em] text-ink-muted last:pr-0 ${
-                    index === 5 ? 'text-right' : 'text-left'
+                    index === labels.length - 1 && canWrite ? 'text-right' : 'text-left'
                   }`}
                 >
                   {label}
@@ -177,9 +178,11 @@ export function KeysTable({ keys, tenantNames, now, onRevoke }: KeysTableProps) 
                       />
                     )}
                   </td>
-                  <td className="py-3 text-right align-top">
-                    {status !== 'Revoked' && <RevokeButton apiKey={apiKey} onRevoke={onRevoke} />}
-                  </td>
+                  {canWrite && (
+                    <td className="py-3 text-right align-top">
+                      {status !== 'Revoked' && <RevokeButton apiKey={apiKey} onRevoke={onRevoke} />}
+                    </td>
+                  )}
                 </tr>
               );
             })}
@@ -230,7 +233,7 @@ export function KeysTable({ keys, tenantNames, now, onRevoke }: KeysTableProps) 
                   )}
                 </dd>
               </dl>
-              {status !== 'Revoked' && (
+              {canWrite && status !== 'Revoked' && (
                 <div className="mt-2 flex justify-end">
                   <RevokeButton apiKey={apiKey} onRevoke={onRevoke} withLabel />
                 </div>
@@ -319,19 +322,24 @@ export function KeysSkeleton() {
 
 interface EmptyKeysProps {
   createDisabled: boolean;
+  canWrite: boolean;
   onCreate: () => void;
 }
 
-export function EmptyKeys({ createDisabled, onCreate }: EmptyKeysProps) {
+export function EmptyKeys({ createDisabled, canWrite, onCreate }: EmptyKeysProps) {
   return (
     <div className="rounded-md border border-dashed border-line-strong px-4 py-8 text-center">
       <h4 className="text-sm font-semibold text-ink">No API keys</h4>
       <p className="mt-1 text-[13px] text-ink-muted">
-        Create an API key to let a client call the gateway.
+        {canWrite
+          ? 'Create an API key to let a client call the gateway.'
+          : 'No API key has been issued on this gateway yet.'}
       </p>
-      <Button onClick={onCreate} disabled={createDisabled} className="mt-3">
-        Create your first API key
-      </Button>
+      {canWrite && (
+        <Button onClick={onCreate} disabled={createDisabled} className="mt-3">
+          Create your first API key
+        </Button>
+      )}
     </div>
   );
 }

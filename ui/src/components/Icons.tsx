@@ -107,6 +107,43 @@ export function AuditIcon({ className }: IconProps) {
   );
 }
 
+export function AdminsIcon({ className }: IconProps) {
+  return (
+    <svg {...iconProps} className={className}>
+      <circle cx="6" cy="5.4" r="2.1" />
+      <path d="M2.4 13.2c0-2 1.6-3.4 3.6-3.4s3.6 1.4 3.6 3.4" />
+      <path d="M10.4 4.2a1.9 1.9 0 0 1 0 3.6" />
+      <path d="M11.4 9.9c1.4.3 2.4 1.5 2.4 3.3" />
+    </svg>
+  );
+}
+
+export function AdminAuditIcon({ className }: IconProps) {
+  return (
+    <svg {...iconProps} className={className}>
+      <path d="M3.4 2.4h9.2v11.2H3.4V2.4Z" />
+      <path d="M5.6 5.4h4.8M5.6 8h4.8M5.6 10.6h2.8" />
+    </svg>
+  );
+}
+
+export function LockIcon({ className }: IconProps) {
+  return (
+    <svg {...iconProps} className={className}>
+      <rect x="3.4" y="7" width="9.2" height="6.4" rx="1.2" />
+      <path d="M5.7 7V5.2a2.3 2.3 0 0 1 4.6 0V7" />
+    </svg>
+  );
+}
+
+export function PlusIcon({ className }: IconProps) {
+  return (
+    <svg {...iconProps} className={className}>
+      <path d="M8 3.2v9.6M3.2 8h9.6" />
+    </svg>
+  );
+}
+
 export function BackIcon({ className }: IconProps) {
   return (
     <svg {...iconProps} className={className}>

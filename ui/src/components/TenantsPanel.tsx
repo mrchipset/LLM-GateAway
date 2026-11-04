@@ -4,9 +4,10 @@ import type { TenantSummary } from '../api/client';
 import { useTenantPage, type TenantPageQuery } from '../hooks/useTenants';
 import { formatExactNumber, formatUpdatedAt } from '../lib/format';
 import { Button } from './Button';
-import { CheckCircleIcon, KeyIcon, RefreshIcon } from './Icons';
+import { CheckCircleIcon, RefreshIcon } from './Icons';
 import { Panel, PanelHeader } from './Panel';
 import { RequestErrorPanel } from './RequestErrorPanel';
+import { useAdminSession } from '../lib/adminSessionContext';
 import { TenantCreateForm } from './TenantCreateForm';
 import { TenantBillingDialog } from './TenantBillingDialog';
 import { TenantEditDialog } from './TenantEditDialog';
@@ -15,35 +16,8 @@ import { EmptyTenants, TenantsPagination, TenantsSkeleton, TenantsTable } from '
 
 export const TENANT_PAGE_SIZE = 20;
 
-interface TenantsPanelProps {
-  masterKey: string | null;
-}
-
-export function TenantsPanel({ masterKey }: TenantsPanelProps) {
-  if (masterKey === null) return <DisconnectedTenantsPanel />;
-  return <ConnectedTenantsPanel masterKey={masterKey} />;
-}
-
-function DisconnectedTenantsPanel() {
-  return (
-    <Panel labelledBy="tenants-heading">
-      <PanelHeader id="tenants-heading" eyebrow="Access" title="Tenants" />
-      <div className="px-5 py-4">
-        <div className="flex min-h-40 flex-col items-start justify-center gap-1.5 py-4">
-          <KeyIcon className="size-5 text-ink-muted" />
-          <p className="mt-1 text-sm font-medium text-ink">
-            Connect a master key to manage tenants.
-          </p>
-          <p className="max-w-md text-[13px] text-ink-muted">
-            The key is sent only to the management API from this browser tab.
-          </p>
-        </div>
-      </div>
-    </Panel>
-  );
-}
-
-function ConnectedTenantsPanel({ masterKey }: { masterKey: string }) {
+export function TenantsPanel() {
+  const { canWrite } = useAdminSession();
   const [offset, setOffset] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
   const [editingTenant, setEditingTenant] = useState<TenantSummary | null>(null);
@@ -52,7 +26,7 @@ function ConnectedTenantsPanel({ masterKey }: { masterKey: string }) {
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const accessTriggerRef = useRef<HTMLElement | null>(null);
   const billingTriggerRef = useRef<HTMLElement | null>(null);
-  const pageQuery = useTenantPage(masterKey, { limit: TENANT_PAGE_SIZE, offset });
+  const pageQuery = useTenantPage({ limit: TENANT_PAGE_SIZE, offset });
 
   const count =
     pageQuery.status === 'success'
@@ -133,13 +107,9 @@ function ConnectedTenantsPanel({ masterKey }: { masterKey: string }) {
           </p>
         )}
 
-        <TenantCreateForm
-          masterKey={masterKey}
-          onStart={() => setNotice(null)}
-          onCreated={handleCreated}
-        />
+        {canWrite && <TenantCreateForm onStart={() => setNotice(null)} onCreated={handleCreated} />}
 
-        <div className="mt-5">
+        <div className={canWrite ? 'mt-5' : ''}>
           <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
             <h3 className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-ink-muted">
               Tenant directory
@@ -156,6 +126,7 @@ function ConnectedTenantsPanel({ masterKey }: { masterKey: string }) {
 
           <TenantDirectory
             query={pageQuery}
+            canWrite={canWrite}
             onEdit={handleEdit}
             onEditModelAccess={handleEditModelAccess}
             onEditBilling={handleEditBilling}
@@ -167,9 +138,8 @@ function ConnectedTenantsPanel({ masterKey }: { masterKey: string }) {
         </div>
       </div>
 
-      {editingTenant !== null && (
+      {canWrite && editingTenant !== null && (
         <TenantEditDialog
-          masterKey={masterKey}
           tenant={editingTenant}
           returnFocusRef={returnFocusRef}
           onClose={() => setEditingTenant(null)}
@@ -177,9 +147,8 @@ function ConnectedTenantsPanel({ masterKey }: { masterKey: string }) {
         />
       )}
 
-      {accessTenant !== null && (
+      {canWrite && accessTenant !== null && (
         <TenantModelAccessDialog
-          masterKey={masterKey}
           tenant={accessTenant}
           returnFocusRef={accessTriggerRef}
           onClose={() => setAccessTenant(null)}
@@ -187,9 +156,8 @@ function ConnectedTenantsPanel({ masterKey }: { masterKey: string }) {
         />
       )}
 
-      {billingTenant !== null && (
+      {canWrite && billingTenant !== null && (
         <TenantBillingDialog
-          masterKey={masterKey}
           tenant={billingTenant}
           returnFocusRef={billingTriggerRef}
           onClose={() => setBillingTenant(null)}
@@ -202,6 +170,7 @@ function ConnectedTenantsPanel({ masterKey }: { masterKey: string }) {
 
 interface TenantDirectoryProps {
   query: TenantPageQuery;
+  canWrite: boolean;
   onEdit: (tenant: TenantSummary, trigger: HTMLButtonElement) => void;
   onEditModelAccess: (tenant: TenantSummary, trigger: HTMLButtonElement) => void;
   onEditBilling: (tenant: TenantSummary, trigger: HTMLButtonElement) => void;
@@ -211,6 +180,7 @@ interface TenantDirectoryProps {
 
 function TenantDirectory({
   query,
+  canWrite,
   onEdit,
   onEditModelAccess,
   onEditBilling,
@@ -228,12 +198,13 @@ function TenantDirectory({
       />
     );
   }
-  if (query.data.items.length === 0) return <EmptyTenants />;
+  if (query.data.items.length === 0) return <EmptyTenants canWrite={canWrite} />;
 
   return (
     <>
       <TenantsTable
         tenants={query.data.items}
+        canWrite={canWrite}
         onEdit={onEdit}
         onEditModelAccess={onEditModelAccess}
         onEditBilling={onEditBilling}

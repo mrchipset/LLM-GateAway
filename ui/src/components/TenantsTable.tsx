@@ -6,6 +6,7 @@ import { TenantLimitFacts } from './TenantLimitFacts';
 
 interface TenantsTableProps {
   tenants: TenantSummary[];
+  canWrite: boolean;
   onEdit: (tenant: TenantSummary, trigger: HTMLButtonElement) => void;
   onEditModelAccess: (tenant: TenantSummary, trigger: HTMLButtonElement) => void;
   onEditBilling: (tenant: TenantSummary, trigger: HTMLButtonElement) => void;
@@ -126,6 +127,7 @@ function BillingButton({
 
 export function TenantsTable({
   tenants,
+  canWrite,
   onEdit,
   onEditModelAccess,
   onEditBilling,
@@ -136,28 +138,28 @@ export function TenantsTable({
         <table className="w-full table-fixed border-collapse text-left text-[13px]">
           <caption className="sr-only">Tenants</caption>
           <colgroup>
-            <col className="w-[20%]" />
+            <col className={canWrite ? 'w-[20%]' : 'w-[26%]'} />
             <col className="w-[11%]" />
-            <col className="w-[16%]" />
-            <col className="w-[22%]" />
-            <col className="w-[9%]" />
-            <col className="w-[22%]" />
+            <col className={canWrite ? 'w-[16%]' : 'w-[18%]'} />
+            <col className={canWrite ? 'w-[22%]' : 'w-[34%]'} />
+            <col className={canWrite ? 'w-[9%]' : 'w-[11%]'} />
+            {canWrite && <col className="w-[22%]" />}
           </colgroup>
           <thead>
             <tr className="border-b border-line">
-              {['Name', 'ID', 'Created (UTC)', 'Limits / access', 'Audit', 'Actions'].map(
-                (label, index) => (
+              {['Name', 'ID', 'Created (UTC)', 'Limits / access', 'Audit']
+                .concat(canWrite ? ['Actions'] : [])
+                .map((label, index, labels) => (
                   <th
                     key={label}
                     scope="col"
                     className={`py-2 pr-3 font-mono text-[10px] font-medium uppercase tracking-[0.1em] text-ink-muted last:pr-0 ${
-                      index === 5 ? 'text-right' : 'text-left'
+                      index === labels.length - 1 && canWrite ? 'text-right' : 'text-left'
                     }`}
                   >
                     {label}
                   </th>
-                ),
-              )}
+                ))}
             </tr>
           </thead>
           <tbody className="divide-y divide-line">
@@ -183,13 +185,15 @@ export function TenantsTable({
                 <td className="py-2.5 pr-3 align-top">
                   <AuditStatusBadge enabled={tenant.audit_enabled} />
                 </td>
-                <td className="py-2.5 text-right align-top">
-                  <div className="flex justify-end gap-0.5">
-                    <EditLimitButton tenant={tenant} onEdit={onEdit} />
-                    <ModelAccessButton tenant={tenant} onEditModelAccess={onEditModelAccess} />
-                    <BillingButton tenant={tenant} onEditBilling={onEditBilling} />
-                  </div>
-                </td>
+                {canWrite && (
+                  <td className="py-2.5 text-right align-top">
+                    <div className="flex justify-end gap-0.5">
+                      <EditLimitButton tenant={tenant} onEdit={onEdit} />
+                      <ModelAccessButton tenant={tenant} onEditModelAccess={onEditModelAccess} />
+                      <BillingButton tenant={tenant} onEditBilling={onEditBilling} />
+                    </div>
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>
@@ -224,9 +228,17 @@ export function TenantsTable({
               </dd>
             </dl>
             <div className="mt-2 flex flex-wrap justify-end gap-2">
-              <EditLimitButton tenant={tenant} onEdit={onEdit} withLabel />
-              <ModelAccessButton tenant={tenant} onEditModelAccess={onEditModelAccess} withLabel />
-              <BillingButton tenant={tenant} onEditBilling={onEditBilling} withLabel />
+              {canWrite && (
+                <>
+                  <EditLimitButton tenant={tenant} onEdit={onEdit} withLabel />
+                  <ModelAccessButton
+                    tenant={tenant}
+                    onEditModelAccess={onEditModelAccess}
+                    withLabel
+                  />
+                  <BillingButton tenant={tenant} onEditBilling={onEditBilling} withLabel />
+                </>
+              )}
             </div>
           </li>
         ))}
@@ -309,11 +321,15 @@ export function TenantsSkeleton() {
   );
 }
 
-export function EmptyTenants() {
+export function EmptyTenants({ canWrite }: { canWrite: boolean }) {
   return (
     <div className="rounded-md border border-dashed border-line-strong px-4 py-8 text-center">
       <h4 className="text-sm font-semibold text-ink">No tenants yet</h4>
-      <p className="mt-1 text-[13px] text-ink-muted">Create the first tenant above.</p>
+      <p className="mt-1 text-[13px] text-ink-muted">
+        {canWrite
+          ? 'Create the first tenant above.'
+          : 'No tenant has been created on this gateway yet.'}
+      </p>
     </div>
   );
 }

@@ -3,9 +3,9 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 
 import { adminQueryPrefixes } from '../lib/queryKeys';
-import { connectWithKey } from './connectWithKey';
 import { installFetchMock } from './fetchMock';
 import { renderApp } from './renderApp';
+import { signIn } from './signIn';
 
 const EXPECTED_ADMIN_PREFIXES = [
   'admin-models',
@@ -20,25 +20,26 @@ const EXPECTED_ADMIN_PREFIXES = [
   'audit-sessions',
   'audit-session',
   'audit-request',
+  'admin-admins',
+  'admin-audit-events',
 ];
 
 const LOADED_ADMIN_PREFIXES = EXPECTED_ADMIN_PREFIXES.filter(
   (prefix) =>
-    prefix !== 'admin-keys' &&
-    prefix !== 'admin-model-access' &&
     prefix !== 'admin-model-prices' &&
+    prefix !== 'admin-model-access' &&
     prefix !== 'admin-tenant-billing' &&
     prefix !== 'audit-session' &&
     prefix !== 'audit-request',
 );
 
 describe('admin query keys', () => {
-  it('clears every admin query prefix on disconnect and restores connect prompts', async () => {
+  it('clears every admin query prefix on sign out and returns to login', async () => {
     installFetchMock();
     const { queryClient } = renderApp();
     const user = userEvent.setup();
 
-    await connectWithKey(user);
+    await signIn(user);
 
     await waitFor(() => {
       const firstKeys = new Set(
@@ -52,13 +53,11 @@ describe('admin query keys', () => {
       }
     });
 
-    const adminPrefixes: string[] = adminQueryPrefixes.map(([prefix]) => prefix);
+    const adminPrefixes: string[] = adminQueryPrefixes.map(([prefix]) => String(prefix));
     expect(new Set(adminPrefixes)).toEqual(new Set(EXPECTED_ADMIN_PREFIXES));
 
-    await user.click(screen.getByRole('button', { name: 'Disconnect' }));
-    expect(
-      await screen.findByText('Connect a master key to load the registry.'),
-    ).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Sign out' }));
+    expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
 
     await waitFor(() => {
       const remainingAdminQueries = queryClient
@@ -68,15 +67,6 @@ describe('admin query keys', () => {
       expect(remainingAdminQueries).toHaveLength(0);
     });
 
-    await user.click(screen.getByRole('tab', { name: 'Usage' }));
-    expect(await screen.findByText('Connect a master key to load usage.')).toBeInTheDocument();
-
-    await user.click(screen.getByRole('tab', { name: 'Access' }));
-    expect(await screen.findByText('Connect a master key to manage tenants.')).toBeInTheDocument();
-
-    await user.click(screen.getByRole('tab', { name: 'Audit' }));
-    expect(
-      await screen.findByText('Connect a master key to view the audit log.'),
-    ).toBeInTheDocument();
+    expect(screen.queryByRole('tab')).not.toBeInTheDocument();
   });
 });

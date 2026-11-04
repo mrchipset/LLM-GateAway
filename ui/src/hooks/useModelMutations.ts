@@ -3,22 +3,22 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { createModel, deleteModel, type CreateModelInput } from '../api/client';
 import { queryKeys } from '../lib/queryKeys';
 
-export function useCreateModel(masterKey: string) {
+export function useCreateModel() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (input: CreateModelInput) => createModel(masterKey, input),
+    mutationFn: (input: CreateModelInput) => createModel(input),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.models });
     },
   });
 }
 
-export function useDeleteModel(masterKey: string) {
+export function useDeleteModel() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (modelId: string) => deleteModel(masterKey, modelId),
+    mutationFn: (modelId: string) => deleteModel(modelId),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.models });
     },

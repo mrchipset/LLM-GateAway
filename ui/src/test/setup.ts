@@ -7,4 +7,5 @@ afterEach(() => {
   vi.unstubAllGlobals();
   localStorage.clear();
   sessionStorage.clear();
+  document.cookie = 'gw_admin_csrf=; Max-Age=0; path=/';
 });

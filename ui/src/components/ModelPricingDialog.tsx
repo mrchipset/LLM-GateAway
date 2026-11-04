@@ -10,7 +10,6 @@ import { Modal } from './Modal';
 import { RequestErrorPanel } from './RequestErrorPanel';
 
 interface ModelPricingDialogProps {
-  masterKey: string;
   model: ModelSummary;
   returnFocusRef: RefObject<HTMLElement | null>;
   onClose: () => void;
@@ -42,12 +41,7 @@ function sortNewestFirst(prices: ModelPrice[]): ModelPrice[] {
   );
 }
 
-export function ModelPricingDialog({
-  masterKey,
-  model,
-  returnFocusRef,
-  onClose,
-}: ModelPricingDialogProps) {
+export function ModelPricingDialog({ model, returnFocusRef, onClose }: ModelPricingDialogProps) {
   const [input, setInput] = useState('');
   const [cached, setCached] = useState('');
   const [output, setOutput] = useState('');
@@ -67,8 +61,8 @@ export function ModelPricingDialog({
   const outputErrorId = useId();
   const effectiveErrorId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
-  const pricesQuery = useModelPrices(masterKey, model.id);
-  const createMutation = useCreateModelPrice(masterKey);
+  const pricesQuery = useModelPrices(model.id);
+  const createMutation = useCreateModelPrice();
 
   const pending = createMutation.isPending;
   const prices = pricesQuery.status === 'success' ? sortNewestFirst(pricesQuery.data.items) : [];

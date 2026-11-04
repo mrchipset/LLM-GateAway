@@ -8,7 +8,6 @@ import { Modal } from './Modal';
 import { RequestErrorPanel } from './RequestErrorPanel';
 
 interface KeyRevokeDialogProps {
-  masterKey: string;
   apiKey: ApiKeySummary;
   returnFocusRef: RefObject<HTMLElement | null>;
   onClose: () => void;
@@ -16,7 +15,6 @@ interface KeyRevokeDialogProps {
 }
 
 export function KeyRevokeDialog({
-  masterKey,
   apiKey,
   returnFocusRef,
   onClose,
@@ -24,7 +22,7 @@ export function KeyRevokeDialog({
 }: KeyRevokeDialogProps) {
   const titleId = useId();
   const cancelRef = useRef<HTMLButtonElement>(null);
-  const revokeMutation = useRevokeKey(masterKey);
+  const revokeMutation = useRevokeKey();
   const pending = revokeMutation.isPending;
 
   const handleRevoke = () => {

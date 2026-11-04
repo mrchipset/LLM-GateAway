@@ -9,63 +9,53 @@ import {
 } from '../api/client';
 import { queryKeys } from '../lib/queryKeys';
 
-export function useAuditSessions(masterKey: string | null, query: AuditSessionQuery) {
+export function useAuditSessions(query: AuditSessionQuery) {
   return useQuery({
     queryKey: queryKeys.auditSessions(query),
-    queryFn: ({ signal }) => {
-      if (masterKey === null) {
-        throw new Error('The audit sessions query started without a master key.');
-      }
-      return getAuditSessions(masterKey, query, signal);
-    },
-    enabled: masterKey !== null,
+    queryFn: ({ signal }) => getAuditSessions(query, signal),
     retry: false,
   });
 }
 
-export function useAuditSession(
-  masterKey: string | null,
-  sessionId: string | null,
-  includeContent: boolean,
-) {
+export function useAuditSession(sessionId: string | null, includeContent: boolean) {
   return useQuery({
     queryKey: queryKeys.auditSession(sessionId ?? '', includeContent),
     queryFn: ({ signal }) => {
-      if (masterKey === null || sessionId === null) {
-        throw new Error('The audit session query started without a master key or session.');
+      if (sessionId === null) {
+        throw new Error('The audit session query started without a session.');
       }
-      return getAuditSession(masterKey, sessionId, includeContent, signal);
+      return getAuditSession(sessionId, includeContent, signal);
     },
-    enabled: masterKey !== null && sessionId !== null,
+    enabled: sessionId !== null,
     retry: false,
     placeholderData: keepPreviousData,
   });
 }
 
-export function useAuditRequest(masterKey: string | null, requestId: string | null) {
+export function useAuditRequest(requestId: string | null) {
   return useQuery({
     queryKey: queryKeys.auditRequest(requestId ?? ''),
     queryFn: ({ signal }) => {
-      if (masterKey === null || requestId === null) {
-        throw new Error('The audit request query started without a master key or request.');
+      if (requestId === null) {
+        throw new Error('The audit request query started without a request.');
       }
-      return getAuditRequest(masterKey, requestId, signal);
+      return getAuditRequest(requestId, signal);
     },
-    enabled: masterKey !== null && requestId !== null,
+    enabled: requestId !== null,
     retry: false,
   });
 }
 
-export function useAuditKeyOptions(masterKey: string | null, tenantId: string | null) {
+export function useAuditKeyOptions(tenantId: string | null) {
   return useQuery({
     queryKey: queryKeys.keyPage(tenantId, 100, 0),
     queryFn: ({ signal }) => {
-      if (masterKey === null || tenantId === null) {
-        throw new Error('The audit key options query started without a master key or tenant.');
+      if (tenantId === null) {
+        throw new Error('The audit key options query started without a tenant.');
       }
-      return listKeys(masterKey, signal, { tenantId, limit: 100, offset: 0 });
+      return listKeys(signal, { tenantId, limit: 100, offset: 0 });
     },
-    enabled: masterKey !== null && tenantId !== null,
+    enabled: tenantId !== null,
     retry: false,
   });
 }

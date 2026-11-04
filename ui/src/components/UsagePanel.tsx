@@ -6,7 +6,7 @@ import type { UsageByKeyQuery, UsageSeriesQuery, UsageSummaryQuery } from '../ho
 import { formatCompactNumber, formatExactNumber, formatUpdatedAt } from '../lib/format';
 import { USAGE_RANGE_PRESETS, type UsageRangeDays } from '../lib/usage';
 import { Button } from './Button';
-import { KeyIcon, RefreshIcon } from './Icons';
+import { RefreshIcon } from './Icons';
 import { Panel, PanelHeader } from './Panel';
 import { RequestErrorPanel } from './RequestErrorPanel';
 import { TenantLimitFacts } from './TenantLimitFacts';
@@ -15,7 +15,6 @@ import { UsageChart } from './UsageChart';
 import { UsageStats, UsageStatsSkeleton } from './UsageStats';
 
 interface UsagePanelProps {
-  masterKey: string | null;
   tenantId: string;
   rangeDays: UsageRangeDays;
   onTenantChange: (tenantId: string) => void;
@@ -28,7 +27,6 @@ interface UsagePanelProps {
 }
 
 export function UsagePanel({
-  masterKey,
   tenantId,
   rangeDays,
   onTenantChange,
@@ -48,41 +46,35 @@ export function UsagePanel({
   return (
     <Panel labelledBy="usage-heading">
       <PanelHeader id="usage-heading" eyebrow="Telemetry" title="Usage">
-        {masterKey !== null && (
-          <Button
-            variant="ghost"
-            onClick={onRefresh}
-            disabled={isRefreshing}
-            aria-label="Refresh usage"
-          >
-            <RefreshIcon
-              className={`size-3.5 ${isRefreshing ? 'animate-spin motion-reduce:animate-none' : ''}`}
-            />
-            <span className="hidden sm:inline">Refresh</span>
-          </Button>
-        )}
-      </PanelHeader>
-      <div className="px-5 py-4" aria-busy={masterKey !== null && isRefreshing}>
-        {masterKey === null ? (
-          <UsageConnectPrompt />
-        ) : (
-          <UsageContent
-            tenantId={tenantId}
-            rangeDays={rangeDays}
-            onTenantChange={onTenantChange}
-            onRangeChange={onRangeChange}
-            tenantsQuery={tenantsQuery}
-            summaryQuery={summaryQuery}
-            seriesQuery={seriesQuery}
-            byKeyQuery={byKeyQuery}
+        <Button
+          variant="ghost"
+          onClick={onRefresh}
+          disabled={isRefreshing}
+          aria-label="Refresh usage"
+        >
+          <RefreshIcon
+            className={`size-3.5 ${isRefreshing ? 'animate-spin motion-reduce:animate-none' : ''}`}
           />
-        )}
+          <span className="hidden sm:inline">Refresh</span>
+        </Button>
+      </PanelHeader>
+      <div className="px-5 py-4" aria-busy={isRefreshing}>
+        <UsageContent
+          tenantId={tenantId}
+          rangeDays={rangeDays}
+          onTenantChange={onTenantChange}
+          onRangeChange={onRangeChange}
+          tenantsQuery={tenantsQuery}
+          summaryQuery={summaryQuery}
+          seriesQuery={seriesQuery}
+          byKeyQuery={byKeyQuery}
+        />
       </div>
     </Panel>
   );
 }
 
-type UsageContentProps = Omit<UsagePanelProps, 'masterKey' | 'onRefresh'>;
+type UsageContentProps = Omit<UsagePanelProps, 'onRefresh'>;
 
 function UsageContent({
   tenantId,
@@ -399,18 +391,6 @@ function EmptyRange() {
   return (
     <div className="rounded-md border border-dashed border-line-strong px-4 py-8 text-center">
       <p className="text-[13px] text-ink-muted">No usage in this range.</p>
-    </div>
-  );
-}
-
-function UsageConnectPrompt() {
-  return (
-    <div className="flex min-h-40 flex-col items-start justify-center gap-1.5 py-4">
-      <KeyIcon className="size-5 text-ink-muted" />
-      <p className="mt-1 text-sm font-medium text-ink">Connect a master key to load usage.</p>
-      <p className="max-w-md text-[13px] text-ink-muted">
-        The key is sent only to the management API from this browser tab.
-      </p>
     </div>
   );
 }

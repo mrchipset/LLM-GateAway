@@ -1,36 +1,53 @@
-import { useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useMemo, useRef, useState, type KeyboardEvent, type ReactElement } from 'react';
 
-import type { ModelsQuery } from '../hooks/useModels';
+import { useModels } from '../hooks/useModels';
 import { useTenants } from '../hooks/useTenants';
 import { useUsageByKey, useUsageSeries, useUsageSummary } from '../hooks/useUsage';
 import { formatUpdatedAt } from '../lib/format';
 import { DEFAULT_USAGE_RANGE_DAYS, usageRangeSinceIso, type UsageRangeDays } from '../lib/usage';
-import { AccessIcon, AuditIcon, ModelsIcon, UsageIcon } from './Icons';
+import {
+  AccessIcon,
+  AdminAuditIcon,
+  AdminsIcon,
+  AuditIcon,
+  LockIcon,
+  ModelsIcon,
+  UsageIcon,
+} from './Icons';
 import { AccessPanel } from './AccessPanel';
+import { AdminAuditPanel } from './AdminAuditPanel';
+import { AdminsPanel } from './AdminsPanel';
 import { AuditPanel } from './AuditPanel';
 import { ModelsPanel } from './ModelsPanel';
+import { useAdminSession } from '../lib/adminSessionContext';
 import { UsagePanel } from './UsagePanel';
 
-const TABS = [
-  { id: 'models', label: 'Models', Icon: ModelsIcon },
-  { id: 'usage', label: 'Usage', Icon: UsageIcon },
-  { id: 'access', label: 'Access', Icon: AccessIcon },
-  { id: 'audit', label: 'Audit', Icon: AuditIcon },
-] as const;
-
-type WorkspaceTab = (typeof TABS)[number]['id'];
-
-interface WorkspaceProps {
-  masterKey: string | null;
-  modelsQuery: ModelsQuery;
+interface TabItem {
+  id: WorkspaceTab;
+  label: string;
+  Icon: (props: { className?: string }) => ReactElement;
 }
 
-export function Workspace({ masterKey, modelsQuery }: WorkspaceProps) {
+type WorkspaceTab = 'models' | 'usage' | 'access' | 'audit' | 'admins' | 'admin-audit';
+
+export function Workspace() {
+  const { canManageAdmins, canReadAudit, canWrite } = useAdminSession();
   const [tab, setTab] = useState<WorkspaceTab>('models');
   const [tenantId, setTenantId] = useState('');
   const [rangeDays, setRangeDays] = useState<UsageRangeDays>(DEFAULT_USAGE_RANGE_DAYS);
   const [anchor, setAnchor] = useState(() => new Date());
   const tabRefs = useRef<Partial<Record<WorkspaceTab, HTMLButtonElement | null>>>({});
+
+  const tabs: TabItem[] = [
+    { id: 'models', label: 'Models', Icon: ModelsIcon },
+    { id: 'usage', label: 'Usage', Icon: UsageIcon },
+    { id: 'access', label: 'Access', Icon: AccessIcon },
+    ...(canReadAudit ? [{ id: 'audit' as const, label: 'Audit', Icon: AuditIcon }] : []),
+    ...(canManageAdmins ? [{ id: 'admins' as const, label: 'Admins', Icon: AdminsIcon }] : []),
+    ...(canReadAudit
+      ? [{ id: 'admin-audit' as const, label: 'Admin audit', Icon: AdminAuditIcon }]
+      : []),
+  ];
 
   const since = useMemo(() => usageRangeSinceIso(rangeDays, anchor), [rangeDays, anchor]);
   const usageWindow = useMemo(
@@ -38,10 +55,11 @@ export function Workspace({ masterKey, modelsQuery }: WorkspaceProps) {
     [tenantId, since],
   );
 
-  const tenantsQuery = useTenants(masterKey);
-  const summaryQuery = useUsageSummary(masterKey, usageWindow);
-  const seriesQuery = useUsageSeries(masterKey, usageWindow);
-  const byKeyQuery = useUsageByKey(masterKey, usageWindow);
+  const modelsQuery = useModels();
+  const tenantsQuery = useTenants();
+  const summaryQuery = useUsageSummary(usageWindow);
+  const seriesQuery = useUsageSeries(usageWindow);
+  const byKeyQuery = useUsageByKey(usageWindow);
 
   const usageUpdatedAt = Math.max(
     summaryQuery.dataUpdatedAt,
@@ -58,7 +76,7 @@ export function Workspace({ masterKey, modelsQuery }: WorkspaceProps) {
     !byKeyQuery.isFetching;
 
   const announcement =
-    masterKey !== null && !usageHasError && usageSettled && usageUpdatedAt > 0
+    !usageHasError && usageSettled && usageUpdatedAt > 0
       ? `Usage updated at ${formatUpdatedAt(usageUpdatedAt)} for the last ${rangeDays} days.`
       : '';
 
@@ -86,17 +104,17 @@ export function Workspace({ masterKey, modelsQuery }: WorkspaceProps) {
   };
 
   const handleTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
-    const currentIndex = TABS.findIndex((item) => item.id === tab);
+    const currentIndex = tabs.findIndex((item) => item.id === tab);
     if (currentIndex === -1) return;
 
     let nextIndex: number | null = null;
-    if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % TABS.length;
-    if (event.key === 'ArrowLeft') nextIndex = (currentIndex - 1 + TABS.length) % TABS.length;
+    if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % tabs.length;
+    if (event.key === 'ArrowLeft') nextIndex = (currentIndex - 1 + tabs.length) % tabs.length;
     if (event.key === 'Home') nextIndex = 0;
-    if (event.key === 'End') nextIndex = TABS.length - 1;
+    if (event.key === 'End') nextIndex = tabs.length - 1;
     if (nextIndex === null) return;
 
-    const nextTab = TABS[nextIndex];
+    const nextTab = tabs[nextIndex];
     if (nextTab === undefined) return;
 
     event.preventDefault();
@@ -106,13 +124,13 @@ export function Workspace({ masterKey, modelsQuery }: WorkspaceProps) {
 
   return (
     <div>
-      <div className="mb-3 flex items-center">
+      <div className="mb-3 max-w-full overflow-x-auto">
         <div
           role="tablist"
           aria-label="Admin sections"
-          className="inline-flex rounded-md border border-line bg-surface-sunken p-0.5"
+          className="inline-flex min-w-max rounded-md border border-line bg-surface-sunken p-0.5"
         >
-          {TABS.map((item) => {
+          {tabs.map((item) => {
             const active = tab === item.id;
             const Icon = item.Icon;
             return (
@@ -129,7 +147,7 @@ export function Workspace({ masterKey, modelsQuery }: WorkspaceProps) {
                 tabIndex={active ? 0 : -1}
                 onClick={() => setTab(item.id)}
                 onKeyDown={handleTabKeyDown}
-                className={`inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-[12px] font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${
+                className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded px-3 py-1.5 text-[12px] font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${
                   active
                     ? 'bg-surface text-ink shadow-[0_1px_2px_rgba(22,24,26,0.08)]'
                     : 'text-ink-muted hover:bg-surface/60 hover:text-ink'
@@ -142,6 +160,16 @@ export function Workspace({ masterKey, modelsQuery }: WorkspaceProps) {
           })}
         </div>
       </div>
+
+      {!canWrite && (
+        <p className="mb-4 flex flex-wrap items-center gap-2 rounded border border-line bg-surface-sunken/60 px-2.5 py-1.5 text-[11.5px] leading-5 text-ink-muted">
+          <LockIcon className="size-3.5 shrink-0 text-ink-muted" />
+          <span>
+            <span className="font-medium text-ink">Read-only role.</span> Create, edit, revoke, and
+            pricing controls are hidden.
+          </span>
+        </p>
+      )}
 
       {announcement !== '' && (
         <p role="status" className="sr-only">
@@ -156,7 +184,7 @@ export function Workspace({ masterKey, modelsQuery }: WorkspaceProps) {
         hidden={tab !== 'models'}
         className="min-w-0"
       >
-        <ModelsPanel masterKey={masterKey} query={modelsQuery} />
+        <ModelsPanel query={modelsQuery} />
       </div>
 
       <div
@@ -167,7 +195,6 @@ export function Workspace({ masterKey, modelsQuery }: WorkspaceProps) {
         className="min-w-0"
       >
         <UsagePanel
-          masterKey={masterKey}
           tenantId={tenantId}
           rangeDays={rangeDays}
           onTenantChange={setTenantId}
@@ -187,18 +214,44 @@ export function Workspace({ masterKey, modelsQuery }: WorkspaceProps) {
         hidden={tab !== 'access'}
         className="min-w-0"
       >
-        <AccessPanel masterKey={masterKey} />
+        <AccessPanel />
       </div>
 
-      <div
-        role="tabpanel"
-        id="audit-panel"
-        aria-labelledby="audit-tab"
-        hidden={tab !== 'audit'}
-        className="min-w-0"
-      >
-        <AuditPanel masterKey={masterKey} />
-      </div>
+      {canReadAudit && (
+        <div
+          role="tabpanel"
+          id="audit-panel"
+          aria-labelledby="audit-tab"
+          hidden={tab !== 'audit'}
+          className="min-w-0"
+        >
+          <AuditPanel />
+        </div>
+      )}
+
+      {canManageAdmins && (
+        <div
+          role="tabpanel"
+          id="admins-panel"
+          aria-labelledby="admins-tab"
+          hidden={tab !== 'admins'}
+          className="min-w-0"
+        >
+          <AdminsPanel />
+        </div>
+      )}
+
+      {canReadAudit && (
+        <div
+          role="tabpanel"
+          id="admin-audit-panel"
+          aria-labelledby="admin-audit-tab"
+          hidden={tab !== 'admin-audit'}
+          className="min-w-0"
+        >
+          <AdminAuditPanel />
+        </div>
+      )}
     </div>
   );
 }

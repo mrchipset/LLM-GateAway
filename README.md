@@ -551,7 +551,15 @@ $env:VITE_PROXY_TARGET = "http://127.0.0.1:4000"
 npm run dev
 ```
 
-Enter the master key to view backend health, the model registry, the usage panel, and the Access tab. The Models tab provides:
+Sign in with an admin account created through `bootstrap_admin_*` or the Admins panel. The console never stores credentials in browser storage; the session lives in an `HttpOnly` cookie.
+
+The console exposes the sections your role can use:
+
+- `auditor`: read-only Models, Usage, Access, request Audit, and Admin audit.
+- `operator`: the same sections plus every configuration write, but no Admins and no Admin audit.
+- `owner`: everything, including admin management and both audit trails.
+
+The Models tab provides:
 
 - Register a model (id, provider, upstream model, enabled) with client-side validation mirroring the API; provider configuration is still a backend concern.
 - Delete a model with confirmation; deleting it also removes it from every tenant allowlist.
@@ -560,7 +568,7 @@ Enter the master key to view backend health, the model registry, the usage panel
 
 The usage panel provides:
 
-- `Models / Usage / Access` tabs
+- Role-aware tabs: Models / Usage / Access, plus Audit, Admins, and Admin audit for the roles allowed to use them
 - Tenant filtering (including "All tenants"); the selected tenant's quota and rate limit are shown read-only. The tenant list is capped at 100 with a truncation note.
 - 7 / 30 / 90-day rolling ranges with `since` floored to UTC midnight; the final bar is the partial "today so far" bucket.
 - Totals for requests, input, output, cached, and total tokens (cached counts are displayed as reported and labeled as a subset of input).
@@ -575,7 +583,9 @@ The Access tab manages tenants and API keys:
 - Create keys per tenant with an optional expiry. The plaintext is shown once, can be copied, and is never written to storage, the URL, or the query cache; closing an uncopied dialog asks for confirmation.
 - Revoke keys with confirmation. Revoked and expired keys are labeled, and only non-revoked keys offer the revoke action.
 
-The master key stays in page memory only; it is never written to localStorage, sessionStorage, cookies, or the URL. Disconnecting clears all admin and usage query caches.
+The Admins section (owner) manages admin accounts: create, change role or display name, deactivate, and reset passwords. Passwords are write-only and a reset revokes that admin's sessions. The Admin audit section (owner/auditor) lists management actions with actor, target, before/after business fields, and request id.
+
+Signing out clears all admin and usage query caches and returns to the login screen. A 401 anywhere does the same with a "session expired" notice, so no panel is left half-loaded with rejected data.
 
 Frontend checks:
 
@@ -637,7 +647,7 @@ design.md            LLM-GateAway design guidance
 - Rate limiting uses a fixed 60-second window at tenant level only; the memory backend counts per process.
 - Creating a key requires `tenant_id` (a breaking change for old callers); there is no tenant delete or rename API.
 - Model access is tenant-scoped only: no per-key scoping and no per-model rate limits.
-- The console still authenticates with the master key; the admin session UI is the next change. The backend already accepts sessions for every management route.
+- The console authenticates with admin sessions; the master key remains available for scripts and break-glass, and it is not accepted from the browser UI.
 - `usage_records` has no retention or archival job and grows with traffic; cost is computed and stored per request, but there is no invoicing, no currency conversion, and no multi-currency price list.
 - Tracing covers the server span and per-attempt upstream spans only: no database spans and no tail-based sampling.
 - Metrics expose counters and histograms but ship without dashboards, alert rules, or OTLP metric export; database pool occupancy is not exported yet.

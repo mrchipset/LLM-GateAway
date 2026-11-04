@@ -7,20 +7,20 @@ import {
 } from '../api/client';
 import { queryKeys } from '../lib/queryKeys';
 
-export function useTenantModelAccess(masterKey: string, tenantId: string) {
+export function useTenantModelAccess(tenantId: string) {
   return useQuery({
     queryKey: queryKeys.modelAccess(tenantId),
-    queryFn: ({ signal }) => getTenantModelAccess(masterKey, tenantId, signal),
+    queryFn: ({ signal }) => getTenantModelAccess(tenantId, signal),
     retry: false,
   });
 }
 
-export function useReplaceTenantModelAccess(masterKey: string) {
+export function useReplaceTenantModelAccess() {
   const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn: (args: { tenantId: string; input: TenantModelAccessInput }) =>
-      replaceTenantModelAccess(masterKey, args.tenantId, args.input),
+      replaceTenantModelAccess(args.tenantId, args.input),
     onSuccess: async (_data, args) => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.tenants }),

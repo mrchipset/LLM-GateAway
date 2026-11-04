@@ -8,7 +8,6 @@ import { Modal } from './Modal';
 import { RequestErrorPanel } from './RequestErrorPanel';
 
 interface TenantEditDialogProps {
-  masterKey: string;
   tenant: TenantSummary;
   returnFocusRef: RefObject<HTMLElement | null>;
   onClose: () => void;
@@ -46,7 +45,6 @@ function parseLimitField(raw: string, original: string): LimitFieldResult {
 }
 
 export function TenantEditDialog({
-  masterKey,
   tenant,
   returnFocusRef,
   onClose,
@@ -67,7 +65,7 @@ export function TenantEditDialog({
   const quotaErrorId = useId();
   const rateErrorId = useId();
   const quotaRef = useRef<HTMLInputElement>(null);
-  const updateMutation = useUpdateTenantLimits(masterKey);
+  const updateMutation = useUpdateTenantLimits();
 
   const quotaDirty = quota.trim() !== originalQuota;
   const rateDirty = rate.trim() !== originalRate;

@@ -2,8 +2,14 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { connectWithKey } from './connectWithKey';
-import { installFetchMock, jsonResponse, toUrl, type Routes } from './fetchMock';
+import { signIn } from './signIn';
+import {
+  DEFAULT_ADMIN_PASSWORD,
+  installFetchMock,
+  jsonResponse,
+  toUrl,
+  type Routes,
+} from './fetchMock';
 import { renderApp } from './renderApp';
 
 const FIXED_NOW = new Date('2026-10-25T12:00:00.000Z');
@@ -163,7 +169,7 @@ function lastParams(fetchMock: ReturnType<typeof installFetchMock>, path: string
 }
 
 async function openUsage(user: ReturnType<typeof userEvent.setup>) {
-  await connectWithKey(user);
+  await signIn(user);
   await user.click(await screen.findByRole('tab', { name: 'Usage' }));
   await screen.findByRole('heading', { name: 'Usage' });
 }
@@ -178,50 +184,62 @@ describe('usage panel', () => {
     vi.useRealTimers();
   });
 
-  it('does not request usage or tenants until a master key is connected', async () => {
+  it('does not request usage or tenants before sign-in', async () => {
     const fetchMock = installFetchMock();
     const user = userEvent.setup();
     renderApp();
 
-    expect(
-      await screen.findByText('Connect a master key to load the registry.'),
-    ).toBeInTheDocument();
-
-    await user.click(screen.getByRole('tab', { name: 'Usage' }));
-    expect(await screen.findByText('Connect a master key to load usage.')).toBeInTheDocument();
-
+    expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
     expect(callsTo(fetchMock, '/api/v1/tenants')).toHaveLength(0);
     for (const path of USAGE_PATHS) {
       expect(callsTo(fetchMock, path)).toHaveLength(0);
     }
+
+    await signIn(user);
+    await waitFor(() => {
+      expect(callsTo(fetchMock, '/api/v1/tenants').length).toBeGreaterThan(0);
+      expect(callsTo(fetchMock, '/api/v1/usage/summary').length).toBeGreaterThan(0);
+    });
   });
 
-  it('moves tab focus and selection with ArrowRight, Home, and End across four tabs', async () => {
+  it('moves tab focus and selection with ArrowRight, Home, and End across the role tabs', async () => {
     installFetchMock();
     const user = userEvent.setup();
     renderApp();
+
+    await signIn(user);
 
     const modelsTab = screen.getByRole('tab', { name: 'Models' });
     const usageTab = screen.getByRole('tab', { name: 'Usage' });
     const accessTab = screen.getByRole('tab', { name: 'Access' });
     const auditTab = screen.getByRole('tab', { name: 'Audit' });
+    const adminsTab = screen.getByRole('tab', { name: 'Admins' });
+    const adminAuditTab = screen.getByRole('tab', { name: 'Admin audit' });
     const modelsPanel = document.getElementById('models-panel');
     const usagePanel = document.getElementById('usage-panel');
     const accessPanel = document.getElementById('access-panel');
     const auditPanel = document.getElementById('audit-panel');
+    const adminsPanel = document.getElementById('admins-panel');
+    const adminAuditPanel = document.getElementById('admin-audit-panel');
 
     expect(modelsPanel).not.toBeNull();
     expect(usagePanel).not.toBeNull();
     expect(accessPanel).not.toBeNull();
     expect(auditPanel).not.toBeNull();
+    expect(adminsPanel).not.toBeNull();
+    expect(adminAuditPanel).not.toBeNull();
     expect(modelsTab).toHaveAttribute('aria-selected', 'true');
     expect(usageTab).toHaveAttribute('aria-selected', 'false');
     expect(accessTab).toHaveAttribute('aria-selected', 'false');
     expect(auditTab).toHaveAttribute('aria-selected', 'false');
+    expect(adminsTab).toHaveAttribute('aria-selected', 'false');
+    expect(adminAuditTab).toHaveAttribute('aria-selected', 'false');
     expect(modelsPanel).not.toHaveAttribute('hidden');
     expect(usagePanel).toHaveAttribute('hidden');
     expect(accessPanel).toHaveAttribute('hidden');
     expect(auditPanel).toHaveAttribute('hidden');
+    expect(adminsPanel).toHaveAttribute('hidden');
+    expect(adminAuditPanel).toHaveAttribute('hidden');
 
     modelsTab.focus();
     await user.keyboard('{ArrowRight}');
@@ -246,16 +264,26 @@ describe('usage panel', () => {
     expect(auditPanel).not.toHaveAttribute('hidden');
     expect(accessPanel).toHaveAttribute('hidden');
 
+    await user.keyboard('{ArrowRight}');
+    expect(document.activeElement).toBe(adminsTab);
+    expect(adminsTab).toHaveAttribute('aria-selected', 'true');
+    expect(auditTab).toHaveAttribute('aria-selected', 'false');
+
+    await user.keyboard('{ArrowRight}');
+    expect(document.activeElement).toBe(adminAuditTab);
+    expect(adminAuditTab).toHaveAttribute('aria-selected', 'true');
+    expect(adminsTab).toHaveAttribute('aria-selected', 'false');
+
     await user.keyboard('{Home}');
     expect(document.activeElement).toBe(modelsTab);
     expect(modelsTab).toHaveAttribute('aria-selected', 'true');
     expect(modelsPanel).not.toHaveAttribute('hidden');
-    expect(auditPanel).toHaveAttribute('hidden');
+    expect(adminAuditPanel).toHaveAttribute('hidden');
 
     await user.keyboard('{End}');
-    expect(document.activeElement).toBe(auditTab);
-    expect(auditTab).toHaveAttribute('aria-selected', 'true');
-    expect(auditPanel).not.toHaveAttribute('hidden');
+    expect(document.activeElement).toBe(adminAuditTab);
+    expect(adminAuditTab).toHaveAttribute('aria-selected', 'true');
+    expect(adminAuditPanel).not.toHaveAttribute('hidden');
     expect(modelsPanel).toHaveAttribute('hidden');
   });
 
@@ -630,7 +658,7 @@ describe('usage panel', () => {
     expect(await within(usageRegion).findByText('Showing 2 of 150 tenants')).toBeInTheDocument();
   });
 
-  it('removes usage data on disconnect, returns to the connect prompt, and keeps storage empty', async () => {
+  it('removes usage data on sign out, returns to login, and keeps storage empty', async () => {
     const fetchMock = installUsageMock();
     const user = userEvent.setup();
     renderApp();
@@ -641,22 +669,23 @@ describe('usage panel', () => {
 
     expect(localStorage.length).toBe(0);
     expect(sessionStorage.length).toBe(0);
-    expect(document.cookie).toBe('');
-    expect(document.body.textContent).not.toContain('mk_test_123');
+    expect(document.cookie).not.toContain('gw_admin_session');
+    expect(document.body.textContent).not.toContain(DEFAULT_ADMIN_PASSWORD);
 
     const callsBefore = [...USAGE_PATHS, '/api/v1/tenants'].reduce(
       (total, path) => total + callsTo(fetchMock, path).length,
       0,
     );
 
-    await user.click(screen.getByRole('button', { name: 'Disconnect' }));
+    await user.click(screen.getByRole('button', { name: 'Sign out' }));
 
-    expect(await screen.findByText('Connect a master key to load usage.')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
     expect(screen.queryByText('1.2M')).not.toBeInTheDocument();
     expect(screen.queryByRole('table', { name: 'Usage by API key' })).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Tenant')).not.toBeInTheDocument();
     expect(localStorage.length).toBe(0);
     expect(sessionStorage.length).toBe(0);
+    expect(document.cookie).not.toContain('gw_admin_session');
 
     const callsAfter = [...USAGE_PATHS, '/api/v1/tenants'].reduce(
       (total, path) => total + callsTo(fetchMock, path).length,

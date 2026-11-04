@@ -5,13 +5,13 @@ import { queryKeys, usageByKeyPrefix } from '../lib/queryKeys';
 
 const createKeyMutationKey = ['admin-keys', 'create'] as const;
 
-export function useCreateKey(masterKey: string) {
+export function useCreateKey() {
   const queryClient = useQueryClient();
 
   return useMutation({
     mutationKey: createKeyMutationKey,
     gcTime: 0,
-    mutationFn: (input: CreateApiKeyInput) => createKey(masterKey, input),
+    mutationFn: (input: CreateApiKeyInput) => createKey(input),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.keys });
     },
@@ -25,11 +25,11 @@ export function discardCreateKeyMutation(queryClient: QueryClient): void {
   }
 }
 
-export function useRevokeKey(masterKey: string) {
+export function useRevokeKey() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (keyId: string) => revokeKey(masterKey, keyId),
+    mutationFn: (keyId: string) => revokeKey(keyId),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.keys });
       void queryClient.invalidateQueries({ queryKey: usageByKeyPrefix });

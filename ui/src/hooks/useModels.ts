@@ -3,16 +3,10 @@ import { useQuery } from '@tanstack/react-query';
 import { listModels } from '../api/client';
 import { queryKeys } from '../lib/queryKeys';
 
-export function useModels(masterKey: string | null) {
+export function useModels() {
   return useQuery({
     queryKey: queryKeys.models,
-    queryFn: ({ signal }) => {
-      if (masterKey === null) {
-        throw new Error('The models query started without a master key.');
-      }
-      return listModels(masterKey, signal);
-    },
-    enabled: masterKey !== null,
+    queryFn: ({ signal }) => listModels(signal),
     retry: false,
   });
 }

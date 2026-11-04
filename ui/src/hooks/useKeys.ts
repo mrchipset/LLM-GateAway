@@ -9,20 +9,15 @@ export interface KeyPage {
   offset: number;
 }
 
-export function useKeyPage(masterKey: string | null, page: KeyPage) {
+export function useKeyPage(page: KeyPage) {
   return useQuery({
     queryKey: queryKeys.keyPage(page.tenantId, page.limit, page.offset),
-    queryFn: ({ signal }) => {
-      if (masterKey === null) {
-        throw new Error('The API key page query started without a master key.');
-      }
-      return listKeys(masterKey, signal, {
+    queryFn: ({ signal }) =>
+      listKeys(signal, {
         tenantId: page.tenantId,
         limit: page.limit,
         offset: page.offset,
-      });
-    },
-    enabled: masterKey !== null,
+      }),
     retry: false,
   });
 }

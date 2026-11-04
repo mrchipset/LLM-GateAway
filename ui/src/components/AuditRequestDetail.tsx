@@ -8,7 +8,6 @@ import { CloseIcon } from './Icons';
 import { RequestErrorPanel } from './RequestErrorPanel';
 
 interface AuditRequestDetailProps {
-  masterKey: string;
   requestId: string;
   onClose: () => void;
 }
@@ -25,8 +24,8 @@ function TruncatedNote() {
   );
 }
 
-export function AuditRequestDetail({ masterKey, requestId, onClose }: AuditRequestDetailProps) {
-  const query = useAuditRequest(masterKey, requestId);
+export function AuditRequestDetail({ requestId, onClose }: AuditRequestDetailProps) {
+  const query = useAuditRequest(requestId);
 
   return (
     <div className="mt-2.5 rounded-md border border-accent/30 bg-accent/5 p-2.5">

@@ -9,7 +9,7 @@ import type {
   TenantLimitsPatch,
   TenantSummary,
 } from '../api/client';
-import { connectWithKey } from './connectWithKey';
+import { signIn } from './signIn';
 import { installFetchMock, jsonResponse, toUrl, type Routes } from './fetchMock';
 import { renderApp } from './renderApp';
 
@@ -431,7 +431,7 @@ function auditRegion() {
 }
 
 async function openAudit(user: ReturnType<typeof userEvent.setup>) {
-  await connectWithKey(user);
+  await signIn(user);
   await user.click(await screen.findByRole('tab', { name: 'Audit' }));
   await screen.findByRole('heading', { name: 'Audit' });
 }
@@ -455,22 +455,17 @@ describe('audit console', () => {
     vi.useRealTimers();
   });
 
-  it('does not request audit data before a master key is connected', async () => {
+  it('does not request audit data before sign-in', async () => {
     const fetchMock = installAuditMock();
-    const user = userEvent.setup();
     renderApp();
 
-    await user.click(screen.getByRole('tab', { name: 'Audit' }));
-
-    expect(
-      await screen.findByText('Connect a master key to view the audit log.'),
-    ).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
     expect(callsTo(fetchMock, '/api/v1/audit/sessions')).toHaveLength(0);
     expect(sessionDetailCalls(fetchMock)).toHaveLength(0);
     expect(requestDetailCalls(fetchMock)).toHaveLength(0);
   });
 
-  it('loads the default 30-day window with master-key auth and renders session metadata', async () => {
+  it('loads the default 30-day window with session auth and renders session metadata', async () => {
     const fetchMock = installAuditMock();
     const user = userEvent.setup();
     renderApp();
@@ -489,7 +484,8 @@ describe('audit console', () => {
     const listCall = callsTo(fetchMock, '/api/v1/audit/sessions')[0];
     expect(listCall).toBeDefined();
     if (listCall !== undefined) {
-      expect(new Headers(listCall[1]?.headers).get('Authorization')).toBe('Bearer mk_test_123');
+      expect(listCall[1]?.credentials).toBe('include');
+      expect(new Headers(listCall[1]?.headers).get('Authorization')).toBeNull();
     }
 
     const row = within(table).getByRole('row', { name: /Refund policy walkthrough/ });
@@ -794,7 +790,7 @@ describe('audit console', () => {
 
     expect(localStorage.length).toBe(0);
     expect(sessionStorage.length).toBe(0);
-    expect(document.cookie).toBe('');
+    expect(document.cookie).not.toContain('gw_admin_session');
     expect(window.location.href).not.toContain(REQUEST_ONE);
     expect(window.location.href).not.toContain(SESSION_ID);
     expect(window.location.href).not.toContain('Full root prompt');
@@ -909,7 +905,7 @@ describe('audit console', () => {
     expect(lastParams(fetchMock, '/api/v1/audit/sessions')?.get('tenant_id')).toBe(SOLO.id);
   });
 
-  it('clears every audit cache prefix on disconnect', async () => {
+  it('clears every audit cache prefix on sign out', async () => {
     installAuditMock();
     const { queryClient } = renderApp();
     const user = userEvent.setup();
@@ -928,11 +924,9 @@ describe('audit console', () => {
       .filter((query) => auditPrefixes.includes(String(query.queryKey[0])));
     expect(before.length).toBeGreaterThan(0);
 
-    await user.click(screen.getByRole('button', { name: 'Disconnect' }));
+    await user.click(screen.getByRole('button', { name: 'Sign out' }));
 
-    expect(
-      await screen.findByText('Connect a master key to view the audit log.'),
-    ).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
     expect(
       screen.queryByRole('heading', { name: 'Refund policy walkthrough' }),
     ).not.toBeInTheDocument();
@@ -967,7 +961,7 @@ describe('audit console', () => {
     const user = userEvent.setup();
     renderApp();
 
-    await connectWithKey(user);
+    await signIn(user);
     await user.click(await screen.findByRole('tab', { name: 'Access' }));
     const region = screen.getByRole('region', { name: 'Tenants' });
     const table = await within(region).findByRole('table', { name: 'Tenants' });

@@ -14,18 +14,12 @@ import { Modal } from './Modal';
 import { RequestErrorPanel } from './RequestErrorPanel';
 
 interface ModelCreateDialogProps {
-  masterKey: string;
   returnFocusRef: RefObject<HTMLElement | null>;
   onClose: () => void;
   onCreated: (model: ModelSummary) => void;
 }
 
-export function ModelCreateDialog({
-  masterKey,
-  returnFocusRef,
-  onClose,
-  onCreated,
-}: ModelCreateDialogProps) {
+export function ModelCreateDialog({ returnFocusRef, onClose, onCreated }: ModelCreateDialogProps) {
   const [id, setId] = useState('');
   const [provider, setProvider] = useState<ModelProvider>('openai');
   const [upstreamModel, setUpstreamModel] = useState('');
@@ -42,7 +36,7 @@ export function ModelCreateDialog({
   const idErrorId = useId();
   const upstreamErrorId = useId();
   const idRef = useRef<HTMLInputElement>(null);
-  const createMutation = useCreateModel(masterKey);
+  const createMutation = useCreateModel();
 
   const pending = createMutation.isPending;
 
