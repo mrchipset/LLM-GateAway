@@ -595,7 +595,7 @@ design.md            LLM-GateAway design guidance
 
 - Only OpenAI, DeepSeek (OpenAI-compatible), and the fake provider are implemented; Anthropic, Bedrock, Vertex, and other non-OpenAI protocols are not.
 - Each model maps to a single upstream model; no multi-deployment, weights, fallback, or cooldown.
-- No invoicing, per-key or per-model budgets, or burst shaping (token bucket); quotas and budgets are soft against concurrent requests.
+- No invoicing, per-key or per-model budgets, or burst shaping (token bucket); quotas and budgets are soft against concurrent requests. There is no pre-call reservation by design: a tenant can overshoot by the usage of requests already in flight when the limit is crossed.
 - Rate limiting uses a fixed 60-second window at tenant level only; the memory backend counts per process.
 - Creating a key requires `tenant_id` (a breaking change for old callers); there is no tenant delete or rename API.
 - Model access is tenant-scoped only: no per-key scoping and no per-model rate limits.

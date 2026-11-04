@@ -88,15 +88,20 @@ Tenants with neither a plan nor a budget keep working with unpriced models: cost
 `null`, and no behavior changes for existing deployments. This preserves backward
 compatibility while making the failure mode explicit for anyone who opts into billing.
 
-### 2.6 Concurrency: no reservation yet
+### 2.6 Concurrency: no reservation, by decision
 
 Enforcement reads the period total before the request and settles costs after it. Concurrent
-in-flight requests can therefore overshoot by at most their own usage. This matches the
-existing token quota semantics; it is documented rather than hidden.
+in-flight requests can therefore overshoot by at most their own usage.
 
-Atomic reservation requires a token estimate (we have no tokenizer) or a conditional monthly
-counter row. Both are follow-ups; a counter row is the cheaper path because it also removes
-the per-request month aggregation from the hot path.
+This is an explicit product decision, not a missing feature. Pre-call reservation would need a
+token estimate (this gateway has no tokenizer) or a conditional counter row plus reserve/settle
+bookkeeping in the hot path, and the accepted bound is already small: a tenant can overshoot by
+the usage of the requests that were in flight when the limit was crossed, not by an unbounded
+amount. The existing token quota has the same behavior.
+
+Revisit only if a tenant can demonstrate a materially larger overshoot than one request window,
+or if a customer contract requires a hard not-to-exceed guarantee. In that case the cheap path is
+a conditional monthly counter row, not Redis.
 
 ### 2.7 Reconciliation with existing quotas
 
@@ -119,7 +124,8 @@ Negative:
 - pro-rata splitting is an approximation of "which tokens were free"; it is deterministic and
   documented, but it is not what an invoice line-by-line reconciliation would produce;
 - no invoicing, no multi-currency, no per-key budgets, no credit top-ups or rollover;
-- overshoot by concurrency.
+- concurrent requests can overshoot a plan or budget by their own usage (no reservation, by
+  decision; see 2.6).
 
 ## 4. API surface
 
