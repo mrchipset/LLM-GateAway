@@ -74,12 +74,15 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S105", "S106"] # test fixtures use obvious placeholder credentials
 "alembic/**" = ["E501"]
+# Local load-test tooling: prints are the operator output, subprocess arguments are
+# fixed literals, and the stub uses random() for load shaping, not secrets.
+"scripts/**" = ["T20", "S603", "S607", "S311"]
 
 [tool.ruff.format]
 quote-style = "double"
 
 [tool.pyright]
-include = ["src", "tests"]
+include = ["src", "tests", "scripts"]
 exclude = [".venv", "**/__pycache__"]
 pythonVersion = "3.12"
 typeCheckingMode = "standard"

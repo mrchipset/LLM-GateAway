@@ -515,6 +515,16 @@ Invoke-RestMethod http://127.0.0.1:8080/healthz
 
 See [`docs/docker.md`](docs/docker.md) for the configuration table, upgrades, backups, troubleshooting, and production hardening. Infrastructure only (backend via `uv`, console via Vite): `docker compose up -d postgres`.
 
+## Load testing
+
+`scripts/loadtest/` measures the data plane with a controllable local upstream, so a run is deterministic and costs nothing. The gateway, PostgreSQL, auth, quotas, billing, and usage writes are real; only the provider is a stub with configurable latency and failures.
+
+```powershell
+uv run python scripts/loadtest/run_loadtest.py --rate 20 --duration 60s --stream
+```
+
+See [`scripts/loadtest/README.md`](scripts/loadtest/README.md) for the baseline, billing comparison, streaming, and fault-injection runs, and [`notes/load-baseline.md`](notes/load-baseline.md) for the method and decision rules. Numbers require PostgreSQL with a seeded month of usage; memory storage only proves the wiring.
+
 ## Tests and checks
 
 ```powershell
