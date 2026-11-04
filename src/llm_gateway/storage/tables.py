@@ -462,3 +462,40 @@ class AdminLoginAttemptRow(Base):
     key: Mapped[str] = mapped_column(String(120), primary_key=True)
     window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     count: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class ModelDeploymentRow(Base):
+    __tablename__ = "model_deployments"
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    model_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey(
+            "models.id",
+            name="fk_model_deployments_model_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    upstream_model: Mapped[str] = mapped_column(String(256), nullable=False)
+    credential_env: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    base_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    weight: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=true())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        Index(
+            "uq_model_deployments_model_name",
+            "model_id",
+            "name",
+            unique=True,
+        ),
+        Index("ix_model_deployments_model", "model_id", "enabled"),
+        CheckConstraint(
+            "weight >= 1 AND weight <= 100",
+            name="ck_model_deployments_weight",
+        ),
+    )

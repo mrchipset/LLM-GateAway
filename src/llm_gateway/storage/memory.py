@@ -22,6 +22,7 @@ from llm_gateway.storage.repositories import (
     AuditTurnDiffRecord,
     DuplicateAdminError,
     DuplicateApiKeyError,
+    DuplicateDeploymentError,
     DuplicateModelError,
     DuplicatePriceError,
     DuplicateTenantError,
@@ -30,6 +31,7 @@ from llm_gateway.storage.repositories import (
     ModelAccess,
     ModelAccessMode,
     ModelConfig,
+    ModelDeployment,
     ModelPrice,
     ModelUsage,
     MonthlyUsage,
@@ -910,3 +912,76 @@ class InMemoryLoginThrottle:
     async def clear(self, *, key: str) -> None:
         async with self._lock:
             self._windows.pop(key, None)
+
+
+class InMemoryModelDeploymentRepository:
+    def __init__(self) -> None:
+        self._deployments: dict[UUID, ModelDeployment] = {}
+        self._lock = asyncio.Lock()
+
+    async def list_deployments(self, model_id: str) -> Sequence[ModelDeployment]:
+        return sorted(
+            (
+                deployment
+                for deployment in self._deployments.values()
+                if deployment.model_id == model_id
+            ),
+            key=lambda deployment: (deployment.created_at, deployment.name),
+        )
+
+    async def get_deployment(self, deployment_id: UUID) -> ModelDeployment | None:
+        return self._deployments.get(deployment_id)
+
+    async def create_deployment(self, deployment: ModelDeployment) -> ModelDeployment:
+        async with self._lock:
+            for existing in self._deployments.values():
+                if existing.model_id == deployment.model_id and existing.name == deployment.name:
+                    raise DuplicateDeploymentError(deployment.model_id, deployment.name)
+            self._deployments[deployment.id] = deployment
+            return deployment
+
+    async def update_deployment(
+        self,
+        deployment_id: UUID,
+        *,
+        name: str | None = None,
+        upstream_model: str | None = None,
+        weight: int | None = None,
+        enabled: bool | None = None,
+        credential_env: str | None = None,
+        base_url: str | None = None,
+        replace_credential_env: bool = False,
+        replace_base_url: bool = False,
+    ) -> ModelDeployment | None:
+        async with self._lock:
+            deployment = self._deployments.get(deployment_id)
+            if deployment is None:
+                return None
+            next_name = name if name is not None else deployment.name
+            for existing in self._deployments.values():
+                if (
+                    existing.id != deployment_id
+                    and existing.model_id == deployment.model_id
+                    and existing.name == next_name
+                ):
+                    raise DuplicateDeploymentError(deployment.model_id, next_name)
+            changes: dict[str, object] = {}
+            if name is not None:
+                changes["name"] = name
+            if upstream_model is not None:
+                changes["upstream_model"] = upstream_model
+            if weight is not None:
+                changes["weight"] = weight
+            if enabled is not None:
+                changes["enabled"] = enabled
+            if replace_credential_env:
+                changes["credential_env"] = credential_env
+            if replace_base_url:
+                changes["base_url"] = base_url
+            updated = replace(deployment, **changes)  # pyright: ignore[reportArgumentType]
+            self._deployments[deployment_id] = updated
+            return updated
+
+    async def delete_deployment(self, deployment_id: UUID) -> bool:
+        async with self._lock:
+            return self._deployments.pop(deployment_id, None) is not None

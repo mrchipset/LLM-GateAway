@@ -13,6 +13,7 @@ A self-hosted, multi-provider, OpenAI-compatible LLM gateway. Current state: a r
 - Token usage records and aggregates: input, output, and cache-hit tokens, attributed to tenant, key, and model
 - Tenant-level monthly token quotas and per-minute request limits (429 + `Retry-After`)
 - Tenant-scoped model access control (default allow-all, or an explicit allowlist)
+- Multi-deployment routing per model: weighted selection, failover, per-deployment credential env vars, and cooldown
 - Versioned per-model prices, per-request cost, monthly token plans with optional overage, and a monthly cost budget
 - Admin accounts with owner/operator/auditor roles, cookie sessions with CSRF, a break-glass master key, and an admin action audit trail
 - Management API: `/api/v1/keys`, `/api/v1/models`, `/api/v1/tenants`, `/api/v1/usage/{summary,by-key,series}`, `/api/v1/audit/*`, protected by the master key
@@ -335,6 +336,32 @@ The prompt budget is measured in characters because the gateway has no provider 
 
 These limits bound one request. Concurrency remains governed by rate limits and the cost budget; there is no separate in-flight request cap yet.
 
+## Model deployments and failover
+
+A public model can have several deployments. Each deployment is one upstream route: provider, upstream model name, weight, an optional credential environment variable, and an optional base URL. A model with no deployments keeps using its provider/upstream pair as one implicit route, so existing models need no migration.
+
+```powershell
+Invoke-RestMethod -Method Post `
+  -Uri http://127.0.0.1:4000/api/v1/models/deepseek-flash/deployments `
+  -Headers @{ Authorization = "Bearer $master" } `
+  -ContentType "application/json" `
+  -Body '{"name":"primary","provider":"deepseek","upstream_model":"deepseek-chat","weight":3}'
+
+Invoke-RestMethod -Method Post `
+  -Uri http://127.0.0.1:4000/api/v1/models/deepseek-flash/deployments `
+  -Headers @{ Authorization = "Bearer $master" } `
+  -ContentType "application/json" `
+  -Body '{"name":"backup","provider":"openai","upstream_model":"gpt-4o-mini","credential_env":"OPENAI_KEY_B"}'
+```
+
+- Deployments are tried in weighted-random order; the first is the primary and the rest are fallbacks.
+- Failover happens on retryable errors (timeouts, connection failures, 429/5xx, invalid upstream payload) and on upstream 401/403. A 400 does not fail over: the request is wrong everywhere.
+- Three consecutive failovers put a deployment into a 30-second cooldown (`GATEWAY_ROUTE_*`). Cooldown is process-local; a cooldown never removes the last candidate, so health state cannot take a model fully offline.
+- Credentials are never stored: `credential_env` names an environment variable, and `base_url` can point at a different account or proxy for the same provider.
+- Success sets `x-llm-gateway-deployment`; a request served by a fallback also sets `x-llm-gateway-fallback: true`.
+- Provider-level retries still run inside each deployment. To fail over quickly, lower `GATEWAY_MAX_RETRIES` (0 means one attempt per deployment).
+- Metrics: `gateway_route_attempts`, `gateway_route_fallbacks`, `gateway_deployment_cooldowns`.
+
 ## Tenant model access
 
 Every tenant defaults to `mode=all`, so existing deployments need no migration step. Switch a tenant to an explicit allowlist to restrict which registered models it can call:
@@ -476,6 +503,9 @@ Invoke-RestMethod -Uri http://127.0.0.1:4000/api/v1/tenants -WebSession $session
 | `GATEWAY_MAX_PROMPT_CHARS` | Character budget for the serialized messages, default 1,000,000 |
 | `GATEWAY_MAX_TOKENS_LIMIT` | Maximum requested `max_tokens` / `max_completion_tokens`, default 32768 |
 | `GATEWAY_MAX_TOOLS` | Maximum tools per request, default 128 |
+| `GATEWAY_ROUTE_MAX_ATTEMPTS` | Deployments tried per request, default 3 (1-10) |
+| `GATEWAY_ROUTE_FAILURE_THRESHOLD` | Consecutive failovers before cooldown, default 3 |
+| `GATEWAY_ROUTE_COOLDOWN_SECONDS` | Cooldown length after the threshold, default 30 |
 | `GATEWAY_MASTER_KEY_ENABLED` | Accept the master key as a break-glass owner credential, default `true` |
 | `GATEWAY_SESSION_TTL_HOURS` | Admin session lifetime, default 12 |
 | `GATEWAY_BOOTSTRAP_ADMIN_USERNAME` | Optional first-run owner username (3–64 chars, `a-z0-9._-`) |

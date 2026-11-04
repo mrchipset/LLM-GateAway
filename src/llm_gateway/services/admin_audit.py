@@ -146,3 +146,15 @@ def key_snapshot(key: Any) -> dict[str, object]:
         "expires_at": key.expires_at.isoformat() if key.expires_at is not None else None,
         "revoked": key.revoked_at is not None,
     }
+
+
+def deployment_snapshot(deployment: Any) -> dict[str, object]:
+    return {
+        "name": deployment.name,
+        "provider": deployment.provider.value,
+        "upstream_model": deployment.upstream_model,
+        "weight": deployment.weight,
+        "enabled": deployment.enabled,
+        "credential_env": deployment.credential_env,
+        "base_url": deployment.base_url,
+    }

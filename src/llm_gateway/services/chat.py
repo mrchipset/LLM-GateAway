@@ -25,6 +25,7 @@ from llm_gateway.schemas.chat import (
     ChatCompletionResponse,
     Usage,
 )
+from llm_gateway.services.routing import DeploymentUse, ModelRouter
 from llm_gateway.storage.repositories import ModelConfig, ModelRepository, TenantRepository
 
 logger = get_logger(__name__)
@@ -33,13 +34,14 @@ logger = get_logger(__name__)
 @dataclass(frozen=True, slots=True)
 class ResolvedModel:
     config: ModelConfig
-    provider: ChatProvider
+    provider: ChatProvider | None
 
 
 @dataclass(frozen=True, slots=True)
 class ChatCompletionResult:
     response: ChatCompletionResponse
     model: ModelConfig
+    deployment: DeploymentUse | None = None
 
 
 def _error(
@@ -160,12 +162,14 @@ class ChatStream:
         client_wants_usage: bool,
         usage: Usage | None,
         upstream: AsyncGenerator[ChatCompletionChunk, None],
+        deployment: DeploymentUse | None = None,
     ) -> None:
         self.first_chunk = first_chunk
         self.model_id = model_id
         self.provider = provider
         self.client_wants_usage = client_wants_usage
         self.usage = usage
+        self.deployment = deployment
         self._upstream = upstream
         self._closed = False
 
@@ -203,10 +207,12 @@ class ChatService:
         models: ModelRepository,
         providers: ProviderRegistry,
         tenants: TenantRepository,
+        router: ModelRouter | None = None,
     ) -> None:
         self._models = models
         self._providers = providers
         self._tenants = tenants
+        self._router = router
 
     async def resolve_model(self, model_id: str, *, tenant_id: UUID) -> ResolvedModel:
         config = await self._models.get_model(model_id)
@@ -240,12 +246,14 @@ class ChatService:
         try:
             provider = self._providers.get(config.provider)
         except ProviderNotConfiguredError as exc:
-            raise _error(
-                status_code=503,
-                code=ApiErrorCode.PROVIDER_NOT_CONFIGURED,
-                message=f"Provider '{config.provider.value}' is not configured",
-                error_type="server_error",
-            ) from exc
+            if self._router is None:
+                raise _error(
+                    status_code=503,
+                    code=ApiErrorCode.PROVIDER_NOT_CONFIGURED,
+                    message=f"Provider '{config.provider.value}' is not configured",
+                    error_type="server_error",
+                ) from exc
+            provider = None
         return ResolvedModel(config=config, provider=provider)
 
     async def complete(
@@ -253,6 +261,23 @@ class ChatService:
     ) -> ChatCompletionResult:
         resolved = await self.resolve_model(request.model, tenant_id=tenant_id)
         try:
+            if self._router is not None:
+                route = await self._router.complete(
+                    model=resolved.config,
+                    request=request,
+                )
+                return ChatCompletionResult(
+                    response=route.response.model_copy(update={"model": resolved.config.id}),
+                    model=resolved.config,
+                    deployment=route.deployment,
+                )
+            if resolved.provider is None:  # pragma: no cover - guarded by resolve_model
+                raise _error(
+                    status_code=503,
+                    code=ApiErrorCode.PROVIDER_NOT_CONFIGURED,
+                    message=f"Provider '{resolved.config.provider.value}' is not configured",
+                    error_type="server_error",
+                )
             response = await resolved.provider.complete(
                 upstream_model=resolved.config.upstream_model,
                 request=request,
@@ -278,6 +303,38 @@ class ChatService:
                 "stream_options": {**stream_options, "include_usage": True},
             }
         )
+
+        if self._router is not None:
+            try:
+                route = await self._router.open_stream(
+                    model=resolved.config,
+                    request=upstream_request,
+                )
+            except ProviderError as exc:
+                _log_provider_error(
+                    exc,
+                    provider=resolved.config.provider.value,
+                    model_id=resolved.config.id,
+                )
+                raise map_provider_error(exc) from exc
+            return ChatStream(
+                first_chunk=route.first_chunk.model_copy(update={"model": resolved.config.id}),
+                model_id=resolved.config.id,
+                provider=route.deployment.provider,
+                client_wants_usage=client_wants_usage,
+                usage=route.usage,
+                upstream=route.upstream,
+                deployment=route.deployment,
+            )
+
+        if resolved.provider is None:  # pragma: no cover - guarded by resolve_model
+            raise _error(
+                status_code=503,
+                code=ApiErrorCode.PROVIDER_NOT_CONFIGURED,
+                message=f"Provider '{resolved.config.provider.value}' is not configured",
+                error_type="server_error",
+            )
+
         upstream = resolved.provider.stream(
             upstream_model=resolved.config.upstream_model,
             request=upstream_request,

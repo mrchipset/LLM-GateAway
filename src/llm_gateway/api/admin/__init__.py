@@ -7,6 +7,7 @@ from llm_gateway.api.admin import (
     admins,
     audit,
     auth,
+    deployments,
     keys,
     models,
     tenants,
@@ -20,6 +21,7 @@ router.include_router(admins.router)
 router.include_router(audit.router)
 router.include_router(keys.router)
 router.include_router(models.router)
+router.include_router(deployments.router)
 router.include_router(tenants.router)
 router.include_router(usage.router)
 

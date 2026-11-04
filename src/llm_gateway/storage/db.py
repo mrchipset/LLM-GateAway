@@ -20,6 +20,7 @@ from llm_gateway.storage.repositories import (
     ApiKeyRepository,
     AuditRepository,
     LoginThrottle,
+    ModelDeploymentRepository,
     ModelPriceRepository,
     ModelRepository,
     TenantRepository,
@@ -32,6 +33,7 @@ from llm_gateway.storage.sql import (
     SqlAlchemyApiKeyRepository,
     SqlAlchemyAuditRepository,
     SqlAlchemyLoginThrottle,
+    SqlAlchemyModelDeploymentRepository,
     SqlAlchemyModelPriceRepository,
     SqlAlchemyModelRepository,
     SqlAlchemyTenantRepository,
@@ -63,6 +65,9 @@ class Database:
         self._audit = SqlAlchemyAuditRepository(session_factory=self._session_factory)
         self._rate_limiter = SqlAlchemyRateLimiter(session_factory=self._session_factory)
         self._admins = SqlAlchemyAdminUserRepository(session_factory=self._session_factory)
+        self._deployments = SqlAlchemyModelDeploymentRepository(
+            session_factory=self._session_factory
+        )
         self._admin_sessions = SqlAlchemyAdminSessionRepository(
             session_factory=self._session_factory
         )
@@ -111,6 +116,10 @@ class Database:
     @property
     def rate_limiter(self) -> RateLimiter:
         return self._rate_limiter
+
+    @property
+    def deployments(self) -> ModelDeploymentRepository:
+        return self._deployments
 
     @property
     def admins(self) -> AdminUserRepository:

@@ -54,6 +54,9 @@ class Metrics:
     usage_write_failures: Counter
     audit_write_failures: Counter
     admin_audit_failures: Counter
+    route_attempts: Counter
+    route_fallbacks: Counter
+    deployment_cooldowns: Counter
 
 
 def build_metrics(meter: Meter) -> Metrics:
@@ -102,6 +105,21 @@ def build_metrics(meter: Meter) -> Metrics:
             "gateway_admin_audit_write_failures",
             unit="{failure}",
             description="Management actions that could not be audited",
+        ),
+        route_attempts=meter.create_counter(
+            "gateway_route_attempts",
+            unit="{attempt}",
+            description="Upstream deployment attempts, including fallbacks",
+        ),
+        route_fallbacks=meter.create_counter(
+            "gateway_route_fallbacks",
+            unit="{request}",
+            description="Requests that succeeded on a fallback deployment",
+        ),
+        deployment_cooldowns=meter.create_counter(
+            "gateway_deployment_cooldowns",
+            unit="{event}",
+            description="Times a deployment entered cooldown",
         ),
     )
 

@@ -996,3 +996,79 @@ class LoginThrottle(Protocol):
         ...
 
     async def clear(self, *, key: str) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class ModelDeployment:
+    """One upstream route for a public model.
+
+    ``credential_env`` is the *name* of an environment variable, never the secret.
+    ``base_url`` overrides the provider default so the same provider can be used with
+    several accounts or proxies.
+    """
+
+    id: UUID
+    model_id: str
+    name: str
+    provider: ProviderName
+    upstream_model: str
+    weight: int
+    enabled: bool
+    created_at: datetime
+    credential_env: str | None = None
+    base_url: str | None = None
+
+    def __post_init__(self) -> None:
+        _require_uuid(self.id, "id")
+        _require_non_blank(self.model_id, "model_id")
+        _require_non_blank(self.name, "name")
+        _require_provider(self.provider, "provider")
+        _require_non_blank(self.upstream_model, "upstream_model")
+        if not isinstance(self.weight, int) or isinstance(self.weight, bool):
+            raise ValueError("weight must be an integer")
+        if self.weight < 1 or self.weight > 100:
+            raise ValueError("weight must be between 1 and 100")
+        if not isinstance(self.enabled, bool):
+            raise ValueError("enabled must be a boolean")
+        _require_aware(self.created_at, "created_at")
+        if self.credential_env is not None:
+            _require_non_blank(self.credential_env, "credential_env")
+            if not self.credential_env.replace("_", "").isalnum():
+                raise ValueError("credential_env must be an environment variable name")
+            if self.credential_env.upper() != self.credential_env:
+                raise ValueError("credential_env must be uppercase")
+        if self.base_url is not None:
+            _require_non_blank(self.base_url, "base_url")
+            if not self.base_url.startswith(("http://", "https://")):
+                raise ValueError("base_url must be an http(s) URL")
+
+
+class DuplicateDeploymentError(Exception):
+    def __init__(self, model_id: str, name: str) -> None:
+        super().__init__(f"model '{model_id}' already has a deployment named '{name}'")
+        self.model_id = model_id
+        self.name = name
+
+
+class ModelDeploymentRepository(Protocol):
+    async def list_deployments(self, model_id: str) -> Sequence[ModelDeployment]: ...
+
+    async def get_deployment(self, deployment_id: UUID) -> ModelDeployment | None: ...
+
+    async def create_deployment(self, deployment: ModelDeployment) -> ModelDeployment: ...
+
+    async def update_deployment(
+        self,
+        deployment_id: UUID,
+        *,
+        name: str | None = None,
+        upstream_model: str | None = None,
+        weight: int | None = None,
+        enabled: bool | None = None,
+        credential_env: str | None = None,
+        base_url: str | None = None,
+        replace_credential_env: bool = False,
+        replace_base_url: bool = False,
+    ) -> ModelDeployment | None: ...
+
+    async def delete_deployment(self, deployment_id: UUID) -> bool: ...

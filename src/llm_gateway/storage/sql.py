@@ -31,6 +31,7 @@ from llm_gateway.storage.repositories import (
     AuditTurnDiffRecord,
     DuplicateAdminError,
     DuplicateApiKeyError,
+    DuplicateDeploymentError,
     DuplicateModelError,
     DuplicatePriceError,
     DuplicateTenantError,
@@ -39,6 +40,7 @@ from llm_gateway.storage.repositories import (
     ModelAccess,
     ModelAccessMode,
     ModelConfig,
+    ModelDeployment,
     ModelPrice,
     ModelUsage,
     MonthlyUsage,
@@ -59,6 +61,7 @@ from llm_gateway.storage.tables import (
     AuditRequestRow,
     AuditSessionRow,
     AuditTurnDiffRow,
+    ModelDeploymentRow,
     ModelPriceRow,
     ModelRow,
     TenantModelAccessRow,
@@ -1559,3 +1562,113 @@ class SqlAlchemyLoginThrottle:
             await session.execute(
                 delete(AdminLoginAttemptRow).where(AdminLoginAttemptRow.key == key)
             )
+
+
+def _to_deployment(row: ModelDeploymentRow) -> ModelDeployment:
+    return ModelDeployment(
+        id=row.id,
+        model_id=row.model_id,
+        name=row.name,
+        provider=ProviderName(row.provider),
+        upstream_model=row.upstream_model,
+        weight=row.weight,
+        enabled=row.enabled,
+        created_at=row.created_at,
+        credential_env=row.credential_env,
+        base_url=row.base_url,
+    )
+
+
+class SqlAlchemyModelDeploymentRepository:
+    def __init__(self, *, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        self._session_factory = session_factory
+
+    async def list_deployments(self, model_id: str) -> Sequence[ModelDeployment]:
+        async with self._session_factory() as session, session.begin():
+            rows = (
+                await session.scalars(
+                    select(ModelDeploymentRow)
+                    .where(ModelDeploymentRow.model_id == model_id)
+                    .order_by(
+                        ModelDeploymentRow.created_at.asc(),
+                        ModelDeploymentRow.name.asc(),
+                    )
+                )
+            ).all()
+        return [_to_deployment(row) for row in rows]
+
+    async def get_deployment(self, deployment_id: UUID) -> ModelDeployment | None:
+        async with self._session_factory() as session, session.begin():
+            row = await session.get(ModelDeploymentRow, deployment_id)
+            return _to_deployment(row) if row is not None else None
+
+    async def create_deployment(self, deployment: ModelDeployment) -> ModelDeployment:
+        row = ModelDeploymentRow(
+            id=deployment.id,
+            model_id=deployment.model_id,
+            name=deployment.name,
+            provider=deployment.provider.value,
+            upstream_model=deployment.upstream_model,
+            credential_env=deployment.credential_env,
+            base_url=deployment.base_url,
+            weight=deployment.weight,
+            enabled=deployment.enabled,
+            created_at=deployment.created_at,
+        )
+        try:
+            async with self._session_factory() as session, session.begin():
+                session.add(row)
+        except IntegrityError as exc:
+            if _is_unique_violation(exc):
+                raise DuplicateDeploymentError(deployment.model_id, deployment.name) from exc
+            if _is_foreign_key_violation(exc):
+                raise UnknownModelError(deployment.model_id) from exc
+            raise
+        return deployment
+
+    async def update_deployment(
+        self,
+        deployment_id: UUID,
+        *,
+        name: str | None = None,
+        upstream_model: str | None = None,
+        weight: int | None = None,
+        enabled: bool | None = None,
+        credential_env: str | None = None,
+        base_url: str | None = None,
+        replace_credential_env: bool = False,
+        replace_base_url: bool = False,
+    ) -> ModelDeployment | None:
+        async with self._session_factory() as session, session.begin():
+            row = await session.get(ModelDeploymentRow, deployment_id)
+            if row is None:
+                return None
+            if name is not None:
+                row.name = name
+            if upstream_model is not None:
+                row.upstream_model = upstream_model
+            if weight is not None:
+                row.weight = weight
+            if enabled is not None:
+                row.enabled = enabled
+            if replace_credential_env:
+                row.credential_env = credential_env
+            if replace_base_url:
+                row.base_url = base_url
+            try:
+                await session.flush()
+            except IntegrityError as exc:
+                if _is_unique_violation(exc):
+                    raise DuplicateDeploymentError(row.model_id, row.name) from exc
+                raise
+            return _to_deployment(row)
+
+    async def delete_deployment(self, deployment_id: UUID) -> bool:
+        async with self._session_factory() as session, session.begin():
+            result = cast(
+                "CursorResult[tuple[()]]",
+                await session.execute(
+                    delete(ModelDeploymentRow).where(ModelDeploymentRow.id == deployment_id)
+                ),
+            )
+            return result.rowcount == 1

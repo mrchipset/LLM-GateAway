@@ -4,7 +4,7 @@
 
 ## 现状基线
 
-- 后端已具备：租户创建/列表/限额 PATCH、API key 创建/列表/吊销、模型注册与版本化价格、用量汇总/按 key/时间序列、租户配额与限流、租户模型授权、token 套餐与成本预算、单请求输入边界护栏。
+- 后端已具备：租户创建/列表/限额 PATCH、API key 创建/列表/吊销、模型注册与版本化价格、用量汇总/按 key/时间序列、租户配额与限流、租户模型授权、token 套餐与成本预算、单请求输入边界护栏、多 deployment 路由与 fallback。
 - 管理台已具备：健康状态、模型列表与注册/删除、用量面板、Access 标签（租户创建/列表/限额编辑、租户模型授权、API key 创建/列表/吊销）。
 - 尚缺：租户删除/重命名、P1e 运维项（保留期清理/导出/删除/指标/分区），以及 P2 中的其他项。
 - 当前 chat 请求是无状态的，没有 session/终端用户标识；会话审计需要显式 session header 或消息前缀启发式，且默认关闭。
@@ -257,11 +257,13 @@
 
 ### G1 生产可靠性
 
-- [ ] **G1.1 多 deployment 路由与可靠性**
+- [x] **G1.1 多 deployment 路由与可靠性**
   - 现状：一个公共模型对应一个上游模型，无权重、无 fallback、无 cooldown、无上游 key 池。
   - 范围：公共模型 → 多个 deployment（provider + 凭证引用 + 权重 + 状态）；重试（仅首字节前）、fallback 链、失败计数与 cooldown、健康探测；路由策略先做加权 + 最少失败，不做算法堆叠。
   - 验收：注入上游 429/5xx，客户端成功率高且响应头标明是否 fallback；连续失败的 deployment 进入 cooldown 并自动恢复；fallback 与重试均有指标与 trace span。
   - 设计说明落到 `notes/routing.md`。
+  - 进度（2026-11-04）：`model_deployments`（迁移 `0010`，无 deployment 的模型隐式单路由，零迁移）；凭证只存环境变量名 + 可选 `base_url`，密钥不落库；权重无放回抽样、失败转移（可重试/5xx/429/401/403/坏响应）、进程内 cooldown（阈值 3、30s，永不排除最后一个候选）；响应头 `x-llm-gateway-deployment` / `x-llm-gateway-fallback`；指标 `gateway_route_attempts|fallbacks|cooldowns` 与 `route.attempt` span；管理 API 增删改查 + 审计。
+  - 未做：跨进程共享健康（归 G1.2，与 Redis 一起）、按延迟/成本动态路由、per-deployment 用量归因（当前 provider 维度 + `deployment` 指标标签）。
 
 - [ ] **G1.2 限流与配额离开请求热路径**
   - 现状：固定 60 秒窗口、仅租户级；计数落在 PostgreSQL 单行，同租户请求互相争抢；Redis 仍是 Reserved。

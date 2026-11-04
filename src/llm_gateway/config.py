@@ -60,6 +60,9 @@ class Settings(BaseSettings):
     max_prompt_chars: int = Field(default=1_000_000, ge=1)
     max_tokens_limit: int = Field(default=32_768, ge=1)
     max_tools: int = Field(default=128, ge=1)
+    route_max_attempts: int = Field(default=3, ge=1, le=10)
+    route_failure_threshold: int = Field(default=3, ge=1, le=100)
+    route_cooldown_seconds: int = Field(default=30, ge=1, le=3600)
     session_ttl_hours: int = Field(default=12, ge=1, le=720)
     master_key_enabled: bool = True
     bootstrap_admin_username: str | None = None

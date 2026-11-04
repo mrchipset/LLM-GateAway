@@ -6,7 +6,7 @@ from collections.abc import AsyncGenerator, Mapping
 from typing import Annotated, Any
 
 import anyio
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import StreamingResponse
 
 from llm_gateway.auth.dependencies import AuthenticatedKey, require_api_key
@@ -32,6 +32,7 @@ from llm_gateway.services.billing import BillingService
 from llm_gateway.services.chat import ChatService, ChatStream, map_provider_error
 from llm_gateway.services.guards import enforce_chat_request_limits, limits_from_settings
 from llm_gateway.services.limits import InferenceAccess, enforce_inference_limits
+from llm_gateway.services.routing import DeploymentUse
 from llm_gateway.services.usage import (
     USAGE_WRITE_TIMEOUT_SECONDS,
     UsageContext,
@@ -57,6 +58,7 @@ def get_chat_service(container: Annotated[Container, Depends(get_container)]) ->
         models=container.models,
         providers=container.providers,
         tenants=container.tenants,
+        router=container.router,
     )
 
 
@@ -218,6 +220,7 @@ async def _stream_sse(
 @router.post("/v1/chat/completions", response_model=ChatCompletionResponse)
 async def create_chat_completion(
     request: Request,
+    response: Response,
     payload: ChatCompletionRequest,
     access: Annotated[InferenceAccess, Depends(enforce_inference_limits)],
     container: Annotated[Container, Depends(get_container)],
@@ -294,6 +297,8 @@ async def create_chat_completion(
                 finish_reason=choice.finish_reason,
                 usage=result.response.usage,
             )
+        for name, value in _route_headers(result.deployment).items():
+            response.headers[name] = value
         return result.response
 
     try:
@@ -324,8 +329,21 @@ async def create_chat_completion(
             audit_timeout_seconds=audit_service.settings.audit_write_timeout_seconds,
         ),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            **_route_headers(stream.deployment),
+        },
     )
+
+
+def _route_headers(deployment: DeploymentUse | None) -> dict[str, str]:
+    if deployment is None:
+        return {}
+    headers = {"x-llm-gateway-deployment": deployment.name}
+    if deployment.fallback:
+        headers["x-llm-gateway-fallback"] = "true"
+    return headers
 
 
 @router.get("/v1/models", response_model=ModelListResponse)

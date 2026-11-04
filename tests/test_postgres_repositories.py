@@ -35,6 +35,7 @@ from llm_gateway.storage.repositories import (
     AuditTurnDiffRecord,
     DuplicateAdminError,
     DuplicateApiKeyError,
+    DuplicateDeploymentError,
     DuplicateModelError,
     DuplicatePriceError,
     DuplicateTenantError,
@@ -42,6 +43,7 @@ from llm_gateway.storage.repositories import (
     ModelAccess,
     ModelAccessMode,
     ModelConfig,
+    ModelDeployment,
     ModelPrice,
     Tenant,
     TenantLimitPatch,
@@ -2255,3 +2257,76 @@ async def test_migration_adds_admin_identity_tables(migrated_schema: None) -> No
         "admin_login_attempts",
     }
     assert role_check is not None
+
+
+def _deployment(
+    index: int,
+    *,
+    model_id: str = "model-1",
+    name: str | None = None,
+    weight: int = 1,
+    enabled: bool = True,
+) -> ModelDeployment:
+    return ModelDeployment(
+        id=uuid4(),
+        model_id=model_id,
+        name=name if name is not None else f"deployment-{index}",
+        provider=ProviderName.FAKE,
+        upstream_model=f"upstream-{index}",
+        weight=weight,
+        enabled=enabled,
+        created_at=BASE + timedelta(seconds=index),
+    )
+
+
+async def test_model_deployment_round_trip_and_duplicate(database: Database) -> None:
+    await database.models.create_model(_model(1))
+    deployment = _deployment(1)
+
+    created = await database.deployments.create_deployment(deployment)
+
+    assert created == deployment
+    assert await database.deployments.get_deployment(deployment.id) == deployment
+    items = await database.deployments.list_deployments("model-1")
+    assert [item.id for item in items] == [deployment.id]
+
+    with pytest.raises(DuplicateDeploymentError):
+        await database.deployments.create_deployment(_deployment(2, name=deployment.name))
+
+    updated = await database.deployments.update_deployment(
+        deployment.id,
+        weight=9,
+        enabled=False,
+        credential_env=None,
+        replace_credential_env=True,
+    )
+    assert updated is not None
+    assert updated.weight == 9
+    assert updated.enabled is False
+    assert updated.credential_env is None
+
+    assert await database.deployments.delete_deployment(deployment.id) is True
+    assert await database.deployments.delete_deployment(deployment.id) is False
+
+
+async def test_migration_adds_model_deployments_table(migrated_schema: None) -> None:
+    engine = create_async_engine(_test_url())
+    try:
+        async with engine.connect() as connection:
+            table_name = await connection.scalar(
+                text(
+                    "SELECT table_name FROM information_schema.tables "
+                    "WHERE table_name = 'model_deployments'"
+                )
+            )
+            unique_index = await connection.scalar(
+                text(
+                    "SELECT indexname FROM pg_indexes "
+                    "WHERE indexname = 'uq_model_deployments_model_name'"
+                )
+            )
+    finally:
+        await engine.dispose()
+
+    assert table_name == "model_deployments"
+    assert unique_index == "uq_model_deployments_model_name"

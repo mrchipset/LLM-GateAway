@@ -10,7 +10,9 @@ from llm_gateway.clock import Clock, SystemClock
 from llm_gateway.config import Settings, StorageBackend
 from llm_gateway.metrics import configure_metrics, shutdown_metrics
 from llm_gateway.providers.factory import build_providers
+from llm_gateway.providers.pool import ProviderPool
 from llm_gateway.providers.registry import ProviderRegistry
+from llm_gateway.services.routing import DeploymentHealth, ModelRouter
 from llm_gateway.storage.db import Database
 from llm_gateway.storage.memory import (
     InMemoryAdminAuditRepository,
@@ -19,6 +21,7 @@ from llm_gateway.storage.memory import (
     InMemoryApiKeyRepository,
     InMemoryAuditRepository,
     InMemoryLoginThrottle,
+    InMemoryModelDeploymentRepository,
     InMemoryModelPriceRepository,
     InMemoryModelRepository,
     InMemoryTenantRepository,
@@ -32,6 +35,7 @@ from llm_gateway.storage.repositories import (
     ApiKeyRepository,
     AuditRepository,
     LoginThrottle,
+    ModelDeploymentRepository,
     ModelPriceRepository,
     ModelRepository,
     TenantRepository,
@@ -68,10 +72,14 @@ class Container:
     readiness_checks: tuple[ReadinessCheck, ...] = ()
     database: Database | None = None
     audit: AuditRepository = field(default_factory=InMemoryAuditRepository)
+    deployments: ModelDeploymentRepository = field(
+        default_factory=InMemoryModelDeploymentRepository
+    )
     admins: AdminUserRepository = field(default_factory=InMemoryAdminUserRepository)
     admin_sessions: AdminSessionRepository = field(default_factory=InMemoryAdminSessionRepository)
     admin_audit: AdminAuditRepository = field(default_factory=InMemoryAdminAuditRepository)
     login_throttle: LoginThrottle = field(default_factory=InMemoryLoginThrottle)
+    router: ModelRouter | None = None
     telemetry: Telemetry | None = None
 
     def __post_init__(self) -> None:
@@ -122,15 +130,21 @@ def build_container(settings: Settings, *, telemetry: Telemetry | None = None) -
     configure_metrics(settings)
     resolved_telemetry = telemetry if telemetry is not None else configure_telemetry(settings)
     providers = build_providers(settings, clock=clock, tracer=resolved_telemetry.tracer)
+    pool = ProviderPool(
+        settings=settings,
+        providers=providers,
+        tracer=resolved_telemetry.tracer,
+    )
 
     if settings.storage_backend is StorageBackend.POSTGRES:
         database = Database.from_settings(settings)
-        return Container(
+        container = Container(
             settings=settings,
             clock=clock,
             api_keys=database.api_keys,
             models=database.models,
             prices=database.prices,
+            deployments=database.deployments,
             tenants=database.tenants,
             usage=database.usage,
             audit=database.audit,
@@ -144,17 +158,31 @@ def build_container(settings: Settings, *, telemetry: Telemetry | None = None) -
             database=database,
             telemetry=resolved_telemetry,
         )
+    else:
+        container = Container(
+            settings=settings,
+            clock=clock,
+            api_keys=InMemoryApiKeyRepository(),
+            models=InMemoryModelRepository(),
+            prices=InMemoryModelPriceRepository(),
+            deployments=InMemoryModelDeploymentRepository(),
+            tenants=InMemoryTenantRepository(),
+            usage=InMemoryUsageRepository(),
+            audit=InMemoryAuditRepository(),
+            rate_limiter=InMemoryRateLimiter(),
+            providers=providers,
+            telemetry=resolved_telemetry,
+        )
 
-    return Container(
-        settings=settings,
+    container.router = ModelRouter(
+        deployments=container.deployments,
+        pool=pool,
+        health=DeploymentHealth(
+            threshold=settings.route_failure_threshold,
+            cooldown_seconds=settings.route_cooldown_seconds,
+        ),
         clock=clock,
-        api_keys=InMemoryApiKeyRepository(),
-        models=InMemoryModelRepository(),
-        prices=InMemoryModelPriceRepository(),
-        tenants=InMemoryTenantRepository(),
-        usage=InMemoryUsageRepository(),
-        audit=InMemoryAuditRepository(),
-        rate_limiter=InMemoryRateLimiter(),
-        providers=providers,
-        telemetry=resolved_telemetry,
+        tracer=resolved_telemetry.tracer,
+        max_attempts=settings.route_max_attempts,
     )
+    return container

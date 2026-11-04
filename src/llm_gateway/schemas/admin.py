@@ -356,3 +356,58 @@ class AdminAuditListResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class CreateDeploymentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9._-]+$")
+    provider: ProviderName
+    upstream_model: str = Field(min_length=1, max_length=256)
+    weight: int = Field(default=1, ge=1, le=100)
+    enabled: bool = True
+    credential_env: str | None = Field(
+        default=None,
+        max_length=100,
+        pattern=r"^[A-Z][A-Z0-9_]*$",
+    )
+    base_url: str | None = Field(default=None, max_length=2048)
+
+
+class UpdateDeploymentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str | None = Field(
+        default=None, min_length=1, max_length=100, pattern=r"^[A-Za-z0-9._-]+$"
+    )
+    upstream_model: str | None = Field(default=None, min_length=1, max_length=256)
+    weight: int | None = Field(default=None, ge=1, le=100)
+    enabled: bool | None = None
+    credential_env: str | None = Field(
+        default=None,
+        max_length=100,
+        pattern=r"^[A-Z][A-Z0-9_]*$",
+    )
+    base_url: str | None = Field(default=None, max_length=2048)
+
+
+class DeploymentDetail(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: UUID
+    model_id: str
+    name: str
+    provider: ProviderName
+    upstream_model: str
+    weight: int
+    enabled: bool
+    credential_env: str | None = None
+    base_url: str | None = None
+    created_at: datetime
+
+
+class DeploymentListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    model_id: str
+    items: list[DeploymentDetail]
