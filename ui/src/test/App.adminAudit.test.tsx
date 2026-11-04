@@ -63,6 +63,30 @@ async function openAdminAudit(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe('admin audit', () => {
+  it('refetches when the panel is reopened so new events appear', async () => {
+    let events = [ROLE_EVENT];
+    const fetchMock = installFetchMock({
+      '/api/v1/admin-audit': (url) => auditPage(events, url),
+    });
+    const user = userEvent.setup();
+    renderApp();
+
+    const region = await openAdminAudit(user);
+    const table = await within(region).findByRole('table', { name: 'Admin audit events' });
+    await within(table).findByText('admin.updated');
+
+    events = [ROLE_EVENT, TENANT_EVENT];
+    await user.click(screen.getByRole('tab', { name: 'Models' }));
+    await user.click(screen.getByRole('tab', { name: 'Admin audit' }));
+
+    const reopened = await screen.findByRole('region', { name: 'Admin audit' });
+    const reopenedTable = await within(reopened).findByRole('table', {
+      name: 'Admin audit events',
+    });
+    await within(reopenedTable).findByText('tenant.created');
+    expect(auditCalls(fetchMock)).toHaveLength(2);
+  });
+
   it('renders actor, action, target, and a compact before/after view', async () => {
     installFetchMock({
       '/api/v1/admin-audit': (url) => auditPage([ROLE_EVENT, TENANT_EVENT], url),

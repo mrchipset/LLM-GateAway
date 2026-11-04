@@ -11,10 +11,11 @@ import { adminAuditPrefix, adminsPrefix, queryKeys } from '../lib/queryKeys';
 
 export const ADMIN_PAGE_SIZE = 50;
 
-export function useAdmins(offset: number) {
+export function useAdmins(offset: number, options: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: queryKeys.admins(ADMIN_PAGE_SIZE, offset),
     queryFn: ({ signal }) => listAdmins({ limit: ADMIN_PAGE_SIZE, offset }, signal),
+    enabled: options.enabled ?? true,
     retry: false,
   });
 }

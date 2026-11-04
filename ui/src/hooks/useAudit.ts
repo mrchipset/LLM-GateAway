@@ -9,10 +9,11 @@ import {
 } from '../api/client';
 import { queryKeys } from '../lib/queryKeys';
 
-export function useAuditSessions(query: AuditSessionQuery) {
+export function useAuditSessions(query: AuditSessionQuery, options: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: queryKeys.auditSessions(query),
     queryFn: ({ signal }) => getAuditSessions(query, signal),
+    enabled: options.enabled ?? true,
     retry: false,
   });
 }

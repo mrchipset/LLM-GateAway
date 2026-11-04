@@ -225,7 +225,7 @@ export function Workspace() {
           hidden={tab !== 'audit'}
           className="min-w-0"
         >
-          <AuditPanel />
+          <AuditPanel active={tab === 'audit'} />
         </div>
       )}
 
@@ -237,7 +237,7 @@ export function Workspace() {
           hidden={tab !== 'admins'}
           className="min-w-0"
         >
-          <AdminsPanel />
+          <AdminsPanel active={tab === 'admins'} />
         </div>
       )}
 
@@ -249,7 +249,7 @@ export function Workspace() {
           hidden={tab !== 'admin-audit'}
           className="min-w-0"
         >
-          <AdminAuditPanel />
+          <AdminAuditPanel active={tab === 'admin-audit'} />
         </div>
       )}
     </div>

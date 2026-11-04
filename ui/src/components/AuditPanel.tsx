@@ -24,8 +24,8 @@ import {
 } from './AuditSessionsTable';
 import { Button } from './Button';
 
-export function AuditPanel() {
-  return <ConnectedAuditPanel />;
+export function AuditPanel({ active = true }: { active?: boolean }) {
+  return <ConnectedAuditPanel active={active} />;
 }
 
 function InlineLoadError({
@@ -58,7 +58,7 @@ function InlineLoadError({
   );
 }
 
-function ConnectedAuditPanel() {
+function ConnectedAuditPanel({ active }: { active: boolean }) {
   const [tenantId, setTenantId] = useState('');
   const [apiKeyId, setApiKeyId] = useState('');
   const [modelId, setModelId] = useState('');
@@ -81,15 +81,18 @@ function ConnectedAuditPanel() {
   const noteId = useId();
 
   const since = useMemo(() => auditRangeSinceIso(rangeDays, anchor), [rangeDays, anchor]);
-  const sessionsQuery = useAuditSessions({
-    tenantId: tenantId === '' ? null : tenantId,
-    apiKeyId: apiKeyId === '' ? null : apiKeyId,
-    modelId: modelId === '' ? null : modelId,
-    q: query === '' ? null : query,
-    since,
-    limit: AUDIT_PAGE_SIZE,
-    offset,
-  });
+  const sessionsQuery = useAuditSessions(
+    {
+      tenantId: tenantId === '' ? null : tenantId,
+      apiKeyId: apiKeyId === '' ? null : apiKeyId,
+      modelId: modelId === '' ? null : modelId,
+      q: query === '' ? null : query,
+      since,
+      limit: AUDIT_PAGE_SIZE,
+      offset,
+    },
+    { enabled: active },
+  );
   const tenantsQuery = useTenants();
   const keysQuery = useAuditKeyOptions(tenantId === '' ? null : tenantId);
   const modelsQuery = useModels();

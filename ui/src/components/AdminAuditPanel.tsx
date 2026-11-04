@@ -59,7 +59,7 @@ const ACTOR_TYPE_STYLES: Record<AdminActorType, string> = {
   bootstrap: 'border-warn/30 bg-warn-soft text-warn',
 };
 
-export function AdminAuditPanel() {
+export function AdminAuditPanel({ active = true }: { active?: boolean }) {
   const [draft, setDraft] = useState<FilterDraft>(EMPTY_FILTERS);
   const [filters, setFilters] = useState<FilterDraft>(EMPTY_FILTERS);
   const [offset, setOffset] = useState(0);
@@ -91,7 +91,7 @@ export function AdminAuditPanel() {
     };
   }, [filters, offset]);
 
-  const query = useAdminAudit(queryParams);
+  const query = useAdminAudit(queryParams, { enabled: active });
 
   const count =
     query.status === 'success'

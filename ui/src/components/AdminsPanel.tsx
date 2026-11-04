@@ -15,7 +15,7 @@ import { Panel, PanelHeader } from './Panel';
 import { RequestErrorPanel } from './RequestErrorPanel';
 import { RoleBadge } from './RoleBadge';
 
-export function AdminsPanel() {
+export function AdminsPanel({ active = true }: { active?: boolean }) {
   const { session } = useAdminSession();
   const queryClient = useQueryClient();
   const [offset, setOffset] = useState(0);
@@ -27,7 +27,7 @@ export function AdminsPanel() {
   const editTriggerRef = useRef<HTMLElement | null>(null);
   const passwordTriggerRef = useRef<HTMLElement | null>(null);
 
-  const query = useAdmins(offset);
+  const query = useAdmins(offset, { enabled: active });
 
   const count =
     query.status === 'success'
