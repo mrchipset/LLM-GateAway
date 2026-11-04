@@ -1359,15 +1359,18 @@ class SqlAlchemyAdminUserRepository:
                 (role is not None and role is not AdminRole.OWNER) or active is False
             )
             if removes_owner:
-                owners = await session.scalar(
-                    select(func.count())
-                    .select_from(AdminUserRow)
-                    .where(
-                        AdminUserRow.role == AdminRole.OWNER.value,
-                        AdminUserRow.active.is_(True),
+                # Lock the owner rows so two concurrent demotions cannot both pass.
+                owner_ids = (
+                    await session.scalars(
+                        select(AdminUserRow.id)
+                        .where(
+                            AdminUserRow.role == AdminRole.OWNER.value,
+                            AdminUserRow.active.is_(True),
+                        )
+                        .with_for_update()
                     )
-                )
-                if int(owners or 0) <= 1:
+                ).all()
+                if len(owner_ids) <= 1:
                     raise LastOwnerError()
 
             if role is not None:
