@@ -535,10 +535,11 @@ The container runs `uvicorn` with `--workers ${GATEWAY_WORKERS:-1}` and
 `--timeout-graceful-shutdown ${GATEWAY_SHUTDOWN_GRACE_SECONDS:-30}`; `docker compose` sets
 `stop_grace_period: 45s` so the drain has room before SIGKILL.
 
-- **Keep `GATEWAY_WORKERS=1` until G1.2 lands.** Rate limiting, deployment cooldown, and login
-  throttling are process-local today, so multiple workers multiply the effective limits. The
-  load baseline also showed a single worker saturating around 100 RPS, so workers are a real
-  capacity lever — they are just not safe yet.
+- **Keep `GATEWAY_WORKERS=1` unless rate limiting is on Redis.** With
+  `GATEWAY_RATE_LIMIT_BACKEND=redis` the tenant buckets are shared, so workers no longer multiply
+  request limits. Deployment cooldown and login throttling are still process-local, so raising
+  workers weakens brute-force protection and makes failover health per-process; finish G1.2
+  before scaling out on the strength of those two.
 - Shutdown drains in-flight requests, including active streams, for up to
   `GATEWAY_SHUTDOWN_GRACE_SECONDS`. Uvicorn enforces the same value as its hard ceiling; if it
   has to cancel, the gateway logs `shutdown_grace_exceeded`, increments

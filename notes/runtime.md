@@ -70,9 +70,10 @@ enforce it, and the route cannot distinguish "slow model" from "dead connection"
 
 ### Workers stay gated
 
-`GATEWAY_WORKERS` is wired into the container command, default 1, and documented as unsafe to
-raise until G1.2 lands shared rate limiting, cooldown, and login throttling. The lever exists so
-capacity testing can measure it; enabling it today would silently multiply per-process limits.
+`GATEWAY_WORKERS` is wired into the container command, default 1. With the Redis token bucket
+(`GATEWAY_RATE_LIMIT_BACKEND=redis`) request limits are shared across workers; deployment cooldown
+and login throttling are still process-local, so scaling out remains a deliberate trade-off until
+those move to Redis too. The lever exists so capacity testing can measure it.
 
 ## Trade-offs and open gaps
 

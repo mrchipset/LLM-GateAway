@@ -294,7 +294,7 @@
 - [x] **G1.5 运行时与生命周期参数化**
   - 现状：连接池大小硬编码、无语句超时、启动未配 workers、无优雅停机排空、流式无 keepalive/空闲超时。
   - 验收：连接池与并发参数可配且有上限校验；滚动发布会等待 in-flight 流结束（或按超时截断并记账）；长时间无数据的流按空闲超时关闭并释放上游。
-  - 进度（2026-11-04）：`GATEWAY_DATABASE_POOL_SIZE|MAX_OVERFLOW|POOL_TIMEOUT_SECONDS|STATEMENT_TIMEOUT_MS`（服务端 `statement_timeout`，默认 30s，0 关闭）；`InFlightTracker` + 纯 ASGI 中间件统计活跃请求，lifespan 按 `GATEWAY_SHUTDOWN_GRACE_SECONDS` 排空，超时记 `shutdown_grace_exceeded` 并累加 `gateway_forced_shutdowns`；容器命令加 `--timeout-graceful-shutdown` 与 `stop_grace_period: 45s`；`GATEWAY_STREAM_IDLE_TIMEOUT_SECONDS`（默认 60，0 关闭）按"等待下一块字节"计时，超时抛 `ProviderTimeoutError`，走既有 SSE 错误帧并结算已交付用量。`GATEWAY_WORKERS` 已接通但默认 1，**必须等 G1.2 共享限流后才能 >1**。设计说明见 `notes/runtime.md`。
+  - 进度（2026-11-04）：`GATEWAY_DATABASE_POOL_SIZE|MAX_OVERFLOW|POOL_TIMEOUT_SECONDS|STATEMENT_TIMEOUT_MS`（服务端 `statement_timeout`，默认 30s，0 关闭）；`InFlightTracker` + 纯 ASGI 中间件统计活跃请求，lifespan 按 `GATEWAY_SHUTDOWN_GRACE_SECONDS` 排空，超时记 `shutdown_grace_exceeded` 并累加 `gateway_forced_shutdowns`；容器命令加 `--timeout-graceful-shutdown` 与 `stop_grace_period: 45s`；`GATEWAY_STREAM_IDLE_TIMEOUT_SECONDS`（默认 60，0 关闭）按"等待下一块字节"计时，超时抛 `ProviderTimeoutError`，走既有 SSE 错误帧并结算已交付用量。`GATEWAY_WORKERS` 已接通但默认 1；租户级限流已可共享（G1.2 Redis 令牌桶），但登录节流与部署 cooldown 仍是进程内，调大 worker 前需接受这两个缺口。设计说明见 `notes/runtime.md`。
   - 未做：连接池不会自适应；排空只等自然结束，没有"提前关闭流"的协议；非流式请求由总超时覆盖，不叠加空闲超时。
 
 - [ ] **G1.6 缓存**
