@@ -181,6 +181,10 @@ def main() -> int:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--metrics-host", default="127.0.0.1")
     parser.add_argument("--skip-k6", action="store_true")
+    parser.add_argument(
+        "--k6-script",
+        default=os.path.join(ROOT, "scripts", "loadtest", "k6", "chat.js"),
+    )
     parser.add_argument("--plan-tokens", type=int, default=None)
     parser.add_argument("--monthly-cost-budget", default=None)
     parser.add_argument("--price-input-per-million", default=None)
@@ -305,7 +309,7 @@ def main() -> int:
             "MAX_VUS": str(args.max_users),
         }
         result = subprocess.call(
-            ["k6", "run", os.path.join(ROOT, "scripts", "loadtest", "k6", "chat.js")],
+            ["k6", "run", args.k6_script],
             cwd=ROOT,
             env=k6_env,
         )

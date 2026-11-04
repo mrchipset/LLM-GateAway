@@ -270,7 +270,7 @@
   - 范围：Redis 令牌桶（per-key / per-tenant / per-model）、TPM 与并发上限、RPM 与 TPM 同时生效、`Retry-After` 语义明确；限流不可用时降级策略显式（fail-open 必须告警）。
   - 验收：多副本下限流口径一致；边界不出现 2 倍突发；Redis 不可用时行为符合配置且可观测。
 
-- [ ] **G1.3 热路径读写放大治理**
+- [ ] **G1.3 热路径读写放大治理**（压测已确认整月用量聚合是第一瓶颈，优先做）
   - 现状：每请求包含 key 查询、`last_used_at` 写入、租户查询、整月用量聚合、限流单行 upsert、usage 插入，全部同步打 PostgreSQL，无缓存。
   - 范围：key/tenant 短期缓存（含显式失效）、`last_used_at` 采样或批量、usage 异步批量写入、日/月预聚合表、聚合查询走预聚合而非明细扫描。
   - 验收：单请求 DB 往返次数有明确预算并可测；P95 延迟在目标 QPS 下不随月内累计用量增长而退化。
@@ -296,14 +296,15 @@
   - 范围：压测脚本（非流式 + 流式 + 断连 + 上游慢/错），容量模型（连接数、内存、DB 写入放大），SLO（可用性、P95、错误率预算），告警阈值。
   - 验收：给定 QPS 与并发能给出资源需求与瓶颈结论；每次性能相关改动有前后对比数据。
   - 进度（2026-11-04）：工装已就绪，见 `scripts/loadtest/`（可控上游 stub、seed、用量预热、k6 脚本、一键编排）。冒烟验证通过：非流式 50 请求 0 错误；流式 25 请求 0 错误且 `gateway_upstream_ttft_seconds` 正常；开启套餐/预算/价格后 50 请求 0 错误。
-  - 待做（需要一台独立机器 + PostgreSQL，k6 已装）：
-    - [ ] 预热用量：`uv run python scripts/loadtest/warm_usage.py --rows 200000`
-    - [ ] 基线：`run_loadtest.py --storage postgres --rate 50 --duration 120s`，记录 p50/p95/p99、错误率、DB 连接数、CPU
-    - [ ] 计费对照：同一租户加 `--plan-tokens/--monthly-cost-budget/--price-*` 再跑一次，比较 p95 增幅
-    - [ ] 流式：`--stream`，看流时长分布、`gateway_upstream_ttft_seconds`、断连记账
-    - [ ] 故障注入：`STUB_ERROR_RATE=0.05`（500 与 429 各一次），看重试放大与错误预算
-    - [ ] 把四轮数字填入 `notes/load-baseline.md` 的结果表，据此决定 G1.3 顺序
+  - 已完成（2026-11-04，8 vCPU / 31 GiB Linux 主机，单 worker + 内嵌 PostgreSQL 16.2 + 同机 k6）：
+    - [x] 预热用量：`uv run python scripts/loadtest/warm_usage.py --rows 200000`
+    - [x] 基线：快上游 100 RPS 与 60 RPS 两档，p95 分别为 30ms / 53ms，0 错误
+    - [x] 计费对照：50k 行 100 RPS p95 9.94s（78 RPS）；50k 行 60 RPS p95 83ms；215k 行 60 RPS 仅 39.6 RPS、p95 15.3s
+    - [x] 流式：30 RPS p95 245ms，TTFT 均值 22.4ms（stub 20ms）
+    - [x] 故障注入：5% 500 → 317/6318 上游失败、客户端失败 1 个（0.01%）、重试放大 1.053
+    - [x] 结果表已填入 `notes/load-baseline.md` 第 7 节，环境限制同时记录
   - 决策规则（已写在 `notes/load-baseline.md`）：同 RPS 下计费开启使 p95 增长 >30%，或连接数先于 CPU 饱和，则 G1.3 先做当月计数器 + 价格缓存；<10% 则暂缓。
+  - 结论（2026-11-04）：**规则命中且严重**——50k 行时 p95 +57%，100 RPS 直接崩到 9.94s，215k 行时 60 RPS 无法维持。单 worker 约 100 RPS 饱和（单核 81%），8 核闲置。G1.3 顺序：月用量计数器/缓存聚合 → 价格缓存 → key/tenant 缓存 → usage 批量写；多 worker 需等 G1.2 的共享限流与共享健康。
 
 ### G2 规模化与生态
 
