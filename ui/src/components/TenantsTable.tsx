@@ -1,13 +1,14 @@
 import type { TenantSummary } from '../api/client';
 import { formatCreatedAt, formatExactNumber } from '../lib/format';
 import { Button } from './Button';
-import { AccessIcon, EditIcon } from './Icons';
+import { AccessIcon, BillingIcon, EditIcon } from './Icons';
 import { TenantLimitFacts } from './TenantLimitFacts';
 
 interface TenantsTableProps {
   tenants: TenantSummary[];
   onEdit: (tenant: TenantSummary, trigger: HTMLButtonElement) => void;
   onEditModelAccess: (tenant: TenantSummary, trigger: HTMLButtonElement) => void;
+  onEditBilling: (tenant: TenantSummary, trigger: HTMLButtonElement) => void;
 }
 
 function shortId(tenant: TenantSummary): string {
@@ -100,19 +101,47 @@ function ModelAccessButton({
   );
 }
 
-export function TenantsTable({ tenants, onEdit, onEditModelAccess }: TenantsTableProps) {
+function BillingButton({
+  tenant,
+  onEditBilling,
+  withLabel = false,
+}: {
+  tenant: TenantSummary;
+  onEditBilling: TenantsTableProps['onEditBilling'];
+  withLabel?: boolean;
+}) {
+  return (
+    <Button
+      variant="ghost"
+      onClick={(event) => onEditBilling(tenant, event.currentTarget)}
+      aria-label={`Billing for ${tenant.name}`}
+      title="Billing"
+      className="shrink-0 px-2 py-1 text-[12px]"
+    >
+      <BillingIcon className="size-3.5" />
+      {withLabel && <span>Billing</span>}
+    </Button>
+  );
+}
+
+export function TenantsTable({
+  tenants,
+  onEdit,
+  onEditModelAccess,
+  onEditBilling,
+}: TenantsTableProps) {
   return (
     <>
       <div className="hidden md:block">
         <table className="w-full table-fixed border-collapse text-left text-[13px]">
           <caption className="sr-only">Tenants</caption>
           <colgroup>
-            <col className="w-[21%]" />
-            <col className="w-[12%]" />
-            <col className="w-[18%]" />
-            <col className="w-[22%]" />
+            <col className="w-[20%]" />
             <col className="w-[11%]" />
             <col className="w-[16%]" />
+            <col className="w-[22%]" />
+            <col className="w-[9%]" />
+            <col className="w-[22%]" />
           </colgroup>
           <thead>
             <tr className="border-b border-line">
@@ -158,6 +187,7 @@ export function TenantsTable({ tenants, onEdit, onEditModelAccess }: TenantsTabl
                   <div className="flex justify-end gap-0.5">
                     <EditLimitButton tenant={tenant} onEdit={onEdit} />
                     <ModelAccessButton tenant={tenant} onEditModelAccess={onEditModelAccess} />
+                    <BillingButton tenant={tenant} onEditBilling={onEditBilling} />
                   </div>
                 </td>
               </tr>
@@ -196,6 +226,7 @@ export function TenantsTable({ tenants, onEdit, onEditModelAccess }: TenantsTabl
             <div className="mt-2 flex flex-wrap justify-end gap-2">
               <EditLimitButton tenant={tenant} onEdit={onEdit} withLabel />
               <ModelAccessButton tenant={tenant} onEditModelAccess={onEditModelAccess} withLabel />
+              <BillingButton tenant={tenant} onEditBilling={onEditBilling} withLabel />
             </div>
           </li>
         ))}

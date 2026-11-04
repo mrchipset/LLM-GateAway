@@ -55,6 +55,9 @@ export interface TenantSummary {
   requests_per_minute: number | null;
   audit_enabled: boolean;
   model_access_mode: ModelAccessMode;
+  plan_tokens: number | null;
+  plan_allow_overage: boolean;
+  monthly_cost_budget: string | null;
 }
 
 export interface TenantListResponse {
@@ -119,6 +122,51 @@ export interface TenantLimitsPatch {
   monthly_token_quota?: number | null;
   requests_per_minute?: number | null;
   audit_enabled?: boolean;
+  plan_tokens?: number | null;
+  plan_allow_overage?: boolean;
+  monthly_cost_budget?: string | null;
+}
+
+export interface ModelPrice {
+  id: string;
+  model_id: string;
+  input_per_million: string;
+  cached_input_per_million: string | null;
+  output_per_million: string;
+  currency: string;
+  effective_from: string;
+  created_at: string;
+}
+
+export interface ModelPriceListResponse {
+  items: ModelPrice[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface CreateModelPriceInput {
+  input_per_million: string;
+  cached_input_per_million?: string;
+  output_per_million: string;
+  effective_from?: string;
+}
+
+export interface TenantBillingSummary {
+  tenant_id: string;
+  currency: string;
+  period_start: string;
+  period_end: string;
+  plan_tokens: number | null;
+  plan_allow_overage: boolean;
+  monthly_cost_budget: string | null;
+  used_tokens: number;
+  covered_tokens: number;
+  billable_tokens: number;
+  requests: number;
+  list_cost: string;
+  billed_cost: string;
+  budget_remaining: string | null;
 }
 
 export type AuditChangeType =
@@ -271,7 +319,14 @@ export interface AuditSessionQuery {
   offset: number;
 }
 
-export interface UsageCounts {
+export interface UsageCosts {
+  covered_tokens: number;
+  billable_tokens: number;
+  list_cost: string;
+  billed_cost: string;
+}
+
+export interface UsageCounts extends UsageCosts {
   prompt_tokens: number;
   completion_tokens: number;
   cached_tokens: number;
@@ -366,6 +421,44 @@ function isNullableCount(value: unknown): value is number | null {
   return value === null || isCount(value);
 }
 
+function isDecimalString(value: unknown): value is string {
+  return typeof value === 'string' && /^\d+(\.\d+)?$/.test(value);
+}
+
+function isModelPrice(value: unknown): value is ModelPrice {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.id === 'string' &&
+    typeof value.model_id === 'string' &&
+    isDecimalString(value.input_per_million) &&
+    (value.cached_input_per_million === null || isDecimalString(value.cached_input_per_million)) &&
+    isDecimalString(value.output_per_million) &&
+    typeof value.currency === 'string' &&
+    typeof value.effective_from === 'string' &&
+    typeof value.created_at === 'string'
+  );
+}
+
+function isTenantBillingSummary(value: unknown): value is TenantBillingSummary {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.tenant_id === 'string' &&
+    typeof value.currency === 'string' &&
+    typeof value.period_start === 'string' &&
+    typeof value.period_end === 'string' &&
+    isNullableCount(value.plan_tokens) &&
+    typeof value.plan_allow_overage === 'boolean' &&
+    (value.monthly_cost_budget === null || isDecimalString(value.monthly_cost_budget)) &&
+    isCount(value.used_tokens) &&
+    isCount(value.covered_tokens) &&
+    isCount(value.billable_tokens) &&
+    isCount(value.requests) &&
+    isDecimalString(value.list_cost) &&
+    isDecimalString(value.billed_cost) &&
+    (value.budget_remaining === null || isDecimalString(value.budget_remaining))
+  );
+}
+
 function isTenantSummary(value: unknown): value is TenantSummary {
   if (!isRecord(value)) return false;
   return (
@@ -375,7 +468,10 @@ function isTenantSummary(value: unknown): value is TenantSummary {
     isNullableCount(value.monthly_token_quota) &&
     isNullableCount(value.requests_per_minute) &&
     typeof value.audit_enabled === 'boolean' &&
-    isModelAccessMode(value.model_access_mode)
+    isModelAccessMode(value.model_access_mode) &&
+    isNullableCount(value.plan_tokens) &&
+    typeof value.plan_allow_overage === 'boolean' &&
+    (value.monthly_cost_budget === null || isDecimalString(value.monthly_cost_budget))
   );
 }
 
@@ -426,13 +522,27 @@ function isCreatedApiKey(value: unknown): value is CreatedApiKey {
 
 function isUsageCounts(value: unknown): value is UsageCounts {
   if (!isRecord(value)) return false;
-  const { prompt_tokens, completion_tokens, cached_tokens, total_tokens, requests } = value;
+  const {
+    prompt_tokens,
+    completion_tokens,
+    cached_tokens,
+    total_tokens,
+    requests,
+    covered_tokens,
+    billable_tokens,
+    list_cost,
+    billed_cost,
+  } = value;
   return (
     isCount(prompt_tokens) &&
     isCount(completion_tokens) &&
     isCount(cached_tokens) &&
     isCount(total_tokens) &&
-    isCount(requests)
+    isCount(requests) &&
+    isCount(covered_tokens) &&
+    isCount(billable_tokens) &&
+    isDecimalString(list_cost) &&
+    isDecimalString(billed_cost)
   );
 }
 
@@ -1089,6 +1199,62 @@ export async function updateTenantLimits(
   return readTenant(response, path);
 }
 
+export async function getTenantBilling(
+  masterKey: string,
+  tenantId: string,
+  signal?: AbortSignal,
+): Promise<TenantBillingSummary> {
+  const path = `/api/v1/tenants/${encodeURIComponent(tenantId)}/billing`;
+  const response = await sendAdmin(path, masterKey, signal);
+  const payload = await readJson(response, path);
+  if (!isTenantBillingSummary(payload)) {
+    throw unexpectedPayload(response, 'tenant billing summary');
+  }
+  return payload;
+}
+
+export async function listModelPrices(
+  masterKey: string,
+  modelId: string,
+  signal?: AbortSignal,
+): Promise<ModelPriceListResponse> {
+  const path = `/api/v1/models/${encodeURIComponent(modelId)}/prices?limit=50&offset=0`;
+  const response = await sendAdmin(path, masterKey, signal);
+  const payload = await readJson(response, path);
+  if (
+    !isRecord(payload) ||
+    !Array.isArray(payload.items) ||
+    !payload.items.every(isModelPrice) ||
+    !isCount(payload.total) ||
+    !isCount(payload.limit) ||
+    !isCount(payload.offset)
+  ) {
+    throw unexpectedPayload(response, 'model price list');
+  }
+
+  return {
+    items: payload.items,
+    total: payload.total,
+    limit: payload.limit,
+    offset: payload.offset,
+  };
+}
+
+export async function createModelPrice(
+  masterKey: string,
+  modelId: string,
+  input: CreateModelPriceInput,
+  signal?: AbortSignal,
+): Promise<ModelPrice> {
+  const path = `/api/v1/models/${encodeURIComponent(modelId)}/prices`;
+  const response = await sendAdminJson(path, masterKey, 'POST', input, signal);
+  const payload = await readJson(response, path);
+  if (!isModelPrice(payload)) {
+    throw unexpectedPayload(response, 'model price');
+  }
+  return payload;
+}
+
 export async function listKeys(
   masterKey: string,
   signal?: AbortSignal,
@@ -1171,6 +1337,10 @@ export async function getUsageSummary(
     cached_tokens: payload.cached_tokens,
     total_tokens: payload.total_tokens,
     requests: payload.requests,
+    covered_tokens: payload.covered_tokens,
+    billable_tokens: payload.billable_tokens,
+    list_cost: payload.list_cost,
+    billed_cost: payload.billed_cost,
     by_model: payload.by_model,
   };
 }

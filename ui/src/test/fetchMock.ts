@@ -8,9 +8,12 @@ export interface Routes {
   '/api/v1/models'?: RouteHandler;
   'POST /api/v1/models'?: RouteHandler;
   'DELETE /api/v1/models/:id'?: RouteHandler;
+  'GET /api/v1/models/:id/prices'?: RouteHandler;
+  'POST /api/v1/models/:id/prices'?: RouteHandler;
   '/api/v1/tenants'?: RouteHandler;
   'POST /api/v1/tenants'?: RouteHandler;
   'PATCH /api/v1/tenants/:id'?: RouteHandler;
+  'GET /api/v1/tenants/:id/billing'?: RouteHandler;
   'GET /api/v1/tenants/:id/model-access'?: RouteHandler;
   'PUT /api/v1/tenants/:id/model-access'?: RouteHandler;
   '/api/v1/keys'?: RouteHandler;
@@ -51,6 +54,11 @@ const defaultRoutes: Record<keyof Routes, RouteHandler> = {
   'DELETE /api/v1/models/:id': () => {
     throw new Error('Unexpected request: DELETE /api/v1/models/:id');
   },
+  'GET /api/v1/models/:id/prices': () =>
+    jsonResponse({ items: [], total: 0, limit: 50, offset: 0 }),
+  'POST /api/v1/models/:id/prices': () => {
+    throw new Error('Unexpected request: POST /api/v1/models/:id/prices');
+  },
   '/api/v1/tenants': () => jsonResponse({ items: [], total: 0, limit: 100, offset: 0 }),
   'POST /api/v1/tenants': () => {
     throw new Error('Unexpected request: POST /api/v1/tenants');
@@ -58,6 +66,23 @@ const defaultRoutes: Record<keyof Routes, RouteHandler> = {
   'PATCH /api/v1/tenants/:id': () => {
     throw new Error('Unexpected request: PATCH /api/v1/tenants/:id');
   },
+  'GET /api/v1/tenants/:id/billing': () =>
+    jsonResponse({
+      tenant_id: 'tenant',
+      currency: 'USD',
+      period_start: '2026-10-01T00:00:00Z',
+      period_end: '2026-11-01T00:00:00Z',
+      plan_tokens: null,
+      plan_allow_overage: false,
+      monthly_cost_budget: null,
+      used_tokens: 0,
+      covered_tokens: 0,
+      billable_tokens: 0,
+      requests: 0,
+      list_cost: '0.000000',
+      billed_cost: '0.000000',
+      budget_remaining: null,
+    }),
   'GET /api/v1/tenants/:id/model-access': () => {
     throw new Error('Unexpected request: GET /api/v1/tenants/:id/model-access');
   },
@@ -122,6 +147,21 @@ const defaultRoutes: Record<keyof Routes, RouteHandler> = {
 
 function resolveHandler(routes: Routes, url: URL, init: RequestInit): RouteHandler | undefined {
   const method = (init.method ?? 'GET').toUpperCase();
+
+  if (/^\/api\/v1\/models\/[^/]+\/prices$/.test(url.pathname)) {
+    const handler =
+      method === 'POST'
+        ? routes['POST /api/v1/models/:id/prices']
+        : method === 'GET'
+          ? routes['GET /api/v1/models/:id/prices']
+          : undefined;
+    if (handler !== undefined) return handler;
+  }
+
+  if (method === 'GET' && /^\/api\/v1\/tenants\/[^/]+\/billing$/.test(url.pathname)) {
+    const handler = routes['GET /api/v1/tenants/:id/billing'];
+    if (handler !== undefined) return handler;
+  }
 
   if (method === 'PATCH' && url.pathname.startsWith('/api/v1/tenants/')) {
     const handler = routes['PATCH /api/v1/tenants/:id'];

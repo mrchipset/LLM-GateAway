@@ -4,9 +4,10 @@ import type { ModelSummary } from '../api/client';
 import type { ModelsQuery } from '../hooks/useModels';
 import { formatCreatedAt, formatUpdatedAt } from '../lib/format';
 import { Button } from './Button';
-import { CheckCircleIcon, KeyIcon, RefreshIcon, TrashIcon } from './Icons';
+import { CheckCircleIcon, KeyIcon, RefreshIcon, TagIcon, TrashIcon } from './Icons';
 import { ModelCreateDialog } from './ModelCreateDialog';
 import { ModelDeleteDialog } from './ModelDeleteDialog';
+import { ModelPricingDialog } from './ModelPricingDialog';
 import { Panel, PanelHeader } from './Panel';
 import { RequestErrorPanel } from './RequestErrorPanel';
 
@@ -16,13 +17,16 @@ interface ModelsPanelProps {
 }
 
 type DeleteModelHandler = (model: ModelSummary, trigger: HTMLButtonElement) => void;
+type PriceModelHandler = (model: ModelSummary, trigger: HTMLButtonElement) => void;
 
 export function ModelsPanel({ masterKey, query }: ModelsPanelProps) {
   const [notice, setNotice] = useState<string | null>(null);
   const [registerOpen, setRegisterOpen] = useState(false);
   const [deletingModel, setDeletingModel] = useState<ModelSummary | null>(null);
+  const [pricingModel, setPricingModel] = useState<ModelSummary | null>(null);
   const registerButtonRef = useRef<HTMLButtonElement>(null);
   const deleteTriggerRef = useRef<HTMLElement | null>(null);
+  const priceTriggerRef = useRef<HTMLElement | null>(null);
 
   const count =
     query.status === 'success'
@@ -42,6 +46,12 @@ export function ModelsPanel({ masterKey, query }: ModelsPanelProps) {
     setNotice(null);
     deleteTriggerRef.current = trigger;
     setDeletingModel(model);
+  };
+
+  const handlePricing = (model: ModelSummary, trigger: HTMLButtonElement) => {
+    setNotice(null);
+    priceTriggerRef.current = trigger;
+    setPricingModel(model);
   };
 
   return (
@@ -88,6 +98,7 @@ export function ModelsPanel({ masterKey, query }: ModelsPanelProps) {
           query={query}
           onRegister={openRegister}
           onDelete={handleDelete}
+          onPricing={handlePricing}
         />
       </div>
 
@@ -118,6 +129,15 @@ export function ModelsPanel({ masterKey, query }: ModelsPanelProps) {
           }}
         />
       )}
+
+      {pricingModel !== null && masterKey !== null && (
+        <ModelPricingDialog
+          masterKey={masterKey}
+          model={pricingModel}
+          returnFocusRef={priceTriggerRef}
+          onClose={() => setPricingModel(null)}
+        />
+      )}
     </Panel>
   );
 }
@@ -127,9 +147,10 @@ interface ModelsContentProps {
   query: ModelsQuery;
   onRegister: () => void;
   onDelete: DeleteModelHandler;
+  onPricing: PriceModelHandler;
 }
 
-function ModelsContent({ masterKey, query, onRegister, onDelete }: ModelsContentProps) {
+function ModelsContent({ masterKey, query, onRegister, onDelete, onPricing }: ModelsContentProps) {
   if (masterKey === null) return <ConnectPrompt />;
   if (query.status === 'pending') return <ModelsSkeleton />;
   if (query.status === 'error') {
@@ -158,7 +179,7 @@ function ModelsContent({ masterKey, query, onRegister, onDelete }: ModelsContent
       {query.data.items.length === 0 ? (
         <EmptyRegistry onRegister={onRegister} />
       ) : (
-        <ModelsTable models={query.data.items} onDelete={onDelete} />
+        <ModelsTable models={query.data.items} onDelete={onDelete} onPricing={onPricing} />
       )}
     </>
   );
@@ -219,9 +240,11 @@ function EmptyRegistry({ onRegister }: { onRegister: () => void }) {
 function ModelsTable({
   models,
   onDelete,
+  onPricing,
 }: {
   models: ModelSummary[];
   onDelete: DeleteModelHandler;
+  onPricing: PriceModelHandler;
 }) {
   return (
     <>
@@ -229,12 +252,12 @@ function ModelsTable({
         <table className="w-full table-fixed border-collapse text-left text-[13px]">
           <caption className="sr-only">Registered models</caption>
           <colgroup>
+            <col className="w-[20%]" />
+            <col className="w-[8%]" />
+            <col className="w-[23%]" />
+            <col className="w-[11%]" />
+            <col className="w-[16%]" />
             <col className="w-[22%]" />
-            <col className="w-[9%]" />
-            <col className="w-[25%]" />
-            <col className="w-[12%]" />
-            <col className="w-[18%]" />
-            <col className="w-[14%]" />
           </colgroup>
           <thead>
             <tr className="border-b border-line">
@@ -255,21 +278,29 @@ function ModelsTable({
           </thead>
           <tbody className="divide-y divide-line">
             {models.map((model) => (
-              <ModelRow key={model.id} model={model} onDelete={onDelete} />
+              <ModelRow key={model.id} model={model} onDelete={onDelete} onPricing={onPricing} />
             ))}
           </tbody>
         </table>
       </div>
       <ul className="divide-y divide-line md:hidden">
         {models.map((model) => (
-          <ModelCard key={model.id} model={model} onDelete={onDelete} />
+          <ModelCard key={model.id} model={model} onDelete={onDelete} onPricing={onPricing} />
         ))}
       </ul>
     </>
   );
 }
 
-function ModelRow({ model, onDelete }: { model: ModelSummary; onDelete: DeleteModelHandler }) {
+function ModelRow({
+  model,
+  onDelete,
+  onPricing,
+}: {
+  model: ModelSummary;
+  onDelete: DeleteModelHandler;
+  onPricing: PriceModelHandler;
+}) {
   return (
     <tr
       className={`transition-colors hover:bg-surface-sunken/40 ${
@@ -293,21 +324,40 @@ function ModelRow({ model, onDelete }: { model: ModelSummary; onDelete: DeleteMo
         <time dateTime={model.created_at}>{formatCreatedAt(model.created_at)}</time>
       </td>
       <td className="py-2.5 text-right align-top">
-        <Button
-          variant="ghost"
-          onClick={(event) => onDelete(model, event.currentTarget)}
-          aria-label={`Delete ${model.id}`}
-          title="Delete model"
-          className="shrink-0 px-2 py-1 text-[12px] text-danger hover:bg-danger-soft hover:text-danger"
-        >
-          <TrashIcon className="size-3.5" />
-        </Button>
+        <div className="flex justify-end gap-0.5">
+          <Button
+            variant="ghost"
+            onClick={(event) => onPricing(model, event.currentTarget)}
+            aria-label={`Pricing for ${model.id}`}
+            title="Pricing"
+            className="shrink-0 px-2 py-1 text-[12px]"
+          >
+            <TagIcon className="size-3.5" />
+          </Button>
+          <Button
+            variant="ghost"
+            onClick={(event) => onDelete(model, event.currentTarget)}
+            aria-label={`Delete ${model.id}`}
+            title="Delete model"
+            className="shrink-0 px-2 py-1 text-[12px] text-danger hover:bg-danger-soft hover:text-danger"
+          >
+            <TrashIcon className="size-3.5" />
+          </Button>
+        </div>
       </td>
     </tr>
   );
 }
 
-function ModelCard({ model, onDelete }: { model: ModelSummary; onDelete: DeleteModelHandler }) {
+function ModelCard({
+  model,
+  onDelete,
+  onPricing,
+}: {
+  model: ModelSummary;
+  onDelete: DeleteModelHandler;
+  onPricing: PriceModelHandler;
+}) {
   return (
     <li className={`py-3 ${model.enabled ? '' : 'bg-surface-sunken/30'}`}>
       <div className="flex items-start justify-between gap-3">
@@ -334,7 +384,16 @@ function ModelCard({ model, onDelete }: { model: ModelSummary; onDelete: DeleteM
           <time dateTime={model.created_at}>{formatCreatedAt(model.created_at)}</time>
         </dd>
       </dl>
-      <div className="mt-2 flex justify-end">
+      <div className="mt-2 flex justify-end gap-2">
+        <Button
+          variant="ghost"
+          onClick={(event) => onPricing(model, event.currentTarget)}
+          aria-label={`Pricing for ${model.id}`}
+          className="shrink-0 px-2 py-1 text-[12px]"
+        >
+          <TagIcon className="size-3.5" />
+          <span>Pricing</span>
+        </Button>
         <Button
           variant="ghost"
           onClick={(event) => onDelete(model, event.currentTarget)}

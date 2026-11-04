@@ -1,4 +1,4 @@
-﻿# LLM-GateAway
+# LLM-GateAway
 
 **English** | [绠€浣撲腑鏂嘳(README.zh-CN.md)
 
@@ -261,7 +261,7 @@ Invoke-RestMethod `
 
 - `since` / `until` default to the last 30 days; passing only `since` makes `until` the current time.
 - `bucket` supports `hour` and `day`; `points` are UTC-aligned and **zero-filled** (max 1000 buckets), ready for charting.
-- The console provides the usage panel; cost fields are returned by the usage API but the console does not chart them yet.
+- The console shows list and billed cost in the usage totals, per key, and beside the chart.
 
 ## Tenant quotas and rate limits
 
@@ -517,6 +517,7 @@ Enter the master key to view backend health, the model registry, the usage panel
 
 - Register a model (id, provider, upstream model, enabled) with client-side validation mirroring the API; provider configuration is still a backend concern.
 - Delete a model with confirmation; deleting it also removes it from every tenant allowlist.
+- Manage the per-model price list: versions newest first, with an append form (prices are per million tokens and a new version applies from its effective date).
 - The registry list with provider, upstream model, status, and creation time.
 
 The usage panel provides:
@@ -532,6 +533,7 @@ The Access tab manages tenants and API keys:
 
 - Create tenants and edit the monthly token quota / requests-per-minute limit; empty input clears a limit.
 - Set each tenant's model access policy (`All models` or an explicit allowlist) in a dedicated dialog. The dialog shows an explicit warning when an empty allowlist would block every model.
+- Manage each tenant's plan (tokens, overage switch) and monthly cost budget, with the current period summary: used / covered / billable tokens, list and billed cost, and budget remaining.
 - Create keys per tenant with an optional expiry. The plaintext is shown once, can be copied, and is never written to storage, the URL, or the query cache; closing an uncopied dialog asks for confirmation.
 - Revoke keys with confirmation. Revoked and expired keys are labeled, and only non-revoked keys offer the revoke action.
 
@@ -624,4 +626,3 @@ Repository-level skill: [`.opencode/skills/llm-gateway/SKILL.md`](.opencode/skil
 ## License
 
 MIT 鈥?see [LICENSE](LICENSE).
-

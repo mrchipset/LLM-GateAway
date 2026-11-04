@@ -1,5 +1,5 @@
 import type { UsagePoint } from '../api/client';
-import { formatExactNumber, formatUsageAxis, formatUsageDay } from '../lib/format';
+import { formatCost, formatExactNumber, formatUsageAxis, formatUsageDay } from '../lib/format';
 
 const CHART_WIDTH = 600;
 const CHART_HEIGHT = 160;
@@ -18,6 +18,7 @@ export function UsageChart({ points }: UsageChartProps) {
   }
 
   const maxTotal = points.reduce((max, point) => Math.max(max, point.total_tokens), 0);
+  const billedTotal = points.reduce((sum, point) => sum + Number(point.billed_cost), 0);
   const slot = CHART_WIDTH / points.length;
   const barWidth = Math.max(1, Math.min(slot * 0.62, 36));
   const middlePoint = points.length >= 3 ? points[Math.floor((points.length - 1) / 2)] : undefined;
@@ -103,6 +104,9 @@ export function UsageChart({ points }: UsageChartProps) {
       </div>
       <p className="mt-1.5 font-mono text-[10px] leading-4 text-ink-muted">
         Last bar covers today so far (UTC).
+      </p>
+      <p className="mt-0.5 font-mono text-[10px] tabular-nums text-ink-muted">
+        Billed cost in this range: {formatCost(String(billedTotal))}
       </p>
       {allZero && (
         <p className="mt-2 text-[11px] text-ink-muted">No tokens recorded in this range.</p>

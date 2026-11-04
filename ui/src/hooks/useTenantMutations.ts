@@ -25,8 +25,11 @@ export function useUpdateTenantLimits(masterKey: string) {
   return useMutation({
     mutationFn: (args: { tenantId: string; patch: TenantLimitsPatch }) =>
       updateTenantLimits(masterKey, args.tenantId, args.patch),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: queryKeys.tenants });
+    onSuccess: async (_tenant, args) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.tenants }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.tenantBilling(args.tenantId) }),
+      ]);
     },
   });
 }

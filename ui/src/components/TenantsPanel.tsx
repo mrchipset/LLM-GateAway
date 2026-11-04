@@ -8,6 +8,7 @@ import { CheckCircleIcon, KeyIcon, RefreshIcon } from './Icons';
 import { Panel, PanelHeader } from './Panel';
 import { RequestErrorPanel } from './RequestErrorPanel';
 import { TenantCreateForm } from './TenantCreateForm';
+import { TenantBillingDialog } from './TenantBillingDialog';
 import { TenantEditDialog } from './TenantEditDialog';
 import { TenantModelAccessDialog } from './TenantModelAccessDialog';
 import { EmptyTenants, TenantsPagination, TenantsSkeleton, TenantsTable } from './TenantsTable';
@@ -47,8 +48,10 @@ function ConnectedTenantsPanel({ masterKey }: { masterKey: string }) {
   const [notice, setNotice] = useState<string | null>(null);
   const [editingTenant, setEditingTenant] = useState<TenantSummary | null>(null);
   const [accessTenant, setAccessTenant] = useState<TenantSummary | null>(null);
+  const [billingTenant, setBillingTenant] = useState<TenantSummary | null>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const accessTriggerRef = useRef<HTMLElement | null>(null);
+  const billingTriggerRef = useRef<HTMLElement | null>(null);
   const pageQuery = useTenantPage(masterKey, { limit: TENANT_PAGE_SIZE, offset });
 
   const count =
@@ -70,6 +73,12 @@ function ConnectedTenantsPanel({ masterKey }: { masterKey: string }) {
     setAccessTenant(tenant);
   };
 
+  const handleEditBilling = (tenant: TenantSummary, trigger: HTMLButtonElement) => {
+    setNotice(null);
+    billingTriggerRef.current = trigger;
+    setBillingTenant(tenant);
+  };
+
   const handleCreated = () => {
     setOffset(0);
     setNotice('Tenant created.');
@@ -83,6 +92,11 @@ function ConnectedTenantsPanel({ masterKey }: { masterKey: string }) {
   const handleAccessSaved = (message: string) => {
     setNotice(message);
     setAccessTenant(null);
+  };
+
+  const handleBillingSaved = (message: string) => {
+    setNotice(message);
+    setBillingTenant(null);
   };
 
   return (
@@ -144,6 +158,7 @@ function ConnectedTenantsPanel({ masterKey }: { masterKey: string }) {
             query={pageQuery}
             onEdit={handleEdit}
             onEditModelAccess={handleEditModelAccess}
+            onEditBilling={handleEditBilling}
             onPrevious={() =>
               setOffset(Math.max(0, (pageQuery.data?.offset ?? offset) - TENANT_PAGE_SIZE))
             }
@@ -171,6 +186,16 @@ function ConnectedTenantsPanel({ masterKey }: { masterKey: string }) {
           onSaved={handleAccessSaved}
         />
       )}
+
+      {billingTenant !== null && (
+        <TenantBillingDialog
+          masterKey={masterKey}
+          tenant={billingTenant}
+          returnFocusRef={billingTriggerRef}
+          onClose={() => setBillingTenant(null)}
+          onSaved={handleBillingSaved}
+        />
+      )}
     </Panel>
   );
 }
@@ -179,6 +204,7 @@ interface TenantDirectoryProps {
   query: TenantPageQuery;
   onEdit: (tenant: TenantSummary, trigger: HTMLButtonElement) => void;
   onEditModelAccess: (tenant: TenantSummary, trigger: HTMLButtonElement) => void;
+  onEditBilling: (tenant: TenantSummary, trigger: HTMLButtonElement) => void;
   onPrevious: () => void;
   onNext: () => void;
 }
@@ -187,6 +213,7 @@ function TenantDirectory({
   query,
   onEdit,
   onEditModelAccess,
+  onEditBilling,
   onPrevious,
   onNext,
 }: TenantDirectoryProps) {
@@ -209,6 +236,7 @@ function TenantDirectory({
         tenants={query.data.items}
         onEdit={onEdit}
         onEditModelAccess={onEditModelAccess}
+        onEditBilling={onEditBilling}
       />
       <TenantsPagination
         total={query.data.total}

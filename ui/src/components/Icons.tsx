@@ -124,6 +124,25 @@ export function EditIcon({ className }: IconProps) {
   );
 }
 
+export function BillingIcon({ className }: IconProps) {
+  return (
+    <svg {...iconProps} className={className}>
+      <rect x="2.4" y="3.1" width="11.2" height="9.8" rx="1.4" />
+      <path d="M2.4 6.4h11.2" />
+      <path d="M5.2 9.2h2.4M9.8 9.2h1" />
+    </svg>
+  );
+}
+
+export function TagIcon({ className }: IconProps) {
+  return (
+    <svg {...iconProps} className={className}>
+      <path d="M2.7 8.2 8.2 2.7h4.9v4.9l-5.5 5.5a1.2 1.2 0 0 1-1.7 0l-3.2-3.2a1.2 1.2 0 0 1 0-1.7Z" />
+      <circle cx="10.4" cy="5.3" r="0.9" />
+    </svg>
+  );
+}
+
 export function CloseIcon({ className }: IconProps) {
   return (
     <svg {...iconProps} className={className}>

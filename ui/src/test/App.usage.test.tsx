@@ -20,6 +20,9 @@ const TENANTS = [
     name: 'Acme',
     created_at: '2026-09-01T00:00:00Z',
     monthly_token_quota: 1_000_000,
+    plan_tokens: null,
+    plan_allow_overage: false,
+    monthly_cost_budget: null,
     requests_per_minute: 60,
     audit_enabled: false,
     model_access_mode: 'all',
@@ -29,6 +32,9 @@ const TENANTS = [
     name: 'Solo',
     created_at: '2026-09-02T00:00:00Z',
     monthly_token_quota: null,
+    plan_tokens: null,
+    plan_allow_overage: false,
+    monthly_cost_budget: null,
     requests_per_minute: null,
     audit_enabled: false,
     model_access_mode: 'all',
@@ -41,6 +47,10 @@ const SUMMARY = {
   cached_tokens: 100_000,
   total_tokens: 1_500_000,
   requests: 42,
+  covered_tokens: 900_000,
+  billable_tokens: 600_000,
+  list_cost: '1.050000',
+  billed_cost: '0.420000',
   by_model: [],
 };
 
@@ -54,6 +64,10 @@ const SERIES = {
       cached_tokens: 10,
       total_tokens: 100,
       requests: 2,
+      covered_tokens: 80,
+      billable_tokens: 20,
+      list_cost: '0.020000',
+      billed_cost: '0.010000',
     },
     {
       bucket_start: '2026-10-02T00:00:00Z',
@@ -62,6 +76,10 @@ const SERIES = {
       cached_tokens: 0,
       total_tokens: 0,
       requests: 0,
+      covered_tokens: 0,
+      billable_tokens: 0,
+      list_cost: '0.000000',
+      billed_cost: '0.000000',
     },
     {
       bucket_start: '2026-10-03T00:00:00Z',
@@ -70,6 +88,10 @@ const SERIES = {
       cached_tokens: 5,
       total_tokens: 50,
       requests: 1,
+      covered_tokens: 40,
+      billable_tokens: 10,
+      list_cost: '0.010000',
+      billed_cost: '0.005000',
     },
   ],
 };
@@ -84,6 +106,10 @@ const KEYS = [
     cached_tokens: 90_000,
     total_tokens: 1_100_000,
     requests: 30,
+    covered_tokens: 800_000,
+    billable_tokens: 300_000,
+    list_cost: '0.900000',
+    billed_cost: '0.300000',
   },
   {
     api_key_id: '22222222-2222-4222-8222-222222222222',
@@ -94,6 +120,10 @@ const KEYS = [
     cached_tokens: 10_000,
     total_tokens: 400_000,
     requests: 10,
+    covered_tokens: 100_000,
+    billable_tokens: 300_000,
+    list_cost: '0.150000',
+    billed_cost: '0.120000',
   },
   {
     api_key_id: '33333333-3333-4333-8333-333333333333',
@@ -104,6 +134,10 @@ const KEYS = [
     cached_tokens: 0,
     total_tokens: 0,
     requests: 0,
+    covered_tokens: 0,
+    billable_tokens: 0,
+    list_cost: '0.000000',
+    billed_cost: '0.000000',
   },
 ];
 
@@ -308,6 +342,10 @@ describe('usage panel', () => {
       cached_tokens: 0,
       total_tokens: 0,
       requests: 0,
+      covered_tokens: 0,
+      billable_tokens: 0,
+      list_cost: '0.000000',
+      billed_cost: '0.000000',
     }));
     installUsageMock({
       '/api/v1/usage/series': () => jsonResponse({ bucket: 'day', points: zeroPoints }),

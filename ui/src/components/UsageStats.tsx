@@ -1,4 +1,5 @@
 import type { UsageSummaryResponse } from '../api/client';
+import { formatCost } from '../lib/format';
 import { CompactNumber } from './CompactNumber';
 
 interface UsageStatsProps {
@@ -41,39 +42,64 @@ export function UsageStats({ summary }: UsageStatsProps) {
   ];
 
   return (
-    <dl
-      aria-label="Usage totals"
-      className="grid grid-cols-2 gap-px overflow-hidden rounded-md border border-line bg-line sm:grid-cols-5"
-    >
-      {cells.map((cell) => (
-        <div
-          key={cell.key}
-          className={`px-3 py-2.5 ${
-            cell.emphasis ? 'col-span-2 bg-surface-sunken/70 sm:col-span-1' : 'bg-surface'
-          }`}
-        >
-          <dt className="font-mono text-[10px] font-medium uppercase tracking-[0.1em] text-ink-muted">
-            {cell.label}
-          </dt>
-          <dd
-            className={`mt-1 font-mono text-[19px] font-medium leading-none tracking-[-0.02em] ${
-              cell.emphasis ? 'text-accent' : 'text-ink'
+    <div className="space-y-2">
+      <dl
+        aria-label="Usage totals"
+        className="grid grid-cols-2 gap-px overflow-hidden rounded-md border border-line bg-line sm:grid-cols-5"
+      >
+        {cells.map((cell) => (
+          <div
+            key={cell.key}
+            className={`px-3 py-2.5 ${
+              cell.emphasis ? 'col-span-2 bg-surface-sunken/70 sm:col-span-1' : 'bg-surface'
             }`}
           >
-            <CompactNumber value={cell.value} unit={cell.unit} />
-          </dd>
-          {cell.note !== undefined && (
-            <p className="mt-1.5 text-[10px] leading-tight text-ink-muted">{cell.note}</p>
-          )}
-        </div>
-      ))}
-    </dl>
+            <dt className="font-mono text-[10px] font-medium uppercase tracking-[0.1em] text-ink-muted">
+              {cell.label}
+            </dt>
+            <dd
+              className={`mt-1 font-mono text-[19px] font-medium leading-none tracking-[-0.02em] ${
+                cell.emphasis ? 'text-accent' : 'text-ink'
+              }`}
+            >
+              <CompactNumber value={cell.value} unit={cell.unit} />
+            </dd>
+            {cell.note !== undefined && (
+              <p className="mt-1.5 text-[10px] leading-tight text-ink-muted">{cell.note}</p>
+            )}
+          </div>
+        ))}
+      </dl>
+
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 rounded-md border border-line bg-surface-sunken/60 px-3 py-2">
+        <span className="font-mono text-[10px] font-medium uppercase tracking-[0.1em] text-ink-muted">
+          Cost
+        </span>
+        <dl className="flex flex-wrap items-center gap-x-5 gap-y-1">
+          <div className="flex items-baseline gap-1.5">
+            <dt className="text-[11px] text-ink-muted">List cost</dt>
+            <dd className="font-mono text-[13px] tabular-nums text-ink">
+              {formatCost(summary.list_cost)}
+            </dd>
+          </div>
+          <div className="flex items-baseline gap-1.5">
+            <dt className="text-[11px] text-ink-muted">Billed cost</dt>
+            <dd className="font-mono text-[13px] font-medium tabular-nums text-accent">
+              {formatCost(summary.billed_cost)}
+            </dd>
+          </div>
+        </dl>
+        <p className="ml-auto text-[10.5px] text-ink-muted">
+          Billed cost counts tokens over the plan. Amounts use the stored price currency.
+        </p>
+      </div>
+    </div>
   );
 }
 
 export function UsageStatsSkeleton() {
   return (
-    <div>
+    <div className="space-y-2">
       <span className="sr-only">Loading usage totals…</span>
       <div
         aria-hidden="true"
@@ -88,6 +114,14 @@ export function UsageStatsSkeleton() {
             <span className="mt-2 block h-5 w-1/2 animate-pulse rounded bg-surface-sunken motion-reduce:animate-none" />
           </div>
         ))}
+      </div>
+      <div
+        aria-hidden="true"
+        className="flex items-center gap-5 rounded-md border border-line bg-surface-sunken/60 px-3 py-2"
+      >
+        <span className="h-2.5 w-8 animate-pulse rounded bg-surface-sunken motion-reduce:animate-none" />
+        <span className="h-2.5 w-20 animate-pulse rounded bg-surface-sunken motion-reduce:animate-none" />
+        <span className="h-2.5 w-20 animate-pulse rounded bg-surface-sunken motion-reduce:animate-none" />
       </div>
     </div>
   );

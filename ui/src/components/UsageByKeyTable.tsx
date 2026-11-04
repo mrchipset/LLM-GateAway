@@ -1,4 +1,5 @@
 import type { KeyUsageSummary } from '../api/client';
+import { formatCost } from '../lib/format';
 import { CompactNumber } from './CompactNumber';
 
 interface UsageByKeyTableProps {
@@ -45,6 +46,14 @@ function NumericCell({ value, unit }: { value: number; unit: string }) {
   );
 }
 
+function CostCell({ value }: { value: string }) {
+  return (
+    <td className="py-2.5 pr-3 text-right align-top font-mono text-[11.5px] tabular-nums last:pr-0">
+      {formatCost(value)}
+    </td>
+  );
+}
+
 export function UsageByKeyTable({ items, limit }: UsageByKeyTableProps) {
   if (items.length === 0) {
     return (
@@ -63,16 +72,29 @@ export function UsageByKeyTable({ items, limit }: UsageByKeyTableProps) {
         <table className="w-full table-fixed border-collapse text-left text-[13px]">
           <caption className="sr-only">Usage by API key</caption>
           <colgroup>
-            <col className="w-[30%]" />
+            <col className="w-[22%]" />
+            <col className="w-[8%]" />
+            <col className="w-[10%]" />
+            <col className="w-[10%]" />
+            <col className="w-[9%]" />
             <col className="w-[11%]" />
-            <col className="w-[15%]" />
-            <col className="w-[15%]" />
-            <col className="w-[14%]" />
-            <col className="w-[15%]" />
+            <col className="w-[10%]" />
+            <col className="w-[10%]" />
+            <col className="w-[10%]" />
           </colgroup>
           <thead>
             <tr className="border-b border-line">
-              {['Key', 'Requests', 'Input', 'Output', 'Cached', 'Total'].map((label, index) => (
+              {[
+                'Key',
+                'Requests',
+                'Input',
+                'Output',
+                'Cached',
+                'Total',
+                'Covered',
+                'Billable',
+                'Billed cost',
+              ].map((label, index) => (
                 <th
                   key={label}
                   scope="col"
@@ -96,6 +118,9 @@ export function UsageByKeyTable({ items, limit }: UsageByKeyTableProps) {
                 <NumericCell value={item.completion_tokens} unit="tokens" />
                 <NumericCell value={item.cached_tokens} unit="tokens" />
                 <NumericCell value={item.total_tokens} unit="tokens" />
+                <NumericCell value={item.covered_tokens} unit="tokens" />
+                <NumericCell value={item.billable_tokens} unit="tokens" />
+                <CostCell value={item.billed_cost} />
               </tr>
             ))}
           </tbody>
@@ -126,6 +151,16 @@ export function UsageByKeyTable({ items, limit }: UsageByKeyTableProps) {
               <dd className="text-right font-mono text-[11.5px]">
                 <CompactNumber value={item.total_tokens} unit="tokens" />
               </dd>
+              <dt className="text-ink-muted">Covered</dt>
+              <dd className="text-right font-mono text-[11.5px]">
+                <CompactNumber value={item.covered_tokens} unit="tokens" />
+              </dd>
+              <dt className="text-ink-muted">Billable</dt>
+              <dd className="text-right font-mono text-[11.5px]">
+                <CompactNumber value={item.billable_tokens} unit="tokens" />
+              </dd>
+              <dt className="text-ink-muted">Billed cost</dt>
+              <dd className="text-right font-mono text-[11.5px]">{formatCost(item.billed_cost)}</dd>
             </dl>
           </li>
         ))}
@@ -147,9 +182,9 @@ export function UsageTableSkeleton() {
         {[0, 1, 2, 3].map((row) => (
           <div
             key={row}
-            className="grid grid-cols-[1.6fr_0.7fr_0.9fr_0.9fr_0.8fr_0.9fr] gap-4 rounded border border-line/70 px-3 py-3"
+            className="grid grid-cols-[1.4fr_0.6fr_0.7fr_0.7fr_0.6fr_0.7fr_0.7fr_0.7fr_0.7fr] gap-3 rounded border border-line/70 px-3 py-3"
           >
-            {[0, 1, 2, 3, 4, 5].map((cell) => (
+            {[0, 1, 2, 3, 4, 5, 6, 7, 8].map((cell) => (
               <span
                 key={cell}
                 className="h-3 w-4/5 animate-pulse rounded bg-surface-sunken motion-reduce:animate-none"

@@ -50,6 +50,11 @@ const usageAxisFormatter = new Intl.DateTimeFormat('en-US', {
   day: 'numeric',
 });
 
+const costFormatter = new Intl.NumberFormat('en-US', {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 6,
+});
+
 export function formatCreatedAt(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return 'Invalid date';
@@ -92,4 +97,15 @@ export function formatUsageAxis(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return 'Invalid date';
   return usageAxisFormatter.format(date);
+}
+
+export function formatCost(value: string): string {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return '—';
+  return costFormatter.format(amount);
+}
+
+export function trimDecimal(value: string): string {
+  const trimmed = value.includes('.') ? value.replace(/0+$/, '').replace(/\.$/, '') : value;
+  return trimmed === '' ? '0' : trimmed;
 }

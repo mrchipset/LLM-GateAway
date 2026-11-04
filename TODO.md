@@ -273,7 +273,7 @@
   - 验收：同一请求的 token 与成本可复算一致；历史账单不受调价影响；预算超额返回稳定错误码并有指标。
   - 注意：不要硬编码第三方当前价格，价格来自配置或数据库。
   - 进度（2026-11-04）：`model_prices` 生效时间版本化（迁移 `0008`，唯一 `(model_id, effective_from)`）；`usage_records` 记录 `covered_tokens`/`billable_tokens`/`list_cost`/`billed_cost`（Decimal，6 位）；租户级 `plan_tokens`（月度 token 套餐、不结转）+ `plan_allow_overage` + `monthly_cost_budget`；429 `plan_allowance_exhausted` / `budget_exceeded`，无价时 503 `model_price_missing`；用量 API 与 `GET /tenants/{id}/billing` 暴露成本；指标 `gateway_rejections{reason}`。
-  - 未做：并发预扣（当前允许一个请求级超支窗口）、开票/多币种/per-key 预算、充值包与结转、管理台编辑价格与套餐、成本图表。设计说明见 `notes/billing.md`。
+  - 未做：并发预扣（当前允许一个请求级超支窗口）、开票/多币种/per-key 预算、充值包与结转。管理台已提供价格版本、租户套餐/预算与成本展示（2026-11-04）。设计说明见 `notes/billing.md`。
 
 - [ ] **G1.5 运行时与生命周期参数化**
   - 现状：连接池大小硬编码、无语句超时、启动未配 workers、无优雅停机排空、流式无 keepalive/空闲超时。
