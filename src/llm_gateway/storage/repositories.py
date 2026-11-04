@@ -48,6 +48,11 @@ def _require_uuid(value: object, field: str) -> None:
         raise ValueError(f"{field} must be a UUID")
 
 
+def _require_optional_uuid_value(value: object, field: str) -> None:
+    if value is not None and not isinstance(value, UUID):
+        raise ValueError(f"{field} must be a UUID or None")
+
+
 def _require_optional_positive_int(value: object, field: str) -> None:
     if value is None:
         return
@@ -824,3 +829,170 @@ class AuditRepository(Protocol):
     async def get_request(self, *, request_id: str) -> AuditRequestRecord | None: ...
 
     async def get_diff(self, *, request_id: str) -> AuditTurnDiffRecord | None: ...
+
+
+class AdminRole(StrEnum):
+    OWNER = "owner"
+    OPERATOR = "operator"
+    AUDITOR = "auditor"
+
+
+class AdminActorType(StrEnum):
+    ADMIN = "admin"
+    MASTER = "master"
+    BOOTSTRAP = "bootstrap"
+
+
+@dataclass(frozen=True, slots=True)
+class AdminUser:
+    """A human or service identity allowed to use the management API."""
+
+    id: UUID
+    username: str
+    display_name: str
+    role: AdminRole
+    password_hash: str
+    active: bool
+    created_at: datetime
+    updated_at: datetime
+    password_changed_at: datetime
+    last_login_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        _require_uuid(self.id, "id")
+        _require_non_blank(self.username, "username")
+        _require_non_blank(self.display_name, "display_name")
+        if not isinstance(self.role, AdminRole):
+            raise ValueError("role must be an AdminRole")
+        _require_non_blank(self.password_hash, "password_hash")
+        if not isinstance(self.active, bool):
+            raise ValueError("active must be a boolean")
+        for field in ("created_at", "updated_at", "password_changed_at"):
+            _require_aware(getattr(self, field), field)
+        _require_optional_aware(self.last_login_at, "last_login_at")
+
+
+@dataclass(frozen=True, slots=True)
+class AdminSession:
+    id: UUID
+    admin_id: UUID
+    token_hash: str
+    csrf_hash: str
+    created_at: datetime
+    expires_at: datetime
+    revoked_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        _require_uuid(self.id, "id")
+        _require_uuid(self.admin_id, "admin_id")
+        _require_key_hash(self.token_hash)
+        _require_key_hash(self.csrf_hash)
+        _require_aware(self.created_at, "created_at")
+        _require_aware(self.expires_at, "expires_at")
+        _require_optional_aware(self.revoked_at, "revoked_at")
+        if self.expires_at <= self.created_at:
+            raise ValueError("expires_at must be after created_at")
+
+    def is_active(self, now: datetime) -> bool:
+        return self.revoked_at is None and self.expires_at > now
+
+
+@dataclass(frozen=True, slots=True)
+class AdminAuditEvent:
+    """One management action. Metadata only: never secrets or payload bodies."""
+
+    id: UUID
+    actor_type: AdminActorType
+    actor_id: UUID | None
+    actor_name: str
+    action: str
+    target_type: str
+    target_id: str
+    before: dict[str, Any] | None
+    after: dict[str, Any] | None
+    request_id: str | None
+    created_at: datetime
+
+    def __post_init__(self) -> None:
+        _require_uuid(self.id, "id")
+        if not isinstance(self.actor_type, AdminActorType):
+            raise ValueError("actor_type must be an AdminActorType")
+        _require_optional_uuid_value(self.actor_id, "actor_id")
+        _require_non_blank(self.actor_name, "actor_name")
+        _require_non_blank(self.action, "action")
+        _require_non_blank(self.target_type, "target_type")
+        _require_non_blank(self.target_id, "target_id")
+        _require_aware(self.created_at, "created_at")
+
+
+class DuplicateAdminError(Exception):
+    def __init__(self, username: str) -> None:
+        super().__init__(f"admin '{username}' already exists")
+        self.username = username
+
+
+class LastOwnerError(Exception):
+    """Raised when an update would leave the system without an active owner."""
+
+    def __init__(self) -> None:
+        super().__init__("at least one active owner is required")
+
+
+class AdminUserRepository(Protocol):
+    async def create_admin(self, admin: AdminUser) -> AdminUser: ...
+
+    async def get_admin(self, admin_id: UUID) -> AdminUser | None: ...
+
+    async def get_admin_by_username(self, username: str) -> AdminUser | None: ...
+
+    async def list_admins(self, *, limit: int, offset: int) -> tuple[Sequence[AdminUser], int]: ...
+
+    async def update_admin(
+        self,
+        admin_id: UUID,
+        *,
+        role: AdminRole | None = None,
+        active: bool | None = None,
+        display_name: str | None = None,
+        password_hash: str | None = None,
+        password_changed_at: datetime | None = None,
+        last_login_at: datetime | None = None,
+        updated_at: datetime,
+    ) -> AdminUser | None: ...
+
+    async def count_active_owners(self) -> int: ...
+
+
+class AdminSessionRepository(Protocol):
+    async def create_session(self, admin_session: AdminSession) -> AdminSession: ...
+
+    async def get_session_by_token_hash(self, token_hash: str) -> AdminSession | None: ...
+
+    async def revoke_session(self, session_id: UUID, *, at: datetime) -> bool: ...
+
+    async def revoke_sessions_for_admin(self, admin_id: UUID, *, at: datetime) -> int: ...
+
+
+class AdminAuditRepository(Protocol):
+    async def record(self, event: AdminAuditEvent) -> None: ...
+
+    async def list_events(
+        self,
+        *,
+        actor_id: UUID | None,
+        action: str | None,
+        target_type: str | None,
+        target_id: str | None,
+        since: datetime | None,
+        until: datetime | None,
+        limit: int,
+        offset: int,
+    ) -> tuple[Sequence[AdminAuditEvent], int]: ...
+
+
+class LoginThrottle(Protocol):
+    async def hit(self, *, key: str, limit: int, window_seconds: int, now: datetime) -> bool:
+        """Return True when the attempt is allowed."""
+        ...
+
+    async def clear(self, *, key: str) -> None: ...

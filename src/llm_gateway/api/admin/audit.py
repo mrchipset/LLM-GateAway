@@ -27,7 +27,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Path, Query
 
-from llm_gateway.auth.dependencies import require_master_key
+from llm_gateway.auth.admin_deps import require_audit_read
 from llm_gateway.container import Container, get_container
 from llm_gateway.errors import ApiError, ApiErrorCode
 from llm_gateway.schemas.audit import (
@@ -50,7 +50,7 @@ from llm_gateway.storage.repositories import (
     AuditTurnDiffRecord,
 )
 
-router = APIRouter(dependencies=[Depends(require_master_key)])
+router = APIRouter(dependencies=[Depends(require_audit_read)])
 
 SESSION_NOT_FOUND_MESSAGE = "Audit session was not found"
 REQUEST_NOT_FOUND_MESSAGE = "Audit request was not found"

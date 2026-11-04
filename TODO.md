@@ -191,10 +191,12 @@
 
 ### G0 门槛级
 
-- [ ] **G0.1 管理面身份与授权（RBAC + 可选 OIDC）**
+- [x] **G0.1 管理面身份与授权（RBAC + 可选 OIDC）**
   - 现状：管理 API 只认单一 master key，权限等同超级管理员；控制台把 master key 存在页面内存。
   - 范围：管理员主体（本地账号，后续可接 OIDC）、角色（owner/operator/auditor/read-only）、路由级权限表、服务端校验（前端只做展示）。
   - 验收：只读角色调用写接口返回 403 且错误码稳定；master key 保留为 break-glass 路径，可显式关闭，使用时写告警日志；角色变更即时生效，无需重启。
+  - 进度（2026-11-04）：本地管理员 + `owner/operator/auditor` 三角色（迁移 `0009`）；scrypt 密码、opaque session（库内只存哈希）、`HttpOnly` cookie + double-submit CSRF；`POST /auth/login|logout`、`GET /auth/me`、`GET/POST/PATCH /admins`；master key 映射 owner 且可用 `GATEWAY_MASTER_KEY_ENABLED=false` 关闭；首个 owner 支持 `bootstrap_admin_*`；最后一名 owner 不可降级/停用；改密撤销会话；登录按用户名 5 次/15 分钟限流。
+  - 未做：OIDC/SSO、按资源的细粒度权限、控制台登录/会话 UI（当前控制台仍用 master key，后端已支持会话）。
 
 - [x] **G0.2 租户级模型访问控制**
   - 现状：模型解析只校验“存在且启用”，不校验调用方是否有权使用；任意租户都能调用最贵的模型。
@@ -204,10 +206,12 @@
   - 未做：按 key 的模型授权、访问策略的管理操作审计（依赖 G0.3）。设计说明见 `notes/model-access.md`。
   - 管理台（2026-11-04）：Models 标签支持注册/删除模型；Access 标签每个租户提供「Model access」对话框（all/allowlist 切换、可搜索勾选、空选封禁警告），保存后失效租户与策略缓存。
 
-- [ ] **G0.3 管理操作审计**
+- [x] **G0.3 管理操作审计**
   - 现状：只有推理请求审计；谁在何时创建/吊销 key、改配额、注册/删除模型无记录。
   - 范围：独立表（actor、action、target_type、target_id、before/after、request_id、时间），只记录可审计的元数据，不记录密钥明文。
   - 验收：写接口全覆盖并有单元测试；审计写入失败不阻断业务但必须可观测；只读角色可查询但不能修改。
+  - 进度（2026-11-04）：`admin_audit_events`（迁移 `0009`）；覆盖 admin 创建/修改、租户创建/修改、租户模型授权替换、API key 创建/吊销、模型创建/删除、价格版本创建、bootstrap；快照只含业务字段；写入失败计数 `gateway_admin_audit_write_failures` 并告警日志；`GET /api/v1/admin-audit` 支持 actor/action/target/时间过滤，仅 owner/auditor 可读。
+  - 未做：审计导出与保留期（归 G0.7）、登录成功/失败事件是否入库（当前只写结构化日志与指标）。
 
 - [x] **G0.4 指标与告警最小集**
   - 现状：只有 JSON 日志与 health/ready，无任何 metrics 端点，无法做 SLO、告警与自动扩缩。

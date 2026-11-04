@@ -55,6 +55,10 @@ class Settings(BaseSettings):
     metrics_port: int = Field(default=9464, ge=1, le=65535)
     metrics_service_name: str = "llm-gateway"
     billing_currency: str = "USD"
+    session_ttl_hours: int = Field(default=12, ge=1, le=720)
+    master_key_enabled: bool = True
+    bootstrap_admin_username: str | None = None
+    bootstrap_admin_password: SecretStr | None = None
 
     @field_validator("log_level")
     @classmethod

@@ -13,8 +13,12 @@ from llm_gateway.providers.factory import build_providers
 from llm_gateway.providers.registry import ProviderRegistry
 from llm_gateway.storage.db import Database
 from llm_gateway.storage.memory import (
+    InMemoryAdminAuditRepository,
+    InMemoryAdminSessionRepository,
+    InMemoryAdminUserRepository,
     InMemoryApiKeyRepository,
     InMemoryAuditRepository,
+    InMemoryLoginThrottle,
     InMemoryModelPriceRepository,
     InMemoryModelRepository,
     InMemoryTenantRepository,
@@ -22,8 +26,12 @@ from llm_gateway.storage.memory import (
 )
 from llm_gateway.storage.rate_limits import InMemoryRateLimiter, RateLimiter
 from llm_gateway.storage.repositories import (
+    AdminAuditRepository,
+    AdminSessionRepository,
+    AdminUserRepository,
     ApiKeyRepository,
     AuditRepository,
+    LoginThrottle,
     ModelPriceRepository,
     ModelRepository,
     TenantRepository,
@@ -60,6 +68,10 @@ class Container:
     readiness_checks: tuple[ReadinessCheck, ...] = ()
     database: Database | None = None
     audit: AuditRepository = field(default_factory=InMemoryAuditRepository)
+    admins: AdminUserRepository = field(default_factory=InMemoryAdminUserRepository)
+    admin_sessions: AdminSessionRepository = field(default_factory=InMemoryAdminSessionRepository)
+    admin_audit: AdminAuditRepository = field(default_factory=InMemoryAdminAuditRepository)
+    login_throttle: LoginThrottle = field(default_factory=InMemoryLoginThrottle)
     telemetry: Telemetry | None = None
 
     def __post_init__(self) -> None:
@@ -123,6 +135,10 @@ def build_container(settings: Settings, *, telemetry: Telemetry | None = None) -
             usage=database.usage,
             audit=database.audit,
             rate_limiter=database.rate_limiter,
+            admins=database.admins,
+            admin_sessions=database.admin_sessions,
+            admin_audit=database.admin_audit,
+            login_throttle=database.login_throttle,
             providers=providers,
             readiness_checks=(ReadinessCheck(name="database", check=database.ping),),
             database=database,

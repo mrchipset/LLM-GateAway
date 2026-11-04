@@ -14,6 +14,7 @@ A self-hosted, multi-provider, OpenAI-compatible LLM gateway. Current state: a r
 - Tenant-level monthly token quotas and per-minute request limits (429 + `Retry-After`)
 - Tenant-scoped model access control (default allow-all, or an explicit allowlist)
 - Versioned per-model prices, per-request cost, monthly token plans with optional overage, and a monthly cost budget
+- Admin accounts with owner/operator/auditor roles, cookie sessions with CSRF, a break-glass master key, and an admin action audit trail
 - Management API: `/api/v1/keys`, `/api/v1/models`, `/api/v1/tenants`, `/api/v1/usage/{summary,by-key,series}`, `/api/v1/audit/*`, protected by the master key
 - PostgreSQL persistence (SQLAlchemy 2 async + Alembic), with an in-memory mode for local development
 - Structured JSON logs, request ids, optional W3C trace-context tracing (OTLP/HTTP), `/healthz`, and `/readyz`
@@ -395,6 +396,39 @@ GATEWAY_METRICS_PORT=9464
 - If the port cannot bind, the gateway logs `metrics_endpoint_bind_failed` and keeps serving traffic; it does not lose metrics silently and does not crash.
 - Dashboards, alert rules, and OTLP metric export are not included.
 
+## Admin identity and roles
+
+Management APIs accept two credentials:
+
+1. an admin **session cookie** created by `POST /api/v1/auth/login`;
+2. the **master key** as a break-glass owner path (`GATEWAY_MASTER_KEY_ENABLED=true` by default).
+
+Inference keys never work on management routes.
+
+| Role | Read | Write config | Manage admins | Read admin audit |
+|---|---|---|---|---|
+| `owner` | yes | yes | yes | yes |
+| `operator` | yes | yes | no | no |
+| `auditor` | yes | no | no | yes |
+
+First run: set `GATEWAY_BOOTSTRAP_ADMIN_USERNAME` and `GATEWAY_BOOTSTRAP_ADMIN_PASSWORD` (12+ characters). On startup, if no active owner exists, one owner is created; otherwise the variables are ignored, so leaving them set is harmless. If `GATEWAY_MASTER_KEY_ENABLED=false` and no owner exists, startup fails instead of locking everyone out.
+
+```powershell
+# Log in (writes gw_admin_session and gw_admin_csrf cookies)
+Invoke-WebRequest -Method Post -Uri http://127.0.0.1:4000/api/v1/auth/login `
+  -ContentType "application/json" -SessionVariable session `
+  -Body '{"username":"root","password":"<bootstrap password>"}'
+
+# Read-only calls need only the session cookie
+Invoke-RestMethod -Uri http://127.0.0.1:4000/api/v1/tenants -WebSession $session
+```
+
+- The session cookie is `HttpOnly`, `SameSite=Lax`, and `Secure` in production; the TTL is `GATEWAY_SESSION_TTL_HOURS` (default 12).
+- State-changing calls made with a session must echo the readable `gw_admin_csrf` cookie in the `x-csrf-token` header; a missing or wrong token returns 403 `csrf_failed`.
+- Login is throttled to 5 failed attempts per username per 15 minutes and returns 429 `login_throttled`.
+- `PATCH /api/v1/admins/{id}` changes role, active flag, display name, or password. At least one active owner must remain, and a password change revokes that admin's sessions.
+- `GET /api/v1/admin-audit` (owner/auditor) lists actions with actor, target, before/after business fields, and request id. It never contains passwords, tokens, or key material.
+
 ## Configuration
 
 | Variable | Description ||---|---|
@@ -425,6 +459,10 @@ GATEWAY_METRICS_PORT=9464
 | `GATEWAY_METRICS_PORT` | Metrics bind port, default `9464` |
 | `GATEWAY_METRICS_SERVICE_NAME` | `service.name` resource attribute, default `llm-gateway` |
 | `GATEWAY_BILLING_CURRENCY` | Currency for prices and billing summaries, default `USD` |
+| `GATEWAY_MASTER_KEY_ENABLED` | Accept the master key as a break-glass owner credential, default `true` |
+| `GATEWAY_SESSION_TTL_HOURS` | Admin session lifetime, default 12 |
+| `GATEWAY_BOOTSTRAP_ADMIN_USERNAME` | Optional first-run owner username (3–64 chars, `a-z0-9._-`) |
+| `GATEWAY_BOOTSTRAP_ADMIN_PASSWORD` | Optional first-run owner password (12+ chars); ignored once an owner exists |
 
 `production` requires the `postgres` backend, disables the fake provider, and rejects placeholder or short master keys, so sample configuration cannot be deployed by accident.
 
@@ -599,6 +637,7 @@ design.md            LLM-GateAway design guidance
 - Rate limiting uses a fixed 60-second window at tenant level only; the memory backend counts per process.
 - Creating a key requires `tenant_id` (a breaking change for old callers); there is no tenant delete or rename API.
 - Model access is tenant-scoped only: no per-key scoping and no per-model rate limits.
+- The console still authenticates with the master key; the admin session UI is the next change. The backend already accepts sessions for every management route.
 - `usage_records` has no retention or archival job and grows with traffic; cost is computed and stored per request, but there is no invoicing, no currency conversion, and no multi-currency price list.
 - Tracing covers the server span and per-attempt upstream spans only: no database spans and no tail-based sampling.
 - Metrics expose counters and histograms but ship without dashboards, alert rules, or OTLP metric export; database pool occupancy is not exported yet.

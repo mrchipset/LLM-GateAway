@@ -5,7 +5,8 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Query, Response
 
-from llm_gateway.auth.dependencies import require_master_key
+from llm_gateway.auth.admin_auth import AdminPrincipal
+from llm_gateway.auth.admin_deps import current_admin, require_write_access
 from llm_gateway.auth.keys import generate_api_key
 from llm_gateway.container import Container, get_container
 from llm_gateway.errors import ApiError, ApiErrorCode
@@ -15,9 +16,13 @@ from llm_gateway.schemas.admin import (
     CreateApiKeyRequest,
     CreatedApiKeyResponse,
 )
+from llm_gateway.services.admin_audit import (
+    key_snapshot,
+    record_admin_event_safely,
+)
 from llm_gateway.storage.repositories import UnknownTenantError
 
-router = APIRouter(dependencies=[Depends(require_master_key)])
+router = APIRouter()
 
 PaginationLimit = Annotated[int, Query(ge=1, le=100)]
 PaginationOffset = Annotated[int, Query(ge=0)]
@@ -36,6 +41,7 @@ def _tenant_not_found(tenant_id: UUID) -> ApiError:
 @router.post("/keys", response_model=CreatedApiKeyResponse, status_code=201)
 async def create_api_key(
     payload: CreateApiKeyRequest,
+    principal: Annotated[AdminPrincipal, Depends(require_write_access)],
     container: Annotated[Container, Depends(get_container)],
 ) -> CreatedApiKeyResponse:
     now = container.clock.now()
@@ -62,6 +68,15 @@ async def create_api_key(
         # The tenant can disappear between validation and the insert.
         raise _tenant_not_found(payload.tenant_id) from exc
 
+    await record_admin_event_safely(
+        container=container,
+        principal=principal,
+        action="api_key.created",
+        target_type="api_key",
+        target_id=str(record.id),
+        after=key_snapshot(record),
+    )
+
     # The plaintext secret is returned exactly once and never logged or stored.
     return CreatedApiKeyResponse(
         id=record.id,
@@ -76,6 +91,7 @@ async def create_api_key(
 
 @router.get("/keys", response_model=ApiKeyListResponse)
 async def list_api_keys(
+    _: Annotated[AdminPrincipal, Depends(current_admin)],
     container: Annotated[Container, Depends(get_container)],
     tenant_id: UUID | None = None,
     limit: PaginationLimit = 50,
@@ -111,8 +127,10 @@ async def list_api_keys(
 @router.delete("/keys/{key_id}", status_code=204)
 async def revoke_api_key(
     key_id: UUID,
+    principal: Annotated[AdminPrincipal, Depends(require_write_access)],
     container: Annotated[Container, Depends(get_container)],
 ) -> Response:
+    existing = await container.api_keys.get_key(key_id)
     revoked = await container.api_keys.revoke_key(key_id, container.clock.now())
     if not revoked:
         raise ApiError(
@@ -120,5 +138,17 @@ async def revoke_api_key(
             code=ApiErrorCode.KEY_NOT_FOUND,
             message="API key not found or already revoked",
             error_type="invalid_request_error",
+        )
+
+    if existing is not None:
+        before = key_snapshot(existing)
+        await record_admin_event_safely(
+            container=container,
+            principal=principal,
+            action="api_key.revoked",
+            target_type="api_key",
+            target_id=str(key_id),
+            before=before,
+            after={**before, "revoked": True},
         )
     return Response(status_code=204)

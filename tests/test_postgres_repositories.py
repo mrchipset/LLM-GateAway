@@ -22,16 +22,23 @@ from llm_gateway.providers.base import ProviderName
 from llm_gateway.storage.db import Database
 from llm_gateway.storage.repositories import (
     DEFAULT_TENANT_ID,
+    AdminActorType,
+    AdminAuditEvent,
+    AdminRole,
+    AdminSession,
+    AdminUser,
     ApiKeyRecord,
     AuditPrefixRecord,
     AuditRequestRecord,
     AuditSessionFilters,
     AuditSessionRecord,
     AuditTurnDiffRecord,
+    DuplicateAdminError,
     DuplicateApiKeyError,
     DuplicateModelError,
     DuplicatePriceError,
     DuplicateTenantError,
+    LastOwnerError,
     ModelAccess,
     ModelAccessMode,
     ModelConfig,
@@ -235,7 +242,8 @@ async def _truncate() -> None:
             await connection.execute(
                 text(
                     "TRUNCATE api_keys, models, tenants, usage_records, tenant_rate_limits, "
-                    "audit_turn_diffs, audit_requests, audit_sessions "
+                    "audit_turn_diffs, audit_requests, audit_sessions, "
+                    "admin_users, admin_sessions, admin_audit_events, admin_login_attempts "
                     "RESTART IDENTITY CASCADE"
                 )
             )
@@ -2016,3 +2024,234 @@ async def test_audit_list_session_request_summaries_orders_without_content(
     assert not hasattr(summaries[0], "request_params")
     assert not hasattr(summaries[0], "response_content")
     assert await database.audit.list_session_request_summaries(session_id=uuid4()) == []
+
+
+def _admin_user(
+    index: int,
+    *,
+    role: AdminRole = AdminRole.OWNER,
+    active: bool = True,
+    username: str | None = None,
+) -> AdminUser:
+    return AdminUser(
+        id=uuid4(),
+        username=username if username is not None else f"admin-{index}",
+        display_name=f"Admin {index}",
+        role=role,
+        password_hash="scrypt$16384$8$1$c2FsdA$aGFzaA",
+        active=active,
+        created_at=BASE + timedelta(seconds=index),
+        updated_at=BASE + timedelta(seconds=index),
+        password_changed_at=BASE + timedelta(seconds=index),
+    )
+
+
+async def test_admin_user_round_trip_and_duplicate(database: Database) -> None:
+    admin = _admin_user(1)
+
+    created = await database.admins.create_admin(admin)
+
+    assert created == admin
+    assert await database.admins.get_admin(admin.id) == admin
+    assert await database.admins.get_admin_by_username(admin.username) == admin
+    items, total = await database.admins.list_admins(limit=10, offset=0)
+    assert total == 1
+    assert items[0].id == admin.id
+
+    with pytest.raises(DuplicateAdminError):
+        await database.admins.create_admin(_admin_user(2, username=admin.username))
+
+
+async def test_admin_update_protects_the_last_owner(database: Database) -> None:
+    owner = await database.admins.create_admin(_admin_user(1, role=AdminRole.OWNER))
+
+    with pytest.raises(LastOwnerError):
+        await database.admins.update_admin(
+            owner.id,
+            role=AdminRole.AUDITOR,
+            updated_at=BASE,
+        )
+
+    other = await database.admins.create_admin(_admin_user(2, role=AdminRole.OWNER))
+    updated = await database.admins.update_admin(
+        owner.id,
+        role=AdminRole.AUDITOR,
+        updated_at=BASE,
+    )
+    assert updated is not None
+    assert updated.role is AdminRole.AUDITOR
+    assert await database.admins.count_active_owners() == 1
+
+    with pytest.raises(LastOwnerError):
+        await database.admins.update_admin(
+            other.id,
+            active=False,
+            updated_at=BASE,
+        )
+
+    deactivated = await database.admins.update_admin(
+        owner.id,
+        active=False,
+        updated_at=BASE,
+    )
+    assert deactivated is not None
+    assert deactivated.active is False
+
+
+async def test_admin_session_lifecycle(database: Database) -> None:
+    admin = await database.admins.create_admin(_admin_user(1))
+    session = AdminSession(
+        id=uuid4(),
+        admin_id=admin.id,
+        token_hash=_hash("session-token"),
+        csrf_hash=_hash("csrf-token"),
+        created_at=BASE,
+        expires_at=BASE + timedelta(hours=1),
+    )
+
+    await database.admin_sessions.create_session(session)
+
+    stored = await database.admin_sessions.get_session_by_token_hash(_hash("session-token"))
+    assert stored == session
+    assert stored is not None
+    assert stored.is_active(BASE + timedelta(minutes=30))
+    assert not stored.is_active(BASE + timedelta(hours=2))
+
+    assert await database.admin_sessions.revoke_session(session.id, at=BASE) is True
+    assert await database.admin_sessions.revoke_session(session.id, at=BASE) is False
+    revoked = await database.admin_sessions.get_session_by_token_hash(_hash("session-token"))
+    assert revoked is not None
+    assert revoked.revoked_at is not None
+
+    second = replace(
+        session,
+        id=uuid4(),
+        token_hash=_hash("session-token-2"),
+    )
+    await database.admin_sessions.create_session(second)
+    assert await database.admin_sessions.revoke_sessions_for_admin(admin.id, at=BASE) == 1
+
+
+async def test_admin_audit_records_and_filters(database: Database) -> None:
+    admin = await database.admins.create_admin(_admin_user(1))
+    tenant_event = AdminAuditEvent(
+        id=uuid4(),
+        actor_type=AdminActorType.ADMIN,
+        actor_id=admin.id,
+        actor_name=admin.username,
+        action="tenant.updated",
+        target_type="tenant",
+        target_id="tenant-1",
+        before={"monthly_token_quota": None},
+        after={"monthly_token_quota": 100},
+        request_id="req-1",
+        created_at=BASE + timedelta(seconds=1),
+    )
+    model_event = AdminAuditEvent(
+        id=uuid4(),
+        actor_type=AdminActorType.MASTER,
+        actor_id=None,
+        actor_name="master-key",
+        action="model.created",
+        target_type="model",
+        target_id="model-1",
+        before=None,
+        after={"enabled": True},
+        request_id=None,
+        created_at=BASE + timedelta(seconds=2),
+    )
+    await database.admin_audit.record(tenant_event)
+    await database.admin_audit.record(model_event)
+
+    all_events, total = await database.admin_audit.list_events(
+        actor_id=None,
+        action=None,
+        target_type=None,
+        target_id=None,
+        since=None,
+        until=None,
+        limit=10,
+        offset=0,
+    )
+    assert total == 2
+    assert [event.action for event in all_events] == ["model.created", "tenant.updated"]
+
+    filtered, filtered_total = await database.admin_audit.list_events(
+        actor_id=admin.id,
+        action="tenant.updated",
+        target_type="tenant",
+        target_id="tenant-1",
+        since=BASE,
+        until=BASE + timedelta(days=1),
+        limit=10,
+        offset=0,
+    )
+    assert filtered_total == 1
+    assert filtered[0].before == {"monthly_token_quota": None}
+    assert filtered[0].after == {"monthly_token_quota": 100}
+
+
+async def test_login_throttle_blocks_after_the_limit(database: Database) -> None:
+    for _ in range(3):
+        assert (
+            await database.login_throttle.hit(
+                key="user:admin",
+                limit=3,
+                window_seconds=900,
+                now=BASE,
+            )
+            is True
+        )
+
+    assert (
+        await database.login_throttle.hit(
+            key="user:admin",
+            limit=3,
+            window_seconds=900,
+            now=BASE,
+        )
+        is False
+    )
+
+    await database.login_throttle.clear(key="user:admin")
+    assert (
+        await database.login_throttle.hit(
+            key="user:admin",
+            limit=3,
+            window_seconds=900,
+            now=BASE,
+        )
+        is True
+    )
+
+
+async def test_migration_adds_admin_identity_tables(migrated_schema: None) -> None:
+    engine = create_async_engine(_test_url())
+    try:
+        async with engine.connect() as connection:
+            tables = (
+                await connection.scalars(
+                    text(
+                        "SELECT table_name FROM information_schema.tables "
+                        "WHERE table_name IN "
+                        "('admin_users', 'admin_sessions', 'admin_audit_events', "
+                        "'admin_login_attempts')"
+                    )
+                )
+            ).all()
+            role_check = await connection.scalar(
+                text(
+                    "SELECT check_clause FROM information_schema.check_constraints "
+                    "WHERE constraint_name = 'ck_admin_users_role'"
+                )
+            )
+    finally:
+        await engine.dispose()
+
+    assert set(tables) == {
+        "admin_users",
+        "admin_sessions",
+        "admin_audit_events",
+        "admin_login_attempts",
+    }
+    assert role_check is not None

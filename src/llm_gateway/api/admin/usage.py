@@ -8,7 +8,8 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
 
-from llm_gateway.auth.dependencies import require_master_key
+from llm_gateway.auth.admin_auth import AdminPrincipal
+from llm_gateway.auth.admin_deps import current_admin
 from llm_gateway.container import Container, get_container
 from llm_gateway.errors import ApiError, ApiErrorCode
 from llm_gateway.schemas.usage import (
@@ -21,7 +22,7 @@ from llm_gateway.schemas.usage import (
 )
 from llm_gateway.storage.repositories import TimeBucket
 
-router = APIRouter(dependencies=[Depends(require_master_key)])
+router = APIRouter()
 
 DEFAULT_SERIES_SPAN = timedelta(days=30)
 MAX_SERIES_POINTS = 1000
@@ -76,6 +77,7 @@ def _floor_bucket(value: datetime, bucket: TimeBucket) -> datetime:
 
 @router.get("/usage/summary", response_model=UsageSummaryResponse)
 async def usage_summary(
+    _: Annotated[AdminPrincipal, Depends(current_admin)],
     container: Annotated[Container, Depends(get_container)],
     tenant_id: UUID | None = None,
     model_id: str | None = None,
@@ -122,6 +124,7 @@ async def usage_summary(
 
 @router.get("/usage/by-key", response_model=KeyUsageResponse)
 async def usage_by_key(
+    _: Annotated[AdminPrincipal, Depends(current_admin)],
     container: Annotated[Container, Depends(get_container)],
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
     tenant_id: UUID | None = None,
@@ -167,6 +170,7 @@ async def usage_by_key(
 
 @router.get("/usage/series", response_model=UsageSeriesResponse)
 async def usage_series(
+    _: Annotated[AdminPrincipal, Depends(current_admin)],
     container: Annotated[Container, Depends(get_container)],
     bucket: TimeBucket = TimeBucket.DAY,
     tenant_id: UUID | None = None,

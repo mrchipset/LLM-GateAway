@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import String, delete, func, literal, or_, select, text, update
+from sqlalchemy import String, case, delete, func, literal, or_, select, text, update
 from sqlalchemy import cast as sa_cast
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import CursorResult
@@ -16,6 +16,11 @@ from sqlalchemy.sql.elements import ColumnElement
 
 from llm_gateway.providers.base import ProviderName
 from llm_gateway.storage.repositories import (
+    AdminActorType,
+    AdminAuditEvent,
+    AdminRole,
+    AdminSession,
+    AdminUser,
     ApiKeyRecord,
     AuditPrefixRecord,
     AuditRequestRecord,
@@ -24,11 +29,13 @@ from llm_gateway.storage.repositories import (
     AuditSessionPage,
     AuditSessionRecord,
     AuditTurnDiffRecord,
+    DuplicateAdminError,
     DuplicateApiKeyError,
     DuplicateModelError,
     DuplicatePriceError,
     DuplicateTenantError,
     KeyUsage,
+    LastOwnerError,
     ModelAccess,
     ModelAccessMode,
     ModelConfig,
@@ -44,6 +51,10 @@ from llm_gateway.storage.repositories import (
     UsageRecord,
 )
 from llm_gateway.storage.tables import (
+    AdminAuditRow,
+    AdminLoginAttemptRow,
+    AdminSessionRow,
+    AdminUserRow,
     ApiKeyRow,
     AuditRequestRow,
     AuditSessionRow,
@@ -57,6 +68,11 @@ from llm_gateway.storage.tables import (
 
 _UNIQUE_VIOLATION_SQLSTATE = "23505"
 _FOREIGN_KEY_VIOLATION_SQLSTATE = "23503"
+
+
+def _window_start(now: datetime, window_seconds: int) -> datetime:
+    epoch = int(now.timestamp())
+    return datetime.fromtimestamp(epoch - epoch % window_seconds, tz=UTC)
 
 
 def _validate_page(*, limit: int, offset: int) -> None:
@@ -1225,3 +1241,318 @@ class SqlAlchemyAuditRepository:
         async with self._session_factory() as db, db.begin():
             row = await db.get(AuditTurnDiffRow, request_id)
             return _to_audit_diff(row) if row is not None else None
+
+
+def _to_admin_user(row: AdminUserRow) -> AdminUser:
+    return AdminUser(
+        id=row.id,
+        username=row.username,
+        display_name=row.display_name,
+        role=AdminRole(row.role),
+        password_hash=row.password_hash,
+        active=row.active,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+        password_changed_at=row.password_changed_at,
+        last_login_at=row.last_login_at,
+    )
+
+
+def _to_admin_session(row: AdminSessionRow) -> AdminSession:
+    return AdminSession(
+        id=row.id,
+        admin_id=row.admin_id,
+        token_hash=row.token_hash,
+        csrf_hash=row.csrf_hash,
+        created_at=row.created_at,
+        expires_at=row.expires_at,
+        revoked_at=row.revoked_at,
+    )
+
+
+def _to_admin_audit(row: AdminAuditRow) -> AdminAuditEvent:
+    return AdminAuditEvent(
+        id=row.id,
+        actor_type=AdminActorType(row.actor_type),
+        actor_id=row.actor_id,
+        actor_name=row.actor_name,
+        action=row.action,
+        target_type=row.target_type,
+        target_id=row.target_id,
+        before=row.before,
+        after=row.after,
+        request_id=row.request_id,
+        created_at=row.created_at,
+    )
+
+
+class SqlAlchemyAdminUserRepository:
+    def __init__(self, *, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        self._session_factory = session_factory
+
+    async def create_admin(self, admin: AdminUser) -> AdminUser:
+        row = AdminUserRow(
+            id=admin.id,
+            username=admin.username,
+            display_name=admin.display_name,
+            role=admin.role.value,
+            password_hash=admin.password_hash,
+            active=admin.active,
+            created_at=admin.created_at,
+            updated_at=admin.updated_at,
+            password_changed_at=admin.password_changed_at,
+            last_login_at=admin.last_login_at,
+        )
+        try:
+            async with self._session_factory() as session, session.begin():
+                session.add(row)
+        except IntegrityError as exc:
+            if _is_unique_violation(exc):
+                raise DuplicateAdminError(admin.username) from exc
+            raise
+        return admin
+
+    async def get_admin(self, admin_id: UUID) -> AdminUser | None:
+        async with self._session_factory() as session, session.begin():
+            row = await session.get(AdminUserRow, admin_id)
+            return _to_admin_user(row) if row is not None else None
+
+    async def get_admin_by_username(self, username: str) -> AdminUser | None:
+        async with self._session_factory() as session, session.begin():
+            row = await session.scalar(
+                select(AdminUserRow).where(AdminUserRow.username == username)
+            )
+            return _to_admin_user(row) if row is not None else None
+
+    async def list_admins(self, *, limit: int, offset: int) -> tuple[Sequence[AdminUser], int]:
+        _validate_page(limit=limit, offset=offset)
+        async with self._session_factory() as session, session.begin():
+            rows = (
+                await session.scalars(
+                    select(AdminUserRow)
+                    .order_by(AdminUserRow.created_at.desc(), AdminUserRow.id.desc())
+                    .limit(limit)
+                    .offset(offset)
+                )
+            ).all()
+            total = await session.scalar(select(func.count()).select_from(AdminUserRow))
+        return [_to_admin_user(row) for row in rows], total or 0
+
+    async def update_admin(
+        self,
+        admin_id: UUID,
+        *,
+        role: AdminRole | None = None,
+        active: bool | None = None,
+        display_name: str | None = None,
+        password_hash: str | None = None,
+        password_changed_at: datetime | None = None,
+        last_login_at: datetime | None = None,
+        updated_at: datetime,
+    ) -> AdminUser | None:
+        async with self._session_factory() as session, session.begin():
+            row = await session.get(AdminUserRow, admin_id)
+            if row is None:
+                return None
+
+            removes_owner = row.role == AdminRole.OWNER.value and (
+                (role is not None and role is not AdminRole.OWNER) or active is False
+            )
+            if removes_owner:
+                owners = await session.scalar(
+                    select(func.count())
+                    .select_from(AdminUserRow)
+                    .where(
+                        AdminUserRow.role == AdminRole.OWNER.value,
+                        AdminUserRow.active.is_(True),
+                    )
+                )
+                if int(owners or 0) <= 1:
+                    raise LastOwnerError()
+
+            if role is not None:
+                row.role = role.value
+            if active is not None:
+                row.active = active
+            if display_name is not None:
+                row.display_name = display_name
+            if password_hash is not None:
+                row.password_hash = password_hash
+            if password_changed_at is not None:
+                row.password_changed_at = password_changed_at
+            if last_login_at is not None:
+                row.last_login_at = last_login_at
+            row.updated_at = updated_at
+            await session.flush()
+            return _to_admin_user(row)
+
+    async def count_active_owners(self) -> int:
+        async with self._session_factory() as session, session.begin():
+            count = await session.scalar(
+                select(func.count())
+                .select_from(AdminUserRow)
+                .where(
+                    AdminUserRow.role == AdminRole.OWNER.value,
+                    AdminUserRow.active.is_(True),
+                )
+            )
+        return int(count or 0)
+
+
+class SqlAlchemyAdminSessionRepository:
+    def __init__(self, *, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        self._session_factory = session_factory
+
+    async def create_session(self, admin_session: AdminSession) -> AdminSession:
+        row = AdminSessionRow(
+            id=admin_session.id,
+            admin_id=admin_session.admin_id,
+            token_hash=admin_session.token_hash,
+            csrf_hash=admin_session.csrf_hash,
+            created_at=admin_session.created_at,
+            expires_at=admin_session.expires_at,
+            revoked_at=admin_session.revoked_at,
+        )
+        async with self._session_factory() as session, session.begin():
+            session.add(row)
+        return admin_session
+
+    async def get_session_by_token_hash(self, token_hash: str) -> AdminSession | None:
+        async with self._session_factory() as session, session.begin():
+            row = await session.scalar(
+                select(AdminSessionRow).where(AdminSessionRow.token_hash == token_hash)
+            )
+            return _to_admin_session(row) if row is not None else None
+
+    async def revoke_session(self, session_id: UUID, *, at: datetime) -> bool:
+        async with self._session_factory() as session, session.begin():
+            result = cast(
+                "CursorResult[tuple[()]]",
+                await session.execute(
+                    update(AdminSessionRow)
+                    .where(
+                        AdminSessionRow.id == session_id,
+                        AdminSessionRow.revoked_at.is_(None),
+                    )
+                    .values(revoked_at=at)
+                ),
+            )
+            return result.rowcount == 1
+
+    async def revoke_sessions_for_admin(self, admin_id: UUID, *, at: datetime) -> int:
+        async with self._session_factory() as session, session.begin():
+            result = cast(
+                "CursorResult[tuple[()]]",
+                await session.execute(
+                    update(AdminSessionRow)
+                    .where(
+                        AdminSessionRow.admin_id == admin_id,
+                        AdminSessionRow.revoked_at.is_(None),
+                    )
+                    .values(revoked_at=at)
+                ),
+            )
+            return int(result.rowcount or 0)
+
+
+class SqlAlchemyAdminAuditRepository:
+    def __init__(self, *, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        self._session_factory = session_factory
+
+    async def record(self, event: AdminAuditEvent) -> None:
+        row = AdminAuditRow(
+            id=event.id,
+            actor_type=event.actor_type.value,
+            actor_id=event.actor_id,
+            actor_name=event.actor_name,
+            action=event.action,
+            target_type=event.target_type,
+            target_id=event.target_id,
+            before=event.before,
+            after=event.after,
+            request_id=event.request_id,
+            created_at=event.created_at,
+        )
+        async with self._session_factory() as session, session.begin():
+            session.add(row)
+
+    async def list_events(
+        self,
+        *,
+        actor_id: UUID | None,
+        action: str | None,
+        target_type: str | None,
+        target_id: str | None,
+        since: datetime | None,
+        until: datetime | None,
+        limit: int,
+        offset: int,
+    ) -> tuple[Sequence[AdminAuditEvent], int]:
+        _validate_page(limit=limit, offset=offset)
+        _validate_optional_window(since=since, until=until)
+        filters: list[ColumnElement[bool]] = []
+        if actor_id is not None:
+            filters.append(AdminAuditRow.actor_id == actor_id)
+        if action is not None:
+            filters.append(AdminAuditRow.action == action)
+        if target_type is not None:
+            filters.append(AdminAuditRow.target_type == target_type)
+        if target_id is not None:
+            filters.append(AdminAuditRow.target_id == target_id)
+        if since is not None:
+            filters.append(AdminAuditRow.created_at >= since)
+        if until is not None:
+            filters.append(AdminAuditRow.created_at < until)
+
+        async with self._session_factory() as session, session.begin():
+            rows = (
+                await session.scalars(
+                    select(AdminAuditRow)
+                    .where(*filters)
+                    .order_by(AdminAuditRow.created_at.desc(), AdminAuditRow.id.desc())
+                    .limit(limit)
+                    .offset(offset)
+                )
+            ).all()
+            total = await session.scalar(
+                select(func.count()).select_from(AdminAuditRow).where(*filters)
+            )
+        return [_to_admin_audit(row) for row in rows], total or 0
+
+
+class SqlAlchemyLoginThrottle:
+    def __init__(self, *, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        self._session_factory = session_factory
+
+    async def hit(self, *, key: str, limit: int, window_seconds: int, now: datetime) -> bool:
+        if limit < 1 or window_seconds < 1:
+            raise ValueError("limit and window_seconds must be positive")
+        window_start = _window_start(now, window_seconds)
+        statement = pg_insert(AdminLoginAttemptRow).values(
+            key=key,
+            window_start=window_start,
+            count=1,
+        )
+        excluded = statement.excluded
+        statement = statement.on_conflict_do_update(
+            index_elements=[AdminLoginAttemptRow.key],
+            set_={
+                "count": case(
+                    (excluded.window_start > AdminLoginAttemptRow.window_start, 1),
+                    else_=AdminLoginAttemptRow.count + 1,
+                ),
+                "window_start": func.greatest(
+                    AdminLoginAttemptRow.window_start,
+                    excluded.window_start,
+                ),
+            },
+        ).returning(AdminLoginAttemptRow.count)
+        async with self._session_factory() as session, session.begin():
+            count = await session.scalar(statement)
+        return int(count or 0) <= limit
+
+    async def clear(self, *, key: str) -> None:
+        async with self._session_factory() as session, session.begin():
+            await session.execute(
+                delete(AdminLoginAttemptRow).where(AdminLoginAttemptRow.key == key)
+            )

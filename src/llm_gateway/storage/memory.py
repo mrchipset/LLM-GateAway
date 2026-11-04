@@ -8,6 +8,10 @@ from decimal import Decimal
 from uuid import UUID
 
 from llm_gateway.storage.repositories import (
+    AdminAuditEvent,
+    AdminRole,
+    AdminSession,
+    AdminUser,
     ApiKeyRecord,
     AuditPrefixRecord,
     AuditRequestRecord,
@@ -16,11 +20,13 @@ from llm_gateway.storage.repositories import (
     AuditSessionPage,
     AuditSessionRecord,
     AuditTurnDiffRecord,
+    DuplicateAdminError,
     DuplicateApiKeyError,
     DuplicateModelError,
     DuplicatePriceError,
     DuplicateTenantError,
     KeyUsage,
+    LastOwnerError,
     ModelAccess,
     ModelAccessMode,
     ModelConfig,
@@ -724,3 +730,183 @@ def _audit_session_matches(
         ):
             return False
     return True
+
+
+class InMemoryAdminUserRepository:
+    def __init__(self) -> None:
+        self._admins: dict[UUID, AdminUser] = {}
+        self._lock = asyncio.Lock()
+
+    async def create_admin(self, admin: AdminUser) -> AdminUser:
+        async with self._lock:
+            if any(item.username == admin.username for item in self._admins.values()):
+                raise DuplicateAdminError(admin.username)
+            self._admins[admin.id] = admin
+            return admin
+
+    async def get_admin(self, admin_id: UUID) -> AdminUser | None:
+        return self._admins.get(admin_id)
+
+    async def get_admin_by_username(self, username: str) -> AdminUser | None:
+        for admin in self._admins.values():
+            if admin.username == username:
+                return admin
+        return None
+
+    async def list_admins(self, *, limit: int, offset: int) -> tuple[Sequence[AdminUser], int]:
+        _validate_page(limit=limit, offset=offset)
+        ordered = sorted(
+            self._admins.values(),
+            key=lambda admin: (admin.created_at, admin.id),
+            reverse=True,
+        )
+        return ordered[offset : offset + limit], len(ordered)
+
+    async def update_admin(
+        self,
+        admin_id: UUID,
+        *,
+        role: AdminRole | None = None,
+        active: bool | None = None,
+        display_name: str | None = None,
+        password_hash: str | None = None,
+        password_changed_at: datetime | None = None,
+        last_login_at: datetime | None = None,
+        updated_at: datetime,
+    ) -> AdminUser | None:
+        async with self._lock:
+            admin = self._admins.get(admin_id)
+            if admin is None:
+                return None
+
+            removes_owner = admin.role is AdminRole.OWNER and (
+                (role is not None and role is not AdminRole.OWNER) or active is False
+            )
+            if removes_owner:
+                owners = sum(
+                    1
+                    for item in self._admins.values()
+                    if item.role is AdminRole.OWNER and item.active
+                )
+                if owners <= 1:
+                    raise LastOwnerError()
+
+            changes: dict[str, object] = {"updated_at": updated_at}
+            if role is not None:
+                changes["role"] = role
+            if active is not None:
+                changes["active"] = active
+            if display_name is not None:
+                changes["display_name"] = display_name
+            if password_hash is not None:
+                changes["password_hash"] = password_hash
+            if password_changed_at is not None:
+                changes["password_changed_at"] = password_changed_at
+            if last_login_at is not None:
+                changes["last_login_at"] = last_login_at
+            updated = replace(admin, **changes)  # pyright: ignore[reportArgumentType]
+            self._admins[admin_id] = updated
+            return updated
+
+    async def count_active_owners(self) -> int:
+        return sum(
+            1 for admin in self._admins.values() if admin.role is AdminRole.OWNER and admin.active
+        )
+
+
+class InMemoryAdminSessionRepository:
+    def __init__(self) -> None:
+        self._sessions: dict[UUID, AdminSession] = {}
+        self._lock = asyncio.Lock()
+
+    async def create_session(self, admin_session: AdminSession) -> AdminSession:
+        async with self._lock:
+            self._sessions[admin_session.id] = admin_session
+            return admin_session
+
+    async def get_session_by_token_hash(self, token_hash: str) -> AdminSession | None:
+        for item in self._sessions.values():
+            if item.token_hash == token_hash:
+                return item
+        return None
+
+    async def revoke_session(self, session_id: UUID, *, at: datetime) -> bool:
+        async with self._lock:
+            item = self._sessions.get(session_id)
+            if item is None or item.revoked_at is not None:
+                return False
+            self._sessions[session_id] = replace(item, revoked_at=at)
+            return True
+
+    async def revoke_sessions_for_admin(self, admin_id: UUID, *, at: datetime) -> int:
+        async with self._lock:
+            revoked = 0
+            for session_id, item in list(self._sessions.items()):
+                if item.admin_id == admin_id and item.revoked_at is None:
+                    self._sessions[session_id] = replace(item, revoked_at=at)
+                    revoked += 1
+            return revoked
+
+
+class InMemoryAdminAuditRepository:
+    def __init__(self) -> None:
+        self._events: list[AdminAuditEvent] = []
+
+    async def record(self, event: AdminAuditEvent) -> None:
+        self._events.append(event)
+
+    async def list_events(
+        self,
+        *,
+        actor_id: UUID | None,
+        action: str | None,
+        target_type: str | None,
+        target_id: str | None,
+        since: datetime | None,
+        until: datetime | None,
+        limit: int,
+        offset: int,
+    ) -> tuple[Sequence[AdminAuditEvent], int]:
+        _validate_page(limit=limit, offset=offset)
+        _validate_optional_window(since=since, until=until)
+        selected = [
+            event
+            for event in self._events
+            if (actor_id is None or event.actor_id == actor_id)
+            and (action is None or event.action == action)
+            and (target_type is None or event.target_type == target_type)
+            and (target_id is None or event.target_id == target_id)
+            and (since is None or event.created_at >= since)
+            and (until is None or event.created_at < until)
+        ]
+        selected.sort(key=lambda event: (event.created_at, str(event.id)), reverse=True)
+        return selected[offset : offset + limit], len(selected)
+
+
+class InMemoryLoginThrottle:
+    def __init__(self) -> None:
+        self._windows: dict[str, tuple[datetime, int]] = {}
+        self._lock = asyncio.Lock()
+
+    async def hit(self, *, key: str, limit: int, window_seconds: int, now: datetime) -> bool:
+        if limit < 1 or window_seconds < 1:
+            raise ValueError("limit and window_seconds must be positive")
+        epoch = int(now.timestamp())
+        window_start = datetime.fromtimestamp(
+            epoch - epoch % window_seconds,
+            tz=UTC,
+        )
+        async with self._lock:
+            current = self._windows.get(key)
+            if current is None or window_start > current[0]:
+                count = 1
+                stored_start = window_start
+            else:
+                count = current[1] + 1
+                stored_start = current[0]
+            self._windows[key] = (stored_start, count)
+        return count <= limit
+
+    async def clear(self, *, key: str) -> None:
+        async with self._lock:
+            self._windows.pop(key, None)

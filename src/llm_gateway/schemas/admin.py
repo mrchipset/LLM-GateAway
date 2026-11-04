@@ -7,7 +7,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from llm_gateway.providers.base import ProviderName
-from llm_gateway.storage.repositories import ModelAccessMode
+from llm_gateway.storage.repositories import AdminActorType, AdminRole, ModelAccessMode
 
 
 class CreateApiKeyRequest(BaseModel):
@@ -257,6 +257,102 @@ class ModelListResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     items: list[ModelDetail]
+    total: int
+    limit: int
+    offset: int
+
+
+class LoginRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1, max_length=256)
+
+
+class LoginResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    username: str
+    display_name: str
+    role: AdminRole
+    actor_type: AdminActorType
+    expires_at: datetime
+
+
+class CurrentAdminResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    actor_type: AdminActorType
+    name: str
+    role: AdminRole
+    admin_id: UUID | None = None
+    session_expires_at: datetime | None = None
+
+
+class CreateAdminRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    username: str = Field(
+        min_length=3,
+        max_length=64,
+        pattern=r"^[a-z0-9._-]+$",
+    )
+    display_name: str = Field(min_length=1, max_length=100)
+    role: AdminRole
+    password: str = Field(min_length=12, max_length=256)
+
+
+class UpdateAdminRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    display_name: str | None = Field(default=None, min_length=1, max_length=100)
+    role: AdminRole | None = None
+    active: bool | None = None
+    password: str | None = Field(default=None, min_length=12, max_length=256)
+
+
+class AdminDetail(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: UUID
+    username: str
+    display_name: str
+    role: AdminRole
+    active: bool
+    created_at: datetime
+    updated_at: datetime
+    last_login_at: datetime | None = None
+
+
+class AdminListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    items: list[AdminDetail]
+    total: int
+    limit: int
+    offset: int
+
+
+class AdminAuditEventDetail(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: UUID
+    actor_type: AdminActorType
+    actor_id: UUID | None = None
+    actor_name: str
+    action: str
+    target_type: str
+    target_id: str
+    before: dict[str, object] | None = None
+    after: dict[str, object] | None = None
+    request_id: str | None = None
+    created_at: datetime
+
+
+class AdminAuditListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    items: list[AdminAuditEventDetail]
     total: int
     limit: int
     offset: int

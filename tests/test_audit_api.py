@@ -194,10 +194,10 @@ async def test_audit_routes_require_master_key(
         )
 
     assert missing.status_code == 401
-    assert _error(missing)["code"] == "master_key_required"
+    assert _error(missing)["code"] == "admin_auth_required"
     assert missing.headers["x-request-id"] == _error(missing)["request_id"]
     assert inference.status_code == 401
-    assert _error(inference)["code"] == "invalid_api_key"
+    assert _error(inference)["code"] == "admin_auth_required"
     assert master.status_code == 200
 
 

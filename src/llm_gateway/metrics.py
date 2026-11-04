@@ -53,6 +53,7 @@ class Metrics:
     rejections: Counter
     usage_write_failures: Counter
     audit_write_failures: Counter
+    admin_audit_failures: Counter
 
 
 def build_metrics(meter: Meter) -> Metrics:
@@ -96,6 +97,11 @@ def build_metrics(meter: Meter) -> Metrics:
             "gateway_audit_write_failures",
             unit="{failure}",
             description="Audit turns that failed to persist",
+        ),
+        admin_audit_failures=meter.create_counter(
+            "gateway_admin_audit_write_failures",
+            unit="{failure}",
+            description="Management actions that could not be audited",
         ),
     )
 

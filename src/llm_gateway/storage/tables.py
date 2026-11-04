@@ -380,3 +380,85 @@ class ModelPriceRow(Base):
             name="ck_model_prices_cached_non_negative",
         ),
     )
+
+
+class AdminUserRow(Base):
+    __tablename__ = "admin_users"
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    username: Mapped[str] = mapped_column(String(64), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=true())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    password_changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        Index("ix_admin_users_username", "username", unique=True),
+        CheckConstraint(
+            "role IN ('owner', 'operator', 'auditor')",
+            name="ck_admin_users_role",
+        ),
+    )
+
+
+class AdminSessionRow(Base):
+    __tablename__ = "admin_sessions"
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    admin_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey(
+            "admin_users.id",
+            name="fk_admin_sessions_admin_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    csrf_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        Index("ix_admin_sessions_token_hash", "token_hash", unique=True),
+        Index("ix_admin_sessions_admin_id", "admin_id"),
+    )
+
+
+class AdminAuditRow(Base):
+    __tablename__ = "admin_audit_events"
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    actor_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    actor_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    actor_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    action: Mapped[str] = mapped_column(String(64), nullable=False)
+    target_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    target_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    before: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    after: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    request_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        Index("ix_admin_audit_created", "created_at"),
+        Index("ix_admin_audit_actor_created", "actor_id", "created_at"),
+        Index("ix_admin_audit_target", "target_type", "target_id"),
+        CheckConstraint(
+            "actor_type IN ('admin', 'master', 'bootstrap')",
+            name="ck_admin_audit_actor_type",
+        ),
+    )
+
+
+class AdminLoginAttemptRow(Base):
+    __tablename__ = "admin_login_attempts"
+
+    key: Mapped[str] = mapped_column(String(120), primary_key=True)
+    window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    count: Mapped[int] = mapped_column(Integer, nullable=False)

@@ -14,16 +14,24 @@ from sqlalchemy.ext.asyncio import (
 from llm_gateway.config import Settings
 from llm_gateway.storage.rate_limits import RateLimiter, SqlAlchemyRateLimiter
 from llm_gateway.storage.repositories import (
+    AdminAuditRepository,
+    AdminSessionRepository,
+    AdminUserRepository,
     ApiKeyRepository,
     AuditRepository,
+    LoginThrottle,
     ModelPriceRepository,
     ModelRepository,
     TenantRepository,
     UsageRepository,
 )
 from llm_gateway.storage.sql import (
+    SqlAlchemyAdminAuditRepository,
+    SqlAlchemyAdminSessionRepository,
+    SqlAlchemyAdminUserRepository,
     SqlAlchemyApiKeyRepository,
     SqlAlchemyAuditRepository,
+    SqlAlchemyLoginThrottle,
     SqlAlchemyModelPriceRepository,
     SqlAlchemyModelRepository,
     SqlAlchemyTenantRepository,
@@ -54,6 +62,12 @@ class Database:
         self._usage = SqlAlchemyUsageRepository(session_factory=self._session_factory)
         self._audit = SqlAlchemyAuditRepository(session_factory=self._session_factory)
         self._rate_limiter = SqlAlchemyRateLimiter(session_factory=self._session_factory)
+        self._admins = SqlAlchemyAdminUserRepository(session_factory=self._session_factory)
+        self._admin_sessions = SqlAlchemyAdminSessionRepository(
+            session_factory=self._session_factory
+        )
+        self._admin_audit = SqlAlchemyAdminAuditRepository(session_factory=self._session_factory)
+        self._login_throttle = SqlAlchemyLoginThrottle(session_factory=self._session_factory)
 
     @classmethod
     def from_settings(cls, settings: Settings) -> Database:
@@ -97,6 +111,22 @@ class Database:
     @property
     def rate_limiter(self) -> RateLimiter:
         return self._rate_limiter
+
+    @property
+    def admins(self) -> AdminUserRepository:
+        return self._admins
+
+    @property
+    def admin_sessions(self) -> AdminSessionRepository:
+        return self._admin_sessions
+
+    @property
+    def admin_audit(self) -> AdminAuditRepository:
+        return self._admin_audit
+
+    @property
+    def login_throttle(self) -> LoginThrottle:
+        return self._login_throttle
 
     async def ping(self) -> bool:
         try:

@@ -96,11 +96,11 @@ async def test_admin_routes_require_the_master_key(
         master = await client.get("/api/v1/keys", headers=_auth(_master(settings)))
 
     assert missing.status_code == 401
-    assert _error(missing)["code"] == "master_key_required"
+    assert _error(missing)["code"] == "admin_auth_required"
     assert wrong.status_code == 401
-    assert _error(wrong)["code"] == "invalid_api_key"
+    assert _error(wrong)["code"] == "admin_auth_required"
     assert inference.status_code == 401
-    assert _error(inference)["code"] == "invalid_api_key"
+    assert _error(inference)["code"] == "admin_auth_required"
     assert master.status_code == 200
 
 
@@ -526,6 +526,9 @@ async def test_every_admin_route_rejects_missing_and_inference_credentials(
     for path, operations in app.openapi()["paths"].items():
         if not path.startswith("/api/v1/"):
             continue
+        if path == "/api/v1/auth/login":
+            # Public by design: it authenticates, so it cannot require authentication.
+            continue
         concrete = path.replace("{key_id}", str(uuid4())).replace("{model_id}", "missing-model")
         targets.extend((method.upper(), concrete) for method in operations)
 
@@ -543,10 +546,10 @@ async def test_every_admin_route_rejects_missing_and_inference_credentials(
             anonymous = await client.request(method, path, json={})
             inference = await client.request(method, path, json={}, headers=_auth(inference_key))
 
-            assert anonymous.status_code == 401, f"{method} {path} must require the master key"
-            assert _error(anonymous)["code"] == "master_key_required"
+            assert anonymous.status_code == 401, f"{method} {path} must require admin auth"
+            assert _error(anonymous)["code"] == "admin_auth_required"
             assert inference.status_code == 401, f"{method} {path} must reject inference keys"
-            assert _error(inference)["code"] == "invalid_api_key"
+            assert _error(inference)["code"] == "admin_auth_required"
 
 
 async def test_create_tenant_returns_detail_and_rejects_duplicates(

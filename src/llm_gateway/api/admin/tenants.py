@@ -5,7 +5,8 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Query
 
-from llm_gateway.auth.dependencies import require_master_key
+from llm_gateway.auth.admin_auth import AdminPrincipal
+from llm_gateway.auth.admin_deps import current_admin, require_write_access
 from llm_gateway.container import Container, get_container
 from llm_gateway.errors import ApiError, ApiErrorCode
 from llm_gateway.schemas.admin import (
@@ -17,6 +18,10 @@ from llm_gateway.schemas.admin import (
     UpdateModelAccessRequest,
     UpdateTenantLimitsRequest,
 )
+from llm_gateway.services.admin_audit import (
+    record_admin_event_safely,
+    tenant_snapshot,
+)
 from llm_gateway.services.billing import budget_remaining, month_window
 from llm_gateway.storage.repositories import (
     DuplicateTenantError,
@@ -25,7 +30,7 @@ from llm_gateway.storage.repositories import (
     TenantLimitPatch,
 )
 
-router = APIRouter(dependencies=[Depends(require_master_key)])
+router = APIRouter()
 
 PaginationLimit = Annotated[int, Query(ge=1, le=100)]
 PaginationOffset = Annotated[int, Query(ge=0)]
@@ -59,6 +64,7 @@ def _not_found(tenant_id: UUID) -> ApiError:
 @router.post("/tenants", response_model=TenantDetail, status_code=201)
 async def create_tenant(
     payload: CreateTenantRequest,
+    principal: Annotated[AdminPrincipal, Depends(require_write_access)],
     container: Annotated[Container, Depends(get_container)],
 ) -> TenantDetail:
     tenant = Tenant(
@@ -79,6 +85,15 @@ async def create_tenant(
             error_type="invalid_request_error",
             param="name",
         ) from exc
+
+    await record_admin_event_safely(
+        container=container,
+        principal=principal,
+        action="tenant.created",
+        target_type="tenant",
+        target_id=str(created.id),
+        after=tenant_snapshot(created),
+    )
     return _detail(created)
 
 
@@ -86,6 +101,7 @@ async def create_tenant(
 async def update_tenant_limits(
     tenant_id: UUID,
     payload: UpdateTenantLimitsRequest,
+    principal: Annotated[AdminPrincipal, Depends(require_write_access)],
     container: Annotated[Container, Depends(get_container)],
 ) -> TenantDetail:
     provided = payload.model_fields_set
@@ -103,14 +119,29 @@ async def update_tenant_limits(
         set_plan_allow_overage=payload.plan_allow_overage is not None,
         set_monthly_cost_budget="monthly_cost_budget" in provided,
     )
+    existing = await container.tenants.get_tenant(tenant_id)
+    if existing is None:
+        raise _not_found(tenant_id)
+
     updated = await container.tenants.set_tenant_limits(tenant_id, patch=patch)
     if updated is None:
         raise _not_found(tenant_id)
+
+    await record_admin_event_safely(
+        container=container,
+        principal=principal,
+        action="tenant.updated",
+        target_type="tenant",
+        target_id=str(tenant_id),
+        before=tenant_snapshot(existing),
+        after=tenant_snapshot(updated),
+    )
     return _detail(updated)
 
 
 @router.get("/tenants", response_model=TenantListResponse)
 async def list_tenants(
+    _: Annotated[AdminPrincipal, Depends(current_admin)],
     container: Annotated[Container, Depends(get_container)],
     limit: PaginationLimit = 50,
     offset: PaginationOffset = 0,
@@ -127,6 +158,7 @@ async def list_tenants(
 @router.get("/tenants/{tenant_id}/billing", response_model=TenantBillingResponse)
 async def tenant_billing(
     tenant_id: UUID,
+    _: Annotated[AdminPrincipal, Depends(current_admin)],
     container: Annotated[Container, Depends(get_container)],
 ) -> TenantBillingResponse:
     tenant = await container.tenants.get_tenant(tenant_id)
@@ -175,6 +207,7 @@ def _model_access_response(
 )
 async def get_tenant_model_access(
     tenant_id: UUID,
+    _: Annotated[AdminPrincipal, Depends(current_admin)],
     container: Annotated[Container, Depends(get_container)],
 ) -> ModelAccessResponse:
     access = await container.tenants.get_model_access(tenant_id)
@@ -190,6 +223,7 @@ async def get_tenant_model_access(
 async def replace_tenant_model_access(
     tenant_id: UUID,
     payload: UpdateModelAccessRequest,
+    principal: Annotated[AdminPrincipal, Depends(require_write_access)],
     container: Annotated[Container, Depends(get_container)],
 ) -> ModelAccessResponse:
     tenant = await container.tenants.get_tenant(tenant_id)
@@ -209,6 +243,7 @@ async def replace_tenant_model_access(
                 param="model_ids",
             )
 
+    before = await container.tenants.get_model_access(tenant_id)
     access = await container.tenants.set_model_access(
         tenant_id,
         mode=payload.mode,
@@ -216,4 +251,18 @@ async def replace_tenant_model_access(
     )
     if access is None:
         raise _not_found(tenant_id)
+
+    await record_admin_event_safely(
+        container=container,
+        principal=principal,
+        action="tenant.model_access.updated",
+        target_type="tenant",
+        target_id=str(tenant_id),
+        before=(
+            {"mode": str(before.mode), "model_ids": list(before.model_ids)}
+            if before is not None
+            else None
+        ),
+        after={"mode": str(access.mode), "model_ids": list(access.model_ids)},
+    )
     return _model_access_response(tenant_id, access.mode, access.model_ids)

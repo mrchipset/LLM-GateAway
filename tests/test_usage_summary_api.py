@@ -256,4 +256,4 @@ async def test_usage_summary_requires_the_master_key(
         response = await client.get("/api/v1/usage/summary")
 
     assert response.status_code == 401
-    assert _error(response)["code"] == "master_key_required"
+    assert _error(response)["code"] == "admin_auth_required"
