@@ -1,23 +1,26 @@
 import { useId, useRef, useState, type FormEvent, type RefObject } from 'react';
 
 import type { TenantLimitsPatch, TenantSummary } from '../api/client';
-import { useUpdateTenantLimits } from '../hooks/useTenantMutations';
+import { useDeleteTenant, useUpdateTenantLimits } from '../hooks/useTenantMutations';
 import {
   countErrorText,
   limitToInput,
   parseCountChange,
   type CountChangeResult,
 } from '../lib/limits';
+import { validateTenantName } from '../lib/tenants';
 import { Button } from './Button';
-import { CloseIcon } from './Icons';
+import { AlertTriangleIcon, CloseIcon } from './Icons';
 import { Modal } from './Modal';
 import { RequestErrorPanel } from './RequestErrorPanel';
 
 interface TenantEditDialogProps {
   tenant: TenantSummary;
+  canDelete: boolean;
   returnFocusRef: RefObject<HTMLElement | null>;
   onClose: () => void;
   onSaved: (message: string) => void;
+  onDeleted: (tenantId: string) => void;
 }
 
 interface LimitFieldErrors {
@@ -28,25 +31,37 @@ interface LimitFieldErrors {
   retention?: string;
 }
 
+const DANGER_BUTTON_CLASS =
+  'bg-danger text-white hover:bg-danger/90 disabled:bg-line-strong disabled:text-ink-muted';
+
 export function TenantEditDialog({
   tenant,
+  canDelete,
   returnFocusRef,
   onClose,
   onSaved,
+  onDeleted,
 }: TenantEditDialogProps) {
+  const originalName = tenant.name;
   const originalQuota = limitToInput(tenant.monthly_token_quota);
   const originalRate = limitToInput(tenant.requests_per_minute);
   const originalTokens = limitToInput(tenant.tokens_per_minute);
   const originalConcurrent = limitToInput(tenant.max_concurrent_requests);
   const originalRetention = limitToInput(tenant.audit_retention_days);
+  const [name, setName] = useState(originalName);
   const [quota, setQuota] = useState(originalQuota);
   const [rate, setRate] = useState(originalRate);
   const [tokens, setTokens] = useState(originalTokens);
   const [concurrent, setConcurrent] = useState(originalConcurrent);
   const [retention, setRetention] = useState(originalRetention);
   const [auditEnabled, setAuditEnabled] = useState(tenant.audit_enabled);
+  const [nameError, setNameError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<LimitFieldErrors>({});
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const titleId = useId();
+  const nameId = useId();
+  const nameHintId = useId();
+  const nameErrorId = useId();
   const quotaId = useId();
   const rateId = useId();
   const tokensId = useId();
@@ -61,9 +76,13 @@ export function TenantEditDialog({
   const tokensErrorId = useId();
   const concurrentErrorId = useId();
   const retentionErrorId = useId();
-  const quotaRef = useRef<HTMLInputElement>(null);
+  const nameRef = useRef<HTMLInputElement>(null);
   const updateMutation = useUpdateTenantLimits();
+  const deleteMutation = useDeleteTenant();
+  const pending = updateMutation.isPending || deleteMutation.isPending;
 
+  const trimmedName = name.trim();
+  const nameDirty = trimmedName !== originalName;
   const quotaDirty = quota.trim() !== originalQuota;
   const rateDirty = rate.trim() !== originalRate;
   const tokensDirty = tokens.trim() !== originalTokens;
@@ -71,7 +90,7 @@ export function TenantEditDialog({
   const retentionDirty = retention.trim() !== originalRetention;
   const auditDirty = auditEnabled !== tenant.audit_enabled;
   const limitsDirty = quotaDirty || rateDirty || tokensDirty || concurrentDirty || retentionDirty;
-  const hasChanges = limitsDirty || auditDirty;
+  const hasChanges = nameDirty || limitsDirty || auditDirty;
 
   const clearing: string[] = [];
   if (quotaDirty && quota.trim() === '') clearing.push('monthly token quota');
@@ -86,22 +105,31 @@ export function TenantEditDialog({
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (confirmingDelete) return;
 
     const quotaResult = parseCountChange(quota, originalQuota, 1);
     const rateResult = parseCountChange(rate, originalRate, 1);
     const tokensResult = parseCountChange(tokens, originalTokens, 1);
     const concurrentResult = parseCountChange(concurrent, originalConcurrent, 1);
     const retentionResult = parseCountChange(retention, originalRetention, 0);
+    const nextNameError = nameDirty ? validateTenantName(name) : undefined;
     const nextErrors: LimitFieldErrors = {};
     if (quotaResult.status === 'invalid') nextErrors.quota = countErrorText(1);
     if (rateResult.status === 'invalid') nextErrors.rate = countErrorText(1);
     if (tokensResult.status === 'invalid') nextErrors.tokens = countErrorText(1);
     if (concurrentResult.status === 'invalid') nextErrors.concurrent = countErrorText(1);
     if (retentionResult.status === 'invalid') nextErrors.retention = countErrorText(0);
+    setNameError(nextNameError ?? null);
     setFieldErrors(nextErrors);
-    if (Object.values(nextErrors).some((message) => message !== undefined)) return;
+    if (
+      nextNameError !== undefined ||
+      Object.values(nextErrors).some((message) => message !== undefined)
+    ) {
+      return;
+    }
 
     const patch: TenantLimitsPatch = {};
+    if (nameDirty) patch.name = trimmedName;
     applyPatch(patch, 'monthly_token_quota', quotaResult);
     applyPatch(patch, 'requests_per_minute', rateResult);
     applyPatch(patch, 'tokens_per_minute', tokensResult);
@@ -114,6 +142,10 @@ export function TenantEditDialog({
       { tenantId: tenant.id, patch },
       {
         onSuccess: (updated) => {
+          if (nameDirty) {
+            onSaved(`Tenant renamed to ${updated.name}.`);
+            return;
+          }
           onSaved(
             limitsDirty
               ? `Limits updated for ${updated.name}.`
@@ -124,6 +156,15 @@ export function TenantEditDialog({
     );
   };
 
+  const handleDelete = () => {
+    deleteMutation.mutate(tenant.id, {
+      onSuccess: () => {
+        onDeleted(tenant.id);
+      },
+    });
+  };
+
+  const nameDescribedBy = nameError === null ? nameHintId : `${nameHintId} ${nameErrorId}`;
   const quotaDescribedBy = fieldErrors.quota === undefined ? hintId : `${hintId} ${quotaErrorId}`;
   const rateDescribedBy = fieldErrors.rate === undefined ? hintId : `${hintId} ${rateErrorId}`;
   const tokensDescribedBy =
@@ -139,8 +180,8 @@ export function TenantEditDialog({
     <Modal
       labelledBy={titleId}
       onClose={onClose}
-      closeDisabled={updateMutation.isPending}
-      initialFocusRef={quotaRef}
+      closeDisabled={pending}
+      initialFocusRef={nameRef}
       returnFocusRef={returnFocusRef}
     >
       <div className="flex items-start justify-between gap-3 border-b border-line px-5 py-3.5">
@@ -149,7 +190,7 @@ export function TenantEditDialog({
             Access
           </p>
           <h3 id={titleId} className="mt-0.5 text-[15px] font-semibold text-ink">
-            Edit tenant limits
+            Edit tenant
           </h3>
           <p className="mt-1 break-all font-mono text-[11px] text-ink-muted">
             {tenant.name} · {tenant.id.slice(0, 8)}…
@@ -158,21 +199,50 @@ export function TenantEditDialog({
         <Button
           variant="ghost"
           onClick={onClose}
-          disabled={updateMutation.isPending}
-          aria-label="Close edit limits dialog"
+          disabled={pending}
+          aria-label="Close edit tenant dialog"
           className="shrink-0 px-2"
         >
           <CloseIcon className="size-4" />
         </Button>
       </div>
 
-      <form
-        noValidate
-        onSubmit={handleSubmit}
-        className="px-5 py-4"
-        aria-busy={updateMutation.isPending}
-      >
-        <p id={hintId} className="text-[11.5px] leading-5 text-ink-muted">
+      <form noValidate onSubmit={handleSubmit} className="px-5 py-4" aria-busy={pending}>
+        <div>
+          <label htmlFor={nameId} className="block text-[12px] font-medium text-ink">
+            Tenant name
+          </label>
+          <input
+            ref={nameRef}
+            id={nameId}
+            type="text"
+            value={name}
+            onChange={(event) => {
+              setName(event.target.value);
+              setNameError(null);
+              if (updateMutation.isError) updateMutation.reset();
+            }}
+            disabled={pending}
+            autoComplete="off"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            aria-invalid={nameError !== null}
+            aria-describedby={nameDescribedBy}
+            placeholder="e.g. Acme"
+            className="mt-1 block w-full min-w-0 rounded-md border border-line-strong bg-white px-2.5 py-1.5 text-[13px] text-ink placeholder:text-ink-muted/70 focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/15 disabled:cursor-not-allowed disabled:bg-surface-sunken disabled:text-ink-muted"
+          />
+          <p id={nameHintId} className="mt-1 text-[11px] leading-4 text-ink-muted">
+            1–100 characters. Leading and trailing spaces are ignored.
+          </p>
+          {nameError !== null && (
+            <p id={nameErrorId} role="alert" className="mt-1 text-xs text-danger">
+              {nameError}
+            </p>
+          )}
+        </div>
+
+        <p id={hintId} className="mt-3 text-[11.5px] leading-5 text-ink-muted">
           Leave a limit blank to clear it. Values must be whole numbers of 1 or more.
         </p>
 
@@ -182,7 +252,6 @@ export function TenantEditDialog({
               Monthly token quota
             </label>
             <input
-              ref={quotaRef}
               id={quotaId}
               type="number"
               min={1}
@@ -193,7 +262,7 @@ export function TenantEditDialog({
                 setQuota(event.target.value);
                 clearFieldError('quota');
               }}
-              disabled={updateMutation.isPending}
+              disabled={pending}
               placeholder="No limit"
               aria-invalid={fieldErrors.quota !== undefined}
               aria-describedby={quotaDescribedBy}
@@ -221,7 +290,7 @@ export function TenantEditDialog({
                 setRate(event.target.value);
                 clearFieldError('rate');
               }}
-              disabled={updateMutation.isPending}
+              disabled={pending}
               placeholder="No limit"
               aria-invalid={fieldErrors.rate !== undefined}
               aria-describedby={rateDescribedBy}
@@ -249,7 +318,7 @@ export function TenantEditDialog({
                 setTokens(event.target.value);
                 clearFieldError('tokens');
               }}
-              disabled={updateMutation.isPending}
+              disabled={pending}
               placeholder="No limit"
               aria-invalid={fieldErrors.tokens !== undefined}
               aria-describedby={tokensDescribedBy}
@@ -277,7 +346,7 @@ export function TenantEditDialog({
                 setConcurrent(event.target.value);
                 clearFieldError('concurrent');
               }}
-              disabled={updateMutation.isPending}
+              disabled={pending}
               placeholder="No limit"
               aria-invalid={fieldErrors.concurrent !== undefined}
               aria-describedby={concurrentDescribedBy}
@@ -306,7 +375,7 @@ export function TenantEditDialog({
               setRetention(event.target.value);
               clearFieldError('retention');
             }}
-            disabled={updateMutation.isPending}
+            disabled={pending}
             placeholder="Inherit default"
             aria-invalid={fieldErrors.retention !== undefined}
             aria-describedby={retentionDescribedBy}
@@ -349,7 +418,7 @@ export function TenantEditDialog({
               aria-checked={auditEnabled}
               aria-labelledby={auditLabelId}
               aria-describedby={auditHintId}
-              disabled={updateMutation.isPending}
+              disabled={pending}
               onClick={() => {
                 setAuditEnabled((current) => !current);
                 if (updateMutation.isError) updateMutation.reset();
@@ -375,20 +444,69 @@ export function TenantEditDialog({
           </div>
         </div>
 
+        {canDelete && (
+          <div className="mt-4 rounded-md border border-danger/30 bg-danger-soft/40 px-3 py-2.5">
+            <p className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-danger">
+              Danger zone
+            </p>
+            {confirmingDelete ? (
+              <>
+                <p className="mt-1.5 text-[11.5px] leading-5 text-ink">
+                  {
+                    '删除后，该租户会从控制台列表中隐藏，其全部 API Key 立即失效；用量与审计历史仍会保留。此操作无法在控制台中撤销。'
+                  }
+                </p>
+                <div className="mt-2 flex flex-wrap justify-end gap-2">
+                  <Button
+                    variant="secondary"
+                    onClick={() => setConfirmingDelete(false)}
+                    disabled={pending}
+                  >
+                    Keep tenant
+                  </Button>
+                  <Button onClick={handleDelete} disabled={pending} className={DANGER_BUTTON_CLASS}>
+                    {deleteMutation.isPending ? 'Deleting…' : 'Confirm delete'}
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <div className="mt-1 flex flex-wrap items-start justify-between gap-2">
+                <p className="min-w-0 flex-1 text-[11.5px] leading-5 text-ink-muted">
+                  <AlertTriangleIcon className="mr-1 inline size-3.5 align-[-2px] text-danger" />
+                  Hides the tenant and revokes every API key. Usage and audit history is preserved.
+                </p>
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    setConfirmingDelete(true);
+                    if (deleteMutation.isError) deleteMutation.reset();
+                  }}
+                  disabled={pending}
+                  className="border border-danger/40 bg-surface text-danger hover:bg-danger-soft"
+                >
+                  Delete tenant
+                </Button>
+              </div>
+            )}
+            {deleteMutation.isError && deleteMutation.error !== null && (
+              <div className="mt-2.5">
+                <RequestErrorPanel error={deleteMutation.error} title="Could not delete tenant" />
+              </div>
+            )}
+          </div>
+        )}
+
         {updateMutation.isError && updateMutation.error !== null && (
           <div className="mt-3">
-            <RequestErrorPanel
-              error={updateMutation.error}
-              title="Could not update tenant limits"
-            />
+            <RequestErrorPanel error={updateMutation.error} title="Could not update tenant" />
           </div>
         )}
 
         <div className="mt-4 flex justify-end gap-2 border-t border-line pt-3">
-          <Button variant="secondary" onClick={onClose} disabled={updateMutation.isPending}>
+          <Button variant="secondary" onClick={onClose} disabled={pending}>
             Cancel
           </Button>
-          <Button type="submit" disabled={updateMutation.isPending || !hasChanges}>
+          <Button type="submit" disabled={pending || !hasChanges || confirmingDelete}>
             {updateMutation.isPending ? 'Saving…' : 'Save changes'}
           </Button>
         </div>

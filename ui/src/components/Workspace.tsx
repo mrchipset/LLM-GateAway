@@ -80,6 +80,10 @@ export function Workspace() {
   const seriesQuery = useUsageSeries(seriesWindow);
   const byKeyQuery = useUsageByKey(summaryWindow);
 
+  const handleTenantDeleted = (deletedTenantId: string) => {
+    setTenantId((current) => (current === deletedTenantId ? '' : current));
+  };
+
   const usageUpdatedAt = Math.max(
     summaryQuery.dataUpdatedAt,
     seriesQuery.dataUpdatedAt,
@@ -249,7 +253,7 @@ export function Workspace() {
         hidden={tab !== 'access'}
         className="min-w-0"
       >
-        <AccessPanel />
+        <AccessPanel onTenantDeleted={handleTenantDeleted} />
       </div>
 
       {canReadAudit && (

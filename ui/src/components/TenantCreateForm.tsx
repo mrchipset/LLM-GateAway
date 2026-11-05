@@ -3,10 +3,9 @@ import { useId, useState, type FormEvent } from 'react';
 import type { CreateTenantInput } from '../api/client';
 import { useCreateTenant } from '../hooks/useTenantMutations';
 import { countErrorText, parseOptionalCount } from '../lib/limits';
+import { TENANT_NAME_MAX_LENGTH, validateTenantName } from '../lib/tenants';
 import { Button } from './Button';
 import { RequestErrorPanel } from './RequestErrorPanel';
-
-const NAME_MAX_LENGTH = 100;
 
 interface TenantCreateFormProps {
   onStart: () => void;
@@ -60,12 +59,9 @@ export function TenantCreateForm({ onStart, onCreated }: TenantCreateFormProps) 
     onStart();
 
     const trimmed = name.trim();
-    if (trimmed.length === 0) {
-      setClientError('Enter a tenant name.');
-      return;
-    }
-    if (trimmed.length > NAME_MAX_LENGTH) {
-      setClientError(`Use ${NAME_MAX_LENGTH} characters or fewer.`);
+    const nameError = validateTenantName(name);
+    if (nameError !== undefined) {
+      setClientError(nameError);
       return;
     }
 
@@ -111,7 +107,7 @@ export function TenantCreateForm({ onStart, onCreated }: TenantCreateFormProps) 
           Create tenant
         </h3>
         <p className="text-[10.5px] text-ink-muted">
-          1–{NAME_MAX_LENGTH} characters · limits are optional
+          1–{TENANT_NAME_MAX_LENGTH} characters · limits are optional
         </p>
       </div>
 

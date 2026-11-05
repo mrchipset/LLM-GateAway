@@ -967,7 +967,7 @@ describe('audit console', () => {
     const table = await within(region).findByRole('table', { name: 'Tenants' });
 
     await user.click(within(table).getByRole('button', { name: 'Edit limits for Acme' }));
-    let dialog = await screen.findByRole('dialog', { name: 'Edit tenant limits' });
+    let dialog = await screen.findByRole('dialog', { name: 'Edit tenant' });
     const toggle = within(dialog).getByRole('switch', { name: 'Audit collection' });
     expect(toggle).toHaveAttribute('aria-checked', 'false');
 
@@ -988,7 +988,7 @@ describe('audit console', () => {
     expect(within(updatedRow).getByText('On')).toBeInTheDocument();
 
     await user.click(within(updatedTable).getByRole('button', { name: 'Edit limits for Acme' }));
-    dialog = await screen.findByRole('dialog', { name: 'Edit tenant limits' });
+    dialog = await screen.findByRole('dialog', { name: 'Edit tenant' });
     const reopenedToggle = within(dialog).getByRole('switch', { name: 'Audit collection' });
     expect(reopenedToggle).toHaveAttribute('aria-checked', 'true');
     await user.click(reopenedToggle);

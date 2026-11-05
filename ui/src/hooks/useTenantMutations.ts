@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 
 import {
   createTenant,
+  deleteTenant,
   updateTenantLimits,
   type CreateTenantInput,
   type TenantLimitsPatch,
@@ -32,4 +33,29 @@ export function useUpdateTenantLimits() {
       ]);
     },
   });
+}
+
+export function useDeleteTenant() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (tenantId: string) => deleteTenant(tenantId),
+    onSuccess: async (_data, tenantId) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.tenants }),
+        // The key page for the deleted tenant would now 404. Its filter is reset
+        // by AccessPanel, so leave that query out and refresh every other page.
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.keys,
+          predicate: (query) => keyPageTenantId(query.queryKey) !== tenantId,
+        }),
+      ]);
+    },
+  });
+}
+
+function keyPageTenantId(queryKey: readonly unknown[]): unknown {
+  const params = queryKey[1];
+  if (typeof params !== 'object' || params === null || !('tenantId' in params)) return undefined;
+  return (params as { tenantId?: unknown }).tenantId;
 }

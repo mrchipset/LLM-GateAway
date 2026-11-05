@@ -2,7 +2,7 @@ import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { TenantLimitsPatch, TenantSummary } from '../api/client';
+import type { ApiKeySummary, TenantLimitsPatch, TenantSummary } from '../api/client';
 import { signIn } from './signIn';
 import {
   DEFAULT_ADMIN_PASSWORD,
@@ -44,6 +44,17 @@ const SOLO: TenantSummary = {
 };
 
 const TENANTS = [ACME, SOLO];
+
+const PRODUCTION_KEY: ApiKeySummary = {
+  id: 'aaaaaaaa-1111-4111-8111-111111111111',
+  tenant_id: ACME.id,
+  name: 'Production',
+  key_prefix: 'lgw_live_prod',
+  created_at: '2026-10-01T08:15:00Z',
+  expires_at: null,
+  revoked_at: null,
+  last_used_at: null,
+};
 
 const MANY_TENANTS: TenantSummary[] = Array.from({ length: 105 }, (_, index) => ({
   id: `${String(index + 1).padStart(8, '0')}-1111-4111-8111-111111111111`,
@@ -110,6 +121,9 @@ function installEditableTenants(
       }
 
       const updated: TenantSummary = { ...existing };
+      if (body.name !== undefined) {
+        updated.name = body.name;
+      }
       if (body.monthly_token_quota !== undefined) {
         updated.monthly_token_quota = body.monthly_token_quota;
       }
@@ -131,6 +145,13 @@ function tenantGetCalls(fetchMock: ReturnType<typeof installFetchMock>) {
   return fetchMock.mock.calls.filter(([input, init]) => {
     const url = toUrl(input);
     return url.pathname === '/api/v1/tenants' && (init?.method ?? 'GET').toUpperCase() === 'GET';
+  });
+}
+
+function keyGetCalls(fetchMock: ReturnType<typeof installFetchMock>) {
+  return fetchMock.mock.calls.filter(([input, init]) => {
+    const url = toUrl(input);
+    return url.pathname === '/api/v1/keys' && (init?.method ?? 'GET').toUpperCase() === 'GET';
   });
 }
 
@@ -515,14 +536,15 @@ describe('tenant management', () => {
     const table = await screen.findByRole('table', { name: 'Tenants' });
 
     await user.click(within(table).getByRole('button', { name: 'Edit limits for Acme' }));
-    const dialog = await screen.findByRole('dialog', { name: 'Edit tenant limits' });
+    const dialog = await screen.findByRole('dialog', { name: 'Edit tenant' });
     const quotaInput = within(dialog).getByLabelText('Monthly token quota');
     const rateInput = within(dialog).getByLabelText('Requests per minute');
+    const nameInput = within(dialog).getByLabelText('Tenant name');
 
     expect(quotaInput).toHaveValue(1000000);
     expect(rateInput).toHaveValue(60);
     await waitFor(() => {
-      expect(document.activeElement).toBe(quotaInput);
+      expect(document.activeElement).toBe(nameInput);
     });
 
     await user.clear(rateInput);
@@ -557,7 +579,7 @@ describe('tenant management', () => {
     const table = await screen.findByRole('table', { name: 'Tenants' });
 
     await user.click(within(table).getByRole('button', { name: 'Edit limits for Acme' }));
-    const dialog = await screen.findByRole('dialog', { name: 'Edit tenant limits' });
+    const dialog = await screen.findByRole('dialog', { name: 'Edit tenant' });
     const rateInput = within(dialog).getByLabelText('Requests per minute');
 
     await user.clear(rateInput);
@@ -587,7 +609,7 @@ describe('tenant management', () => {
     const table = await screen.findByRole('table', { name: 'Tenants' });
 
     await user.click(within(table).getByRole('button', { name: 'Edit limits for Acme' }));
-    const dialog = await screen.findByRole('dialog', { name: 'Edit tenant limits' });
+    const dialog = await screen.findByRole('dialog', { name: 'Edit tenant' });
 
     await user.clear(within(dialog).getByLabelText('Monthly token quota'));
     await user.clear(within(dialog).getByLabelText('Requests per minute'));
@@ -618,7 +640,7 @@ describe('tenant management', () => {
     const table = await screen.findByRole('table', { name: 'Tenants' });
 
     await user.click(within(table).getByRole('button', { name: 'Edit limits for Acme' }));
-    const dialog = await screen.findByRole('dialog', { name: 'Edit tenant limits' });
+    const dialog = await screen.findByRole('dialog', { name: 'Edit tenant' });
     const quotaInput = within(dialog).getByLabelText('Monthly token quota');
     const save = within(dialog).getByRole('button', { name: 'Save changes' });
 
@@ -635,7 +657,7 @@ describe('tenant management', () => {
     expect(within(dialog).getByText('Enter a whole number of 1 or more.')).toBeInTheDocument();
 
     expect(patchBodies).toHaveLength(0);
-    expect(screen.getByRole('dialog', { name: 'Edit tenant limits' })).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Edit tenant' })).toBeInTheDocument();
   });
 
   it.each([
@@ -676,27 +698,27 @@ describe('tenant management', () => {
       const table = await screen.findByRole('table', { name: 'Tenants' });
 
       await user.click(within(table).getByRole('button', { name: 'Edit limits for Acme' }));
-      const dialog = await screen.findByRole('dialog', { name: 'Edit tenant limits' });
+      const dialog = await screen.findByRole('dialog', { name: 'Edit tenant' });
       const rateInput = within(dialog).getByLabelText('Requests per minute');
 
       await user.clear(rateInput);
       await user.type(rateInput, '120');
       await user.click(within(dialog).getByRole('button', { name: 'Save changes' }));
 
-      expect(await within(dialog).findByText('Could not update tenant limits')).toBeInTheDocument();
+      expect(await within(dialog).findByText('Could not update tenant')).toBeInTheDocument();
       expect(within(dialog).getByText(`HTTP ${status}`)).toBeInTheDocument();
       expect(within(dialog).getByText(message)).toBeInTheDocument();
       expect(within(dialog).getByText(code)).toBeInTheDocument();
       expect(within(dialog).getByText(requestId)).toBeInTheDocument();
 
       expect(patchBodies).toHaveLength(1);
-      expect(screen.getByRole('dialog', { name: 'Edit tenant limits' })).toBeInTheDocument();
+      expect(screen.getByRole('dialog', { name: 'Edit tenant' })).toBeInTheDocument();
       expect(within(dialog).getByLabelText('Requests per minute')).toHaveValue(120);
       expect(within(dialog).getByRole('button', { name: 'Save changes' })).toBeEnabled();
     },
   );
 
-  it('focuses the first limit field and returns focus on Escape', async () => {
+  it('focuses the tenant name field and returns focus on Escape', async () => {
     installAccessMock();
     const user = userEvent.setup();
     renderApp();
@@ -706,11 +728,11 @@ describe('tenant management', () => {
     const editButton = within(table).getByRole('button', { name: 'Edit limits for Acme' });
 
     await user.click(editButton);
-    const dialog = await screen.findByRole('dialog', { name: 'Edit tenant limits' });
-    const quotaInput = within(dialog).getByLabelText('Monthly token quota');
+    const dialog = await screen.findByRole('dialog', { name: 'Edit tenant' });
+    const nameInput = within(dialog).getByLabelText('Tenant name');
 
     await waitFor(() => {
-      expect(document.activeElement).toBe(quotaInput);
+      expect(document.activeElement).toBe(nameInput);
     });
 
     await user.keyboard('{Escape}');
@@ -739,10 +761,10 @@ describe('tenant management', () => {
     const table = await screen.findByRole('table', { name: 'Tenants' });
 
     await user.click(within(table).getByRole('button', { name: 'Edit limits for Acme' }));
-    const dialog = await screen.findByRole('dialog', { name: 'Edit tenant limits' });
+    const dialog = await screen.findByRole('dialog', { name: 'Edit tenant' });
     const rateInput = within(dialog).getByLabelText('Requests per minute');
     const save = within(dialog).getByRole('button', { name: 'Save changes' });
-    const close = within(dialog).getByRole('button', { name: 'Close edit limits dialog' });
+    const close = within(dialog).getByRole('button', { name: 'Close edit tenant dialog' });
     const cancel = within(dialog).getByRole('button', { name: 'Cancel' });
 
     await user.clear(rateInput);
@@ -756,7 +778,7 @@ describe('tenant management', () => {
     expect(cancel).toBeDisabled();
 
     await user.keyboard('{Escape}');
-    expect(screen.getByRole('dialog', { name: 'Edit tenant limits' })).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Edit tenant' })).toBeInTheDocument();
 
     await act(async () => {
       resolvePatch(jsonResponse({ ...ACME, requests_per_minute: 120 }));
@@ -776,8 +798,8 @@ describe('tenant management', () => {
     const table = await screen.findByRole('table', { name: 'Tenants' });
 
     await user.click(within(table).getByRole('button', { name: 'Edit limits for Acme' }));
-    const dialog = await screen.findByRole('dialog', { name: 'Edit tenant limits' });
-    const close = within(dialog).getByRole('button', { name: 'Close edit limits dialog' });
+    const dialog = await screen.findByRole('dialog', { name: 'Edit tenant' });
+    const close = within(dialog).getByRole('button', { name: 'Close edit tenant dialog' });
     const cancel = within(dialog).getByRole('button', { name: 'Cancel' });
 
     cancel.focus();
@@ -799,7 +821,7 @@ describe('tenant management', () => {
     const table = await screen.findByRole('table', { name: 'Tenants' });
 
     await user.click(within(table).getByRole('button', { name: 'Edit limits for Acme' }));
-    await screen.findByRole('dialog', { name: 'Edit tenant limits' });
+    await screen.findByRole('dialog', { name: 'Edit tenant' });
     expect(document.body.style.overflow).toBe('hidden');
 
     await user.keyboard('{Escape}');
@@ -808,5 +830,407 @@ describe('tenant management', () => {
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     });
     expect(document.body.style.overflow).toBe('scroll');
+  });
+
+  it('renames a tenant and sends only the name', async () => {
+    const { patchBodies } = installEditableTenants(TENANTS);
+    const user = userEvent.setup();
+    renderApp();
+
+    await openAccess(user);
+    const region = tenantRegion();
+    const table = await screen.findByRole('table', { name: 'Tenants' });
+
+    await user.click(within(table).getByRole('button', { name: 'Edit limits for Acme' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Edit tenant' });
+    const nameInput = within(dialog).getByLabelText('Tenant name');
+    expect(nameInput).toHaveValue('Acme');
+
+    await user.clear(nameInput);
+    await user.type(nameInput, '  Acme Labs  ');
+    await user.click(within(dialog).getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+    expect(patchBodies).toEqual([{ name: 'Acme Labs' }]);
+    expect(await within(region).findByText('Tenant renamed to Acme Labs.')).toBeInTheDocument();
+    await waitFor(() => {
+      const updatedTable = within(region).getByRole('table', { name: 'Tenants' });
+      expect(within(updatedTable).getByRole('row', { name: /Acme Labs/ })).toBeInTheDocument();
+    });
+  });
+
+  it('blocks an empty or overlong tenant name before sending', async () => {
+    const { patchBodies } = installEditableTenants(TENANTS);
+    const user = userEvent.setup();
+    renderApp();
+
+    await openAccess(user);
+    const table = await screen.findByRole('table', { name: 'Tenants' });
+
+    await user.click(within(table).getByRole('button', { name: 'Edit limits for Acme' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Edit tenant' });
+    const nameInput = within(dialog).getByLabelText('Tenant name');
+    const save = within(dialog).getByRole('button', { name: 'Save changes' });
+
+    await user.clear(nameInput);
+    await user.click(save);
+    expect(await within(dialog).findByText('Enter a tenant name.')).toBeInTheDocument();
+
+    await user.type(nameInput, 'x'.repeat(101));
+    await user.click(save);
+    expect(within(dialog).getByText('Use 100 characters or fewer.')).toBeInTheDocument();
+
+    expect(patchBodies).toHaveLength(0);
+    expect(screen.getByRole('dialog', { name: 'Edit tenant' })).toBeInTheDocument();
+  });
+
+  it('keeps the dialog open and shows the duplicate code on a rename conflict', async () => {
+    const { patchBodies } = installEditableTenants(TENANTS, () =>
+      jsonResponse(
+        {
+          error: {
+            message: "Tenant 'Solo' already exists",
+            type: 'invalid_request_error',
+            param: 'name',
+            code: 'duplicate_tenant',
+            request_id: 'req_duplicate_tenant',
+          },
+        },
+        409,
+        { 'x-request-id': 'req_duplicate_tenant' },
+      ),
+    );
+    const user = userEvent.setup();
+    renderApp();
+
+    await openAccess(user);
+    const table = await screen.findByRole('table', { name: 'Tenants' });
+
+    await user.click(within(table).getByRole('button', { name: 'Edit limits for Acme' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Edit tenant' });
+    const nameInput = within(dialog).getByLabelText('Tenant name');
+
+    await user.clear(nameInput);
+    await user.type(nameInput, 'Solo');
+    await user.click(within(dialog).getByRole('button', { name: 'Save changes' }));
+
+    expect(await within(dialog).findByText('Could not update tenant')).toBeInTheDocument();
+    expect(within(dialog).getByText('HTTP 409')).toBeInTheDocument();
+    expect(within(dialog).getByText('duplicate_tenant')).toBeInTheDocument();
+    expect(within(dialog).getByText("Tenant 'Solo' already exists")).toBeInTheDocument();
+    expect(within(dialog).getByLabelText('Tenant name')).toHaveValue('Solo');
+    expect(patchBodies).toEqual([{ name: 'Solo' }]);
+    expect(screen.getByRole('dialog', { name: 'Edit tenant' })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Save changes' })).toBeEnabled();
+  });
+
+  it('deletes a tenant after explicit confirmation and refreshes the list', async () => {
+    let tenants = TENANTS.map((tenant) => ({ ...tenant }));
+    const deleteRequests: Array<{ id: string; csrf: string | null }> = [];
+    const fetchMock = installFetchMock({
+      '/api/v1/tenants': (url) => pageResponse(tenants, url),
+      'DELETE /api/v1/tenants/:id': (url, init) => {
+        const id = decodeURIComponent(url.pathname.split('/').pop() ?? '');
+        deleteRequests.push({ id, csrf: new Headers(init.headers).get('x-csrf-token') });
+        tenants = tenants.filter((tenant) => tenant.id !== id);
+        return new Response(null, { status: 204 });
+      },
+    });
+    const user = userEvent.setup();
+    renderApp();
+
+    await openAccess(user);
+    const region = tenantRegion();
+    const table = await screen.findByRole('table', { name: 'Tenants' });
+
+    await user.click(within(table).getByRole('button', { name: 'Edit limits for Acme' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Edit tenant' });
+    await user.click(within(dialog).getByRole('button', { name: 'Delete tenant' }));
+
+    expect(within(dialog).getByText(/全部 API Key 立即失效/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/用量与审计历史仍会保留/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/无法在控制台中撤销/)).toBeInTheDocument();
+
+    const listCallsBefore = tenantGetCalls(fetchMock).length;
+    await user.click(within(dialog).getByRole('button', { name: 'Confirm delete' }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+    expect(deleteRequests).toEqual([{ id: ACME.id, csrf: readTestCsrfToken() }]);
+    expect(await within(region).findByText('Tenant deleted.')).toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(tenantGetCalls(fetchMock).length).toBeGreaterThan(listCallsBefore);
+    });
+    await waitFor(() => {
+      expect(within(region).queryByText('Acme')).not.toBeInTheDocument();
+    });
+    const updatedTable = within(region).getByRole('table', { name: 'Tenants' });
+    expect(within(updatedTable).getByRole('row', { name: /Solo/ })).toBeInTheDocument();
+  });
+
+  it('moves back one page when deleting the only tenant on a later page', async () => {
+    let tenants: TenantSummary[] = Array.from({ length: 21 }, (_, index) => ({
+      id: `${String(index + 1).padStart(8, '0')}-1111-4111-8111-111111111111`,
+      name: `Tenant ${index + 1}`,
+      created_at: '2026-09-01T00:00:00Z',
+      monthly_token_quota: null,
+      plan_tokens: null,
+      plan_allow_overage: false,
+      monthly_cost_budget: null,
+      requests_per_minute: null,
+      audit_enabled: false,
+      model_access_mode: 'all',
+    }));
+    const fetchMock = installFetchMock({
+      '/api/v1/tenants': (url) => pageResponse(tenants, url),
+      'DELETE /api/v1/tenants/:id': (url) => {
+        const id = decodeURIComponent(url.pathname.split('/').pop() ?? '');
+        tenants = tenants.filter((tenant) => tenant.id !== id);
+        return new Response(null, { status: 204 });
+      },
+    });
+    const user = userEvent.setup();
+    renderApp();
+
+    await openAccess(user);
+    const region = tenantRegion();
+    expect(await within(region).findByText('Showing 1–20 of 21')).toBeInTheDocument();
+
+    await user.click(within(region).getByRole('button', { name: 'Next tenant page' }));
+    expect(await within(region).findByText('Showing 21–21 of 21')).toBeInTheDocument();
+    const table = await screen.findByRole('table', { name: 'Tenants' });
+
+    await user.click(within(table).getByRole('button', { name: 'Edit limits for Tenant 21' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Edit tenant' });
+    await user.click(within(dialog).getByRole('button', { name: 'Delete tenant' }));
+
+    const pageCallsBeforeDelete = accessPageCalls(fetchMock).length;
+    await user.click(within(dialog).getByRole('button', { name: 'Confirm delete' }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+    expect(await within(region).findByText('Showing 1–20 of 20')).toBeInTheDocument();
+    expect(within(region).queryByText('Tenant 21')).not.toBeInTheDocument();
+    expect(within(region).queryByText('No tenants yet')).not.toBeInTheDocument();
+
+    await waitFor(() => {
+      const offsets = accessPageCalls(fetchMock)
+        .slice(pageCallsBeforeDelete)
+        .map(([input]) => toUrl(input).searchParams.get('offset') ?? '');
+      expect(offsets).toContain('0');
+    });
+  });
+
+  it('keeps the current page when other tenants remain after a delete', async () => {
+    let tenants: TenantSummary[] = Array.from({ length: 41 }, (_, index) => ({
+      id: `${String(index + 1).padStart(8, '0')}-1111-4111-8111-111111111111`,
+      name: `Tenant ${index + 1}`,
+      created_at: '2026-09-01T00:00:00Z',
+      monthly_token_quota: null,
+      plan_tokens: null,
+      plan_allow_overage: false,
+      monthly_cost_budget: null,
+      requests_per_minute: null,
+      audit_enabled: false,
+      model_access_mode: 'all',
+    }));
+    const fetchMock = installFetchMock({
+      '/api/v1/tenants': (url) => pageResponse(tenants, url),
+      'DELETE /api/v1/tenants/:id': (url) => {
+        const id = decodeURIComponent(url.pathname.split('/').pop() ?? '');
+        tenants = tenants.filter((tenant) => tenant.id !== id);
+        return new Response(null, { status: 204 });
+      },
+    });
+    const user = userEvent.setup();
+    renderApp();
+
+    await openAccess(user);
+    const region = tenantRegion();
+    await within(region).findByText('Showing 1–20 of 41');
+    await user.click(within(region).getByRole('button', { name: 'Next tenant page' }));
+    expect(await within(region).findByText('Showing 21–40 of 41')).toBeInTheDocument();
+
+    const table = await screen.findByRole('table', { name: 'Tenants' });
+    await user.click(within(table).getByRole('button', { name: 'Edit limits for Tenant 21' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Edit tenant' });
+    await user.click(within(dialog).getByRole('button', { name: 'Delete tenant' }));
+
+    const pageCallsBeforeDelete = accessPageCalls(fetchMock).length;
+    await user.click(within(dialog).getByRole('button', { name: 'Confirm delete' }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+    expect(await within(region).findByText('Showing 21–40 of 40')).toBeInTheDocument();
+    expect(within(region).queryByText('Tenant 21')).not.toBeInTheDocument();
+    const updatedTable = within(region).getByRole('table', { name: 'Tenants' });
+    expect(within(updatedTable).getByText('Tenant 22')).toBeInTheDocument();
+
+    const offsetsAfterDelete = accessPageCalls(fetchMock)
+      .slice(pageCallsBeforeDelete)
+      .map(([input]) => toUrl(input).searchParams.get('offset') ?? '');
+    expect(offsetsAfterDelete).not.toContain('0');
+  });
+
+  it('shows the normal empty state when deleting the only tenant on the first page', async () => {
+    let tenants = [{ ...ACME }];
+    installFetchMock({
+      '/api/v1/tenants': (url) => pageResponse(tenants, url),
+      'DELETE /api/v1/tenants/:id': (url) => {
+        const id = decodeURIComponent(url.pathname.split('/').pop() ?? '');
+        tenants = tenants.filter((tenant) => tenant.id !== id);
+        return new Response(null, { status: 204 });
+      },
+    });
+    const user = userEvent.setup();
+    renderApp();
+
+    await openAccess(user);
+    const region = tenantRegion();
+    const table = await screen.findByRole('table', { name: 'Tenants' });
+    await user.click(within(table).getByRole('button', { name: 'Edit limits for Acme' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Edit tenant' });
+    await user.click(within(dialog).getByRole('button', { name: 'Delete tenant' }));
+    await user.click(within(dialog).getByRole('button', { name: 'Confirm delete' }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+    expect(await within(region).findByText('No tenants yet')).toBeInTheDocument();
+  });
+
+  it('resets the API key tenant filter when its tenant is deleted', async () => {
+    let tenants = TENANTS.map((tenant) => ({ ...tenant }));
+    let deleted = false;
+    const fetchMock = installFetchMock({
+      '/api/v1/tenants': (url) => pageResponse(tenants, url),
+      '/api/v1/keys': (url) => {
+        const tenantId = url.searchParams.get('tenant_id');
+        if (tenantId === ACME.id) {
+          if (deleted) {
+            return jsonResponse(
+              {
+                error: {
+                  message: 'Tenant was not found',
+                  type: 'invalid_request_error',
+                  param: 'tenant_id',
+                  code: 'tenant_not_found',
+                  request_id: 'req_deleted_tenant_keys',
+                },
+              },
+              404,
+              { 'x-request-id': 'req_deleted_tenant_keys' },
+            );
+          }
+          return jsonResponse({
+            items: [PRODUCTION_KEY],
+            total: 1,
+            limit: PAGE_SIZE,
+            offset: 0,
+            tenant_id: ACME.id,
+          });
+        }
+        return jsonResponse({
+          items: [PRODUCTION_KEY],
+          total: 1,
+          limit: PAGE_SIZE,
+          offset: 0,
+          tenant_id: null,
+        });
+      },
+      'DELETE /api/v1/tenants/:id': (url) => {
+        const id = decodeURIComponent(url.pathname.split('/').pop() ?? '');
+        deleted = true;
+        tenants = tenants.filter((tenant) => tenant.id !== id);
+        return new Response(null, { status: 204 });
+      },
+    });
+    const user = userEvent.setup();
+    renderApp();
+
+    await openAccess(user);
+    const keyRegion = screen.getByRole('region', { name: 'API keys' });
+    const filter = within(keyRegion).getByLabelText('Tenant filter');
+    await within(keyRegion).findByRole('option', { name: 'Acme' });
+    await user.selectOptions(filter, ACME.id);
+    await waitFor(() => {
+      expect(filter).toHaveValue(ACME.id);
+      expect(
+        keyGetCalls(fetchMock).some(
+          ([input]) => toUrl(input).searchParams.get('tenant_id') === ACME.id,
+        ),
+      ).toBe(true);
+    });
+
+    const table = await screen.findByRole('table', { name: 'Tenants' });
+    await user.click(within(table).getByRole('button', { name: 'Edit limits for Acme' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Edit tenant' });
+    await user.click(within(dialog).getByRole('button', { name: 'Delete tenant' }));
+
+    const keyCallsBeforeDelete = keyGetCalls(fetchMock).length;
+    await user.click(within(dialog).getByRole('button', { name: 'Confirm delete' }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(within(keyRegion).getByLabelText('Tenant filter')).toHaveValue('');
+    });
+
+    await waitFor(() => {
+      const callsAfterDelete = keyGetCalls(fetchMock).slice(keyCallsBeforeDelete);
+      expect(callsAfterDelete.length).toBeGreaterThan(0);
+      expect(
+        callsAfterDelete.some(([input]) => toUrl(input).searchParams.get('tenant_id') === ACME.id),
+      ).toBe(false);
+      expect(
+        callsAfterDelete.some(([input]) => toUrl(input).searchParams.get('tenant_id') === null),
+      ).toBe(true);
+    });
+    expect(within(keyRegion).queryByText('Could not load API keys')).not.toBeInTheDocument();
+  });
+
+  it('falls back to all tenants when the selected usage tenant is deleted', async () => {
+    let tenants = TENANTS.map((tenant) => ({ ...tenant }));
+    installFetchMock({
+      '/api/v1/tenants': (url) => pageResponse(tenants, url),
+      'DELETE /api/v1/tenants/:id': (url) => {
+        const id = decodeURIComponent(url.pathname.split('/').pop() ?? '');
+        tenants = tenants.filter((tenant) => tenant.id !== id);
+        return new Response(null, { status: 204 });
+      },
+    });
+    const user = userEvent.setup();
+    renderApp();
+
+    await signIn(user);
+    await user.click(screen.getByRole('tab', { name: 'Usage' }));
+    const tenantSelect = await screen.findByLabelText('Tenant');
+    await screen.findByRole('option', { name: 'Acme' });
+    await user.selectOptions(tenantSelect, ACME.id);
+    expect(tenantSelect).toHaveValue(ACME.id);
+
+    await user.click(screen.getByRole('tab', { name: 'Access' }));
+    const table = await screen.findByRole('table', { name: 'Tenants' });
+    await user.click(within(table).getByRole('button', { name: 'Edit limits for Acme' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Edit tenant' });
+    await user.click(within(dialog).getByRole('button', { name: 'Delete tenant' }));
+    await user.click(within(dialog).getByRole('button', { name: 'Confirm delete' }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole('tab', { name: 'Usage' }));
+    await waitFor(() => {
+      expect(screen.getByLabelText('Tenant')).toHaveValue('');
+    });
+    expect(screen.queryByRole('option', { name: 'Acme' })).not.toBeInTheDocument();
   });
 });

@@ -50,6 +50,14 @@ const MODEL: ModelSummary = {
   tokens_per_minute: 5_000,
 };
 
+const CAPABILITY_MODEL: ModelSummary = {
+  ...MODEL,
+  context_window: 128_000,
+  max_output_tokens: 4_096,
+  supports_tools: true,
+  supports_streaming: false,
+};
+
 function tenantPage(tenants: TenantSummary[], url: URL): Response {
   const limit = Number(url.searchParams.get('limit') ?? '100');
   const offset = Number(url.searchParams.get('offset') ?? '0');
@@ -312,6 +320,55 @@ describe('model routing edits', () => {
     expect(screen.getByRole('dialog', { name: 'Edit model' })).toBeInTheDocument();
     expect(within(dialog).getByLabelText('Provider')).toHaveValue('anthropic');
     expect(within(dialog).getByRole('button', { name: 'Save changes' })).toBeEnabled();
+  });
+});
+
+describe('model capabilities', () => {
+  it('sends only changed capability fields and clears numbers with null', async () => {
+    let models = [{ ...CAPABILITY_MODEL }];
+    const patchBodies: UpdateModelInput[] = [];
+    installFetchMock({
+      '/api/v1/models': () => modelPage(models),
+      'PATCH /api/v1/models/:id': (_url, init) => {
+        const body = JSON.parse(String(init.body)) as UpdateModelInput;
+        patchBodies.push(body);
+        models = models.map((model) => (model.id === MODEL.id ? { ...model, ...body } : model));
+        return jsonResponse(models[0]);
+      },
+    });
+    const user = userEvent.setup();
+    renderApp();
+
+    const dialog = await openModelEdit(user);
+    expect(within(dialog).getByLabelText('Context window')).toHaveValue(128_000);
+    expect(within(dialog).getByLabelText('Max output tokens')).toHaveValue(4_096);
+    expect(within(dialog).getByRole('switch', { name: 'Tool use' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    );
+    expect(within(dialog).getByRole('switch', { name: 'Streaming' })).toHaveAttribute(
+      'aria-checked',
+      'false',
+    );
+
+    await user.clear(within(dialog).getByLabelText('Context window'));
+    await user.clear(within(dialog).getByLabelText('Max output tokens'));
+    await user.type(within(dialog).getByLabelText('Max output tokens'), '2048');
+    await user.click(within(dialog).getByRole('switch', { name: 'Tool use' }));
+    await user.click(within(dialog).getByRole('switch', { name: 'Streaming' }));
+    await user.click(within(dialog).getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+    expect(patchBodies).toEqual([
+      {
+        context_window: null,
+        max_output_tokens: 2048,
+        supports_tools: false,
+        supports_streaming: true,
+      },
+    ]);
   });
 });
 

@@ -20,10 +20,20 @@ import { useAdminSession } from '../lib/adminSessionContext';
 export const KEY_PAGE_SIZE = 20;
 const STATUS_CLOCK_INTERVAL_MS = 60_000;
 
-export function KeysPanel() {
+interface KeysPanelProps {
+  tenantFilter: string;
+  offset: number;
+  onTenantFilterChange: (tenantId: string) => void;
+  onOffsetChange: (offset: number) => void;
+}
+
+export function KeysPanel({
+  tenantFilter,
+  offset,
+  onTenantFilterChange,
+  onOffsetChange,
+}: KeysPanelProps) {
   const { canWrite } = useAdminSession();
-  const [tenantFilter, setTenantFilter] = useState('');
-  const [offset, setOffset] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [secret, setSecret] = useState<CreatedApiKey | null>(null);
@@ -94,8 +104,7 @@ export function KeysPanel() {
   };
 
   const handleFilterChange = (value: string) => {
-    setTenantFilter(value);
-    setOffset(0);
+    onTenantFilterChange(value);
     setNotice(null);
   };
 
@@ -229,9 +238,9 @@ export function KeysPanel() {
             onRevoke={handleRevoke}
             onEdit={handleEdit}
             onPrevious={() =>
-              setOffset(Math.max(0, (keyPage.data?.offset ?? offset) - KEY_PAGE_SIZE))
+              onOffsetChange(Math.max(0, (keyPage.data?.offset ?? offset) - KEY_PAGE_SIZE))
             }
-            onNext={() => setOffset((keyPage.data?.offset ?? offset) + KEY_PAGE_SIZE)}
+            onNext={() => onOffsetChange((keyPage.data?.offset ?? offset) + KEY_PAGE_SIZE)}
           />
         </div>
       </div>

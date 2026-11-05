@@ -80,6 +80,7 @@ describe('role-aware console', () => {
     expect(
       within(access).queryByRole('button', { name: 'Edit limits for Acme' }),
     ).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Delete tenant' })).not.toBeInTheDocument();
 
     const keyRegion = screen.getByRole('region', { name: 'API keys' });
     await within(keyRegion).findByRole('table', { name: 'API keys' });
@@ -109,6 +110,12 @@ describe('role-aware console', () => {
     await user.click(screen.getByRole('tab', { name: 'Access' }));
     expect(await screen.findByRole('button', { name: 'Create tenant' })).toBeInTheDocument();
     expect(await screen.findByRole('button', { name: 'Create API key' })).toBeInTheDocument();
+
+    const access = screen.getByRole('region', { name: 'Tenants' });
+    const table = await within(access).findByRole('table', { name: 'Tenants' });
+    await user.click(within(table).getByRole('button', { name: 'Edit limits for Acme' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Edit tenant' });
+    expect(within(dialog).queryByRole('button', { name: 'Delete tenant' })).not.toBeInTheDocument();
   });
 
   it('gives an owner every section, including admin management and admin audit', async () => {

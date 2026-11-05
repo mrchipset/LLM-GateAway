@@ -63,6 +63,10 @@ export interface UpdateModelInput {
   upstream_model?: string;
   requests_per_minute?: number | null;
   tokens_per_minute?: number | null;
+  context_window?: number | null;
+  max_output_tokens?: number | null;
+  supports_tools?: boolean;
+  supports_streaming?: boolean;
 }
 
 export interface ModelDeployment {
@@ -208,6 +212,7 @@ export interface CreateTenantInput {
 }
 
 export interface TenantLimitsPatch {
+  name?: string;
   monthly_token_quota?: number | null;
   requests_per_minute?: number | null;
   tokens_per_minute?: number | null;
@@ -1729,6 +1734,10 @@ export async function updateTenantLimits(
   const path = `/api/v1/tenants/${encodeURIComponent(tenantId)}`;
   const response = await sendAdminJson(path, 'PATCH', patch, signal);
   return readTenant(response, path);
+}
+
+export async function deleteTenant(tenantId: string, signal?: AbortSignal): Promise<void> {
+  await sendAdminDelete(`/api/v1/tenants/${encodeURIComponent(tenantId)}`, signal);
 }
 
 export async function getTenantBilling(

@@ -90,7 +90,7 @@ describe('limit fields', () => {
     const table = await within(region).findByRole('table', { name: 'Tenants' });
 
     await user.click(within(table).getByRole('button', { name: 'Edit limits for Acme' }));
-    const dialog = await screen.findByRole('dialog', { name: 'Edit tenant limits' });
+    const dialog = await screen.findByRole('dialog', { name: 'Edit tenant' });
 
     expect(
       within(dialog).getByText(
@@ -145,7 +145,7 @@ describe('limit fields', () => {
     const table = await within(region).findByRole('table', { name: 'Tenants' });
 
     await user.click(within(table).getByRole('button', { name: 'Edit limits for Acme' }));
-    const dialog = await screen.findByRole('dialog', { name: 'Edit tenant limits' });
+    const dialog = await screen.findByRole('dialog', { name: 'Edit tenant' });
     const retentionInput = within(dialog).getByLabelText('Audit retention (days)');
 
     await user.clear(retentionInput);

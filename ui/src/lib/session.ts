@@ -12,6 +12,7 @@ export interface AdminSession {
 export interface RoleCapabilities {
   canWrite: boolean;
   canManageAdmins: boolean;
+  canManageTenants: boolean;
   canReadAudit: boolean;
   canDeleteAudit: boolean;
 }
@@ -25,6 +26,7 @@ export function roleCapabilities(role: AdminRole): RoleCapabilities {
   return {
     canWrite: role === 'owner' || role === 'operator',
     canManageAdmins: role === 'owner',
+    canManageTenants: role === 'owner',
     canReadAudit: role === 'owner' || role === 'auditor',
     canDeleteAudit: role === 'owner',
   };

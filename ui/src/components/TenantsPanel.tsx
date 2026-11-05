@@ -16,8 +16,12 @@ import { EmptyTenants, TenantsPagination, TenantsSkeleton, TenantsTable } from '
 
 export const TENANT_PAGE_SIZE = 20;
 
-export function TenantsPanel() {
-  const { canWrite } = useAdminSession();
+interface TenantsPanelProps {
+  onTenantDeleted?: (tenantId: string) => void;
+}
+
+export function TenantsPanel({ onTenantDeleted }: TenantsPanelProps) {
+  const { canWrite, canManageTenants } = useAdminSession();
   const [offset, setOffset] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
   const [editingTenant, setEditingTenant] = useState<TenantSummary | null>(null);
@@ -61,6 +65,21 @@ export function TenantsPanel() {
   const handleSaved = (message: string) => {
     setNotice(message);
     setEditingTenant(null);
+  };
+
+  const handleDeleted = (tenantId: string) => {
+    const currentPage = pageQuery.data;
+    if (
+      currentPage !== undefined &&
+      currentPage.items.length === 1 &&
+      currentPage.items[0]?.id === tenantId &&
+      currentPage.offset > 0
+    ) {
+      setOffset(Math.max(0, currentPage.offset - TENANT_PAGE_SIZE));
+    }
+    setNotice('Tenant deleted.');
+    setEditingTenant(null);
+    onTenantDeleted?.(tenantId);
   };
 
   const handleAccessSaved = (message: string) => {
@@ -141,9 +160,11 @@ export function TenantsPanel() {
       {canWrite && editingTenant !== null && (
         <TenantEditDialog
           tenant={editingTenant}
+          canDelete={canManageTenants}
           returnFocusRef={returnFocusRef}
           onClose={() => setEditingTenant(null)}
           onSaved={handleSaved}
+          onDeleted={handleDeleted}
         />
       )}
 

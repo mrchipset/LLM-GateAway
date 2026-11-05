@@ -23,6 +23,7 @@ export interface Routes {
   '/api/v1/tenants'?: RouteHandler;
   'POST /api/v1/tenants'?: RouteHandler;
   'PATCH /api/v1/tenants/:id'?: RouteHandler;
+  'DELETE /api/v1/tenants/:id'?: RouteHandler;
   'GET /api/v1/tenants/:id/billing'?: RouteHandler;
   'GET /api/v1/tenants/:id/model-access'?: RouteHandler;
   'PUT /api/v1/tenants/:id/model-access'?: RouteHandler;
@@ -230,6 +231,9 @@ function createDefaultRoutes(
     'PATCH /api/v1/tenants/:id': () => {
       throw new Error('Unexpected request: PATCH /api/v1/tenants/:id');
     },
+    'DELETE /api/v1/tenants/:id': () => {
+      throw new Error('Unexpected request: DELETE /api/v1/tenants/:id');
+    },
     'GET /api/v1/tenants/:id/billing': () =>
       jsonResponse({
         tenant_id: 'tenant',
@@ -383,6 +387,11 @@ function resolveHandler(routes: Routes, url: URL, init: RequestInit): RouteHandl
 
   if (method === 'PATCH' && url.pathname.startsWith('/api/v1/tenants/')) {
     const handler = routes['PATCH /api/v1/tenants/:id'];
+    if (handler !== undefined) return handler;
+  }
+
+  if (method === 'DELETE' && /^\/api\/v1\/tenants\/[^/]+$/.test(url.pathname)) {
+    const handler = routes['DELETE /api/v1/tenants/:id'];
     if (handler !== undefined) return handler;
   }
 
