@@ -1140,3 +1140,84 @@ async def test_patch_model_routing_fields_requires_no_deployments(
     assert still_editable.status_code == 200
     assert still_editable.json()["enabled"] is False
     assert still_editable.json()["provider"] == "anthropic"
+
+
+async def test_patch_tenant_rename_and_soft_delete(
+    make_container: Callable[..., Container],
+    make_client: Callable[..., Any],
+    settings: Settings,
+) -> None:
+    container = make_container(settings, clock=SteppingClock())
+    master = _auth(_master(settings))
+    tenant = await seed_tenant(container, name="rename-me")
+    await seed_tenant(container, name="taken-name")
+    secret = await seed_api_key(container, tenant_id=tenant.id)
+
+    async with make_client(settings, container) as client:
+        renamed = await client.patch(
+            f"/api/v1/tenants/{tenant.id}",
+            json={"name": "renamed-tenant"},
+            headers=master,
+        )
+        duplicate = await client.patch(
+            f"/api/v1/tenants/{tenant.id}",
+            json={"name": "taken-name"},
+            headers=master,
+        )
+        deleted = await client.delete(f"/api/v1/tenants/{tenant.id}", headers=master)
+        listed = await client.get("/api/v1/tenants", headers=master)
+        keys = await client.get(
+            "/api/v1/keys", headers=master, params={"tenant_id": str(tenant.id)}
+        )
+        inference = await client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {secret}"},
+            json={"model": "any", "messages": [{"role": "user", "content": "hi"}]},
+        )
+
+    assert renamed.status_code == 200
+    assert renamed.json()["name"] == "renamed-tenant"
+    assert duplicate.status_code == 409
+    assert duplicate.json()["error"]["code"] == "duplicate_tenant"
+    assert deleted.status_code == 204
+    assert all(item["id"] != str(tenant.id) for item in listed.json()["items"])
+    assert keys.status_code == 404
+    assert inference.status_code == 401
+
+
+async def test_patch_model_capabilities_sets_and_clears(
+    make_container: Callable[..., Container],
+    make_client: Callable[..., Any],
+    settings: Settings,
+) -> None:
+    container = make_container(settings, clock=SteppingClock())
+    master = _auth(_master(settings))
+    await seed_model(container, model_id="cap-model")
+
+    async with make_client(settings, container) as client:
+        updated = await client.patch(
+            "/api/v1/models/cap-model",
+            json={
+                "context_window": 8192,
+                "max_output_tokens": 1024,
+                "supports_tools": False,
+                "supports_streaming": False,
+            },
+            headers=master,
+        )
+        cleared = await client.patch(
+            "/api/v1/models/cap-model",
+            json={"context_window": None, "max_output_tokens": None},
+            headers=master,
+        )
+
+    assert updated.status_code == 200
+    assert updated.json()["context_window"] == 8192
+    assert updated.json()["max_output_tokens"] == 1024
+    assert updated.json()["supports_tools"] is False
+    assert updated.json()["supports_streaming"] is False
+    assert cleared.status_code == 200
+    assert cleared.json()["context_window"] is None
+    assert cleared.json()["max_output_tokens"] is None
+    assert cleared.json()["supports_tools"] is False
+    assert cleared.json()["supports_streaming"] is False

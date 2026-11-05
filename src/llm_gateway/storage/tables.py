@@ -57,6 +57,7 @@ class TenantRow(Base):
     audit_retention_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
     tokens_per_minute: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     max_concurrent_requests: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     __table_args__ = (
         Index("ix_tenants_name", "name", unique=True),
         CheckConstraint(

@@ -231,7 +231,7 @@ Register the model with `provider: anthropic` and the Messages model id as `upst
 
 ## Model capabilities
 
-Models can declare `context_window`, `max_output_tokens`, `supports_tools`, and `supports_streaming` at registration; the console create form and model list expose them. The gateway rejects a request with 400 `request_limit_exceeded` before calling upstream when `max_tokens` exceeds `max_output_tokens`, when tools are disabled, or when streaming is disabled. The context window is recorded for capacity planning but not tokenized precisely; prompt limits remain character-based. Capabilities are fixed at creation; changing them requires delete and recreate.
+Models can declare `context_window`, `max_output_tokens`, `supports_tools`, and `supports_streaming` at registration and edit them later; the console create and edit forms plus the model list expose them. The gateway rejects a request with 400 `request_limit_exceeded` before calling upstream when `max_tokens` exceeds `max_output_tokens`, when tools are disabled, or when streaming is disabled. The context window is recorded for capacity planning but not tokenized precisely; prompt limits remain character-based. Capabilities are editable through PATCH.
 
 ## Token usage
 
@@ -745,7 +745,7 @@ The console exposes the sections your role can use:
 The Models tab provides:
 
 - Register a model (id, provider, upstream model, enabled, optional RPM/TPM) with client-side validation mirroring the API; provider configuration is still a backend concern.
-- Edit a model's enabled flag, provider, upstream model, and limits in place. Provider/upstream changes require the model to have no deployments (409 otherwise, explained inline).
+- Edit a model's enabled flag, provider, upstream model, limits, and capabilities in place. Provider/upstream changes require the model to have no deployments (409 otherwise, explained inline).
 - Delete a model with confirmation; deleting it also removes it from every tenant allowlist.
 - Manage the per-model price list: versions newest first, with an append form (prices are per million tokens and a new version applies from its effective date).
 - Manage deployments per model: weighted routing, per-deployment credential env names and base URLs, enable/disable, and deletion, with a note that failover and cooldown apply.
@@ -764,7 +764,8 @@ The usage panel provides:
 
 The Access tab manages tenants and API keys:
 
-- Create tenants and edit the monthly token quota, requests-per-minute, tokens-per-minute, max concurrent requests, and audit retention (empty inherits the global retention; `0` is a legal hold); empty input clears a limit.
+- Create tenants and edit the name, monthly token quota, requests-per-minute, tokens-per-minute, max concurrent requests, and audit retention (empty inherits the global retention; `0` is a legal hold); empty input clears a limit.
+- Delete a tenant (owner only) with an explicit confirmation: the console explains that it is a soft delete that hides the tenant and revokes its keys while usage and audit history remain.
 - Set each tenant's model access policy (`All models` or an explicit allowlist) in a dedicated dialog. The dialog shows an explicit warning when an empty allowlist would block every model.
 - Manage each tenant's plan (tokens, overage switch) and monthly cost budget, with the current period summary: used / covered / billable tokens, list and billed cost, and budget remaining.
 - Create keys per tenant with an optional expiry and optional per-key RPM / TPM / concurrency limits. The plaintext is shown once, can be copied, and is never written to storage, the URL, or the query cache; closing an uncopied dialog asks for confirmation. The key list shows configured limits, and each key's limits can be edited later (only changed fields are sent; clearing a field removes that limit).
@@ -830,11 +831,11 @@ design.md            LLM-GateAway design guidance
 ## Known limitations
 
 - OpenAI, DeepSeek, Azure OpenAI, Anthropic (Messages), and the fake provider are implemented. Bedrock and Vertex are not: they need AWS SigV4 / Google OAuth and SDK-level request shapes.
-- Model capabilities (`context_window`, `max_output_tokens`, `supports_tools`, `supports_streaming`) are enforced at request time and set at registration; they cannot be changed afterwards. The context window is not tokenized precisely.
+- Model capabilities (`context_window`, `max_output_tokens`, `supports_tools`, `supports_streaming`) are enforced at request time and editable through PATCH. The context window is not tokenized precisely.
 - Multi-deployment routing exists (weights, failover, cooldown), but deployments cannot change provider or name after creation; per-deployment usage attribution is still provider-scoped.
 - No invoicing, per-key or per-model budgets; quotas and budgets are soft against concurrent requests. There is no pre-call reservation by design: a tenant can overshoot by the usage of requests already in flight when the limit is crossed.
 - Rate limits are token buckets for tenant, key, and model. Per-key/model/TPM/concurrency state is shared only with `GATEWAY_RATE_LIMIT_BACKEND=redis`; the `storage` backend keeps those scopes process-local, and its tenant counter is a fixed window.
-- Creating a key requires `tenant_id` (a breaking change for old callers); there is no tenant delete or rename API, and no endpoint to edit an existing key's limits.
+- Creating a key requires `tenant_id` (a breaking change for old callers). Tenants can be renamed; DELETE is a soft delete that hides the tenant and revokes its keys while usage and audit history stay in the database. Key limits can be edited through PATCH.
 - Model access is tenant-scoped only: no per-key model scoping. Rate limits are per key and per model, but tenant model access cannot be narrowed to a key.
 - The console authenticates with admin sessions; the master key remains available for scripts and break-glass, and it is not accepted from the browser UI.
 - `usage_records` has no retention or archival job and grows with traffic; cost is computed and stored per request, but there is no invoicing, no currency conversion, and no multi-currency price list.
@@ -844,7 +845,7 @@ design.md            LLM-GateAway design guidance
 - Model configuration supports create, list, PATCH (enabled, limits, provider, upstream_model), and delete. Provider/upstream changes return 409 model_has_deployments while deployments exist, because deployments override those defaults; delete the deployments first.
 - `/v1/models` returns at most 1000 entries; the management API uses offset pagination.
 - `last_used_at` is sampled per `GATEWAY_LAST_USED_SAMPLE_SECONDS`; the sample window divides across workers, which is acceptable for a display field.
-- The console can manage deployments, limits, audit export/retention, and model settings. A model's provider/upstream can be edited only when it has no deployments (the API returns 409 otherwise, and the console explains why). Capabilities are fixed at creation. The usage panel supports a per-day drill-down and CSV exports, caps keys and tenants at 100 each, and labels the final bar as today so far. Tenant delete/rename is not available.
+- The console can manage deployments, limits, audit export/retention, tenant rename/soft-delete, and model settings (including capabilities). A model's provider/upstream can be edited only when it has no deployments (the API returns 409 otherwise, and the console explains why). The usage panel supports a per-day drill-down and CSV exports, caps keys and tenants at 100 each, and labels the final bar as today so far.
 - Local `uv` runs require a manual `alembic upgrade head`; Compose runs it through the one-shot `migrate` service, and the application process itself never migrates.
 
 ## Related documents

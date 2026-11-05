@@ -3,10 +3,10 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
 
 from llm_gateway.auth.admin_auth import AdminPrincipal
-from llm_gateway.auth.admin_deps import current_admin, require_write_access
+from llm_gateway.auth.admin_deps import current_admin, require_owner, require_write_access
 from llm_gateway.container import Container, get_container
 from llm_gateway.errors import ApiError, ApiErrorCode
 from llm_gateway.schemas.admin import (
@@ -135,6 +135,20 @@ async def update_tenant_limits(
     if existing is None:
         raise _not_found(tenant_id)
 
+    if "name" in provided and payload.name is not None:
+        try:
+            renamed = await container.tenants.rename_tenant(tenant_id, name=payload.name)
+        except DuplicateTenantError as exc:
+            raise ApiError(
+                status_code=409,
+                code=ApiErrorCode.DUPLICATE_TENANT,
+                message=f"Tenant '{payload.name}' already exists",
+                error_type="invalid_request_error",
+                param="name",
+            ) from exc
+        if renamed is None:
+            raise _not_found(tenant_id)
+
     updated = await container.tenants.set_tenant_limits(tenant_id, patch=patch)
     if updated is None:
         raise _not_found(tenant_id)
@@ -149,6 +163,34 @@ async def update_tenant_limits(
         after=tenant_snapshot(updated),
     )
     return _detail(updated)
+
+
+@router.delete("/tenants/{tenant_id}", status_code=204)
+async def delete_tenant(
+    tenant_id: UUID,
+    principal: Annotated[AdminPrincipal, Depends(require_owner)],
+    container: Annotated[Container, Depends(get_container)],
+) -> Response:
+    existing = await container.tenants.get_tenant(tenant_id)
+    if existing is None:
+        raise _not_found(tenant_id)
+
+    now = container.clock.now()
+    deleted = await container.tenants.soft_delete_tenant(tenant_id, deleted_at=now)
+    if deleted is None:
+        raise _not_found(tenant_id)
+    await container.api_keys.revoke_keys_for_tenant(tenant_id, now)
+
+    await record_admin_event_safely(
+        container=container,
+        principal=principal,
+        action="tenant.deleted",
+        target_type="tenant",
+        target_id=str(tenant_id),
+        before=tenant_snapshot(existing),
+        after={"deleted_at": now.isoformat()},
+    )
+    return Response(status_code=204)
 
 
 @router.get("/tenants", response_model=TenantListResponse)

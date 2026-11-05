@@ -2720,3 +2720,69 @@ async def test_update_model_routing_fields_round_trip(database: Database) -> Non
     assert updated.provider is ProviderName.ANTHROPIC
     assert updated.upstream_model == "claude-sonnet-4-5"
     assert await database.models.get_model(model.id) == updated
+
+
+async def test_tenant_rename_and_soft_delete(database: Database) -> None:
+    tenant = await database.tenants.create_tenant(_tenant(1))
+    other = await database.tenants.create_tenant(_tenant(2))
+    key = _key(1, tenant_id=tenant.id)
+    await database.api_keys.create_key(key)
+
+    renamed = await database.tenants.rename_tenant(tenant.id, name="renamed-tenant")
+    assert renamed is not None
+    assert renamed.name == "renamed-tenant"
+
+    with pytest.raises(DuplicateTenantError):
+        await database.tenants.rename_tenant(tenant.id, name=other.name)
+
+    assert await database.api_keys.revoke_keys_for_tenant(tenant.id, BASE) == 1
+    deleted = await database.tenants.soft_delete_tenant(tenant.id, deleted_at=BASE)
+    assert deleted is not None
+    assert deleted.deleted_at == BASE
+
+    assert await database.tenants.get_tenant(tenant.id) is None
+    tenants, total = await database.tenants.list_tenants(limit=10, offset=0)
+    assert total == 1
+    assert [item.id for item in tenants] == [other.id]
+    stored_key = await database.api_keys.get_key(key.id)
+    assert stored_key is not None
+    assert stored_key.revoked_at == BASE
+    assert await database.tenants.soft_delete_tenant(tenant.id, deleted_at=BASE) is None
+
+
+async def test_update_model_capabilities_round_trip(database: Database) -> None:
+    model = _model(1)
+    await database.models.create_model(model)
+
+    updated = await database.models.update_model(
+        model.id,
+        patch=ModelPatch(
+            context_window=8192,
+            max_output_tokens=1024,
+            supports_tools=False,
+            supports_streaming=False,
+            set_context_window=True,
+            set_max_output_tokens=True,
+            set_supports_tools=True,
+            set_supports_streaming=True,
+        ),
+    )
+    assert updated is not None
+    assert updated.context_window == 8192
+    assert updated.max_output_tokens == 1024
+    assert updated.supports_tools is False
+    assert updated.supports_streaming is False
+
+    cleared = await database.models.update_model(
+        model.id,
+        patch=ModelPatch(
+            context_window=None,
+            max_output_tokens=None,
+            set_context_window=True,
+            set_max_output_tokens=True,
+        ),
+    )
+    assert cleared is not None
+    assert cleared.context_window is None
+    assert cleared.max_output_tokens is None
+    assert cleared.supports_tools is False

@@ -186,6 +186,7 @@ def _to_tenant(row: TenantRow) -> Tenant:
         audit_retention_days=row.audit_retention_days,
         tokens_per_minute=row.tokens_per_minute,
         max_concurrent_requests=row.max_concurrent_requests,
+        deleted_at=row.deleted_at,
     )
 
 
@@ -303,6 +304,14 @@ class SqlAlchemyModelRepository:
             values["requests_per_minute"] = patch.requests_per_minute
         if patch.set_tokens_per_minute:
             values["tokens_per_minute"] = patch.tokens_per_minute
+        if patch.set_context_window:
+            values["context_window"] = patch.context_window
+        if patch.set_max_output_tokens:
+            values["max_output_tokens"] = patch.max_output_tokens
+        if patch.set_supports_tools and patch.supports_tools is not None:
+            values["supports_tools"] = patch.supports_tools
+        if patch.set_supports_streaming and patch.supports_streaming is not None:
+            values["supports_streaming"] = patch.supports_streaming
         async with self._session_factory() as session, session.begin():
             if not values:
                 row = await session.get(ModelRow, model_id)
@@ -413,6 +422,7 @@ class SqlAlchemyTenantRepository:
             audit_retention_days=tenant.audit_retention_days,
             tokens_per_minute=tenant.tokens_per_minute,
             max_concurrent_requests=tenant.max_concurrent_requests,
+            deleted_at=tenant.deleted_at,
         )
         try:
             async with self._session_factory() as session, session.begin():
@@ -426,7 +436,7 @@ class SqlAlchemyTenantRepository:
     async def get_tenant(self, tenant_id: UUID) -> Tenant | None:
         async with self._session_factory() as session, session.begin():
             row = await session.get(TenantRow, tenant_id)
-            return _to_tenant(row) if row is not None else None
+            return _to_tenant(row) if row is not None and row.deleted_at is None else None
 
     async def list_tenants(self, *, limit: int, offset: int) -> tuple[Sequence[Tenant], int]:
         _validate_page(limit=limit, offset=offset)
@@ -434,12 +444,15 @@ class SqlAlchemyTenantRepository:
             rows = (
                 await session.scalars(
                     select(TenantRow)
+                    .where(TenantRow.deleted_at.is_(None))
                     .order_by(TenantRow.created_at.desc(), TenantRow.id.desc())
                     .limit(limit)
                     .offset(offset)
                 )
             ).all()
-            total = await session.scalar(select(func.count()).select_from(TenantRow))
+            total = await session.scalar(
+                select(func.count()).select_from(TenantRow).where(TenantRow.deleted_at.is_(None))
+            )
             tenants = [_to_tenant(row) for row in rows]
         return tenants, total or 0
 
@@ -480,6 +493,31 @@ class SqlAlchemyTenantRepository:
                 )
                 row = await session.scalar(statement)
             return _to_tenant(row) if row is not None else None
+
+    async def rename_tenant(self, tenant_id: UUID, *, name: str) -> Tenant | None:
+        try:
+            async with self._session_factory() as session, session.begin():
+                row = await session.scalar(
+                    update(TenantRow)
+                    .where(TenantRow.id == tenant_id, TenantRow.deleted_at.is_(None))
+                    .values(name=name)
+                    .returning(TenantRow)
+                )
+        except IntegrityError as exc:
+            if _is_unique_violation(exc):
+                raise DuplicateTenantError(name) from exc
+            raise
+        return _to_tenant(row) if row is not None else None
+
+    async def soft_delete_tenant(self, tenant_id: UUID, *, deleted_at: datetime) -> Tenant | None:
+        async with self._session_factory() as session, session.begin():
+            row = await session.scalar(
+                update(TenantRow)
+                .where(TenantRow.id == tenant_id, TenantRow.deleted_at.is_(None))
+                .values(deleted_at=deleted_at)
+                .returning(TenantRow)
+            )
+        return _to_tenant(row) if row is not None else None
 
     async def get_model_access(self, tenant_id: UUID) -> ModelAccess | None:
         async with self._session_factory() as session, session.begin():
@@ -617,6 +655,21 @@ class SqlAlchemyApiKeyRepository:
                 ),
             )
             return result.rowcount == 1
+
+    async def revoke_keys_for_tenant(self, tenant_id: UUID, revoked_at: datetime) -> int:
+        async with self._session_factory() as session, session.begin():
+            result = cast(
+                "CursorResult[tuple[()]]",
+                await session.execute(
+                    update(ApiKeyRow)
+                    .where(
+                        ApiKeyRow.tenant_id == tenant_id,
+                        ApiKeyRow.revoked_at.is_(None),
+                    )
+                    .values(revoked_at=revoked_at)
+                ),
+            )
+            return max(result.rowcount, 0)
 
     async def touch_last_used(self, key_id: UUID, used_at: datetime) -> None:
         async with self._session_factory() as session, session.begin():

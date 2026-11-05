@@ -39,6 +39,14 @@ class MissingTenantRepository:
     async def set_tenant_limits(self, tenant_id: UUID, *, patch: TenantLimitPatch) -> Tenant | None:
         return None
 
+    async def rename_tenant(self, tenant_id: UUID, *, name: str) -> Tenant | None:
+        return None
+
+    async def soft_delete_tenant(
+        self, tenant_id: UUID, *, deleted_at: datetime
+    ) -> Tenant | None:
+        return None
+
     async def get_model_access(self, tenant_id: UUID) -> ModelAccess | None:
         return None
 

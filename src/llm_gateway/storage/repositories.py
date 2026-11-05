@@ -107,6 +107,7 @@ class Tenant:
     audit_retention_days: int | None = None
     tokens_per_minute: int | None = None
     max_concurrent_requests: int | None = None
+    deleted_at: datetime | None = None
 
     def __post_init__(self) -> None:
         _require_uuid(self.id, "id")
@@ -116,6 +117,8 @@ class Tenant:
         _require_optional_positive_int(self.requests_per_minute, "requests_per_minute")
         _require_optional_positive_int(self.tokens_per_minute, "tokens_per_minute")
         _require_optional_positive_int(self.max_concurrent_requests, "max_concurrent_requests")
+        if self.deleted_at is not None:
+            _require_aware(self.deleted_at, "deleted_at")
         _require_optional_positive_int(self.plan_tokens, "plan_tokens")
         if not isinstance(self.plan_allow_overage, bool):
             raise ValueError("plan_allow_overage must be a boolean")
@@ -505,6 +508,12 @@ class TenantRepository(Protocol):
         patch: TenantLimitPatch,
     ) -> Tenant | None: ...
 
+    async def rename_tenant(self, tenant_id: UUID, *, name: str) -> Tenant | None: ...
+
+    async def soft_delete_tenant(
+        self, tenant_id: UUID, *, deleted_at: datetime
+    ) -> Tenant | None: ...
+
     async def get_model_access(self, tenant_id: UUID) -> ModelAccess | None: ...
 
     async def set_model_access(
@@ -575,11 +584,19 @@ class ModelPatch:
     upstream_model: str | None = None
     requests_per_minute: int | None = None
     tokens_per_minute: int | None = None
+    context_window: int | None = None
+    max_output_tokens: int | None = None
+    supports_tools: bool | None = None
+    supports_streaming: bool | None = None
     set_enabled: bool = False
     set_provider: bool = False
     set_upstream_model: bool = False
     set_requests_per_minute: bool = False
     set_tokens_per_minute: bool = False
+    set_context_window: bool = False
+    set_max_output_tokens: bool = False
+    set_supports_tools: bool = False
+    set_supports_streaming: bool = False
 
 
 class ModelRepository(Protocol):
@@ -626,6 +643,8 @@ class ApiKeyRepository(Protocol):
     ) -> ApiKeyRecord | None: ...
 
     async def touch_last_used(self, key_id: UUID, used_at: datetime) -> None: ...
+
+    async def revoke_keys_for_tenant(self, tenant_id: UUID, revoked_at: datetime) -> int: ...
 
 
 AuditMatchMethod = Literal["explicit", "prefix", "new"]

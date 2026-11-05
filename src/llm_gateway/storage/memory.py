@@ -108,6 +108,14 @@ class InMemoryModelRepository:
                 changes["requests_per_minute"] = patch.requests_per_minute
             if patch.set_tokens_per_minute:
                 changes["tokens_per_minute"] = patch.tokens_per_minute
+            if patch.set_context_window:
+                changes["context_window"] = patch.context_window
+            if patch.set_max_output_tokens:
+                changes["max_output_tokens"] = patch.max_output_tokens
+            if patch.set_supports_tools and patch.supports_tools is not None:
+                changes["supports_tools"] = patch.supports_tools
+            if patch.set_supports_streaming and patch.supports_streaming is not None:
+                changes["supports_streaming"] = patch.supports_streaming
             if not changes:
                 return model
             updated = replace(model, **changes)  # pyright: ignore[reportArgumentType]
@@ -133,12 +141,15 @@ class InMemoryTenantRepository:
             return tenant
 
     async def get_tenant(self, tenant_id: UUID) -> Tenant | None:
-        return self._tenants.get(tenant_id)
+        tenant = self._tenants.get(tenant_id)
+        if tenant is None or tenant.deleted_at is not None:
+            return None
+        return tenant
 
     async def list_tenants(self, *, limit: int, offset: int) -> tuple[Sequence[Tenant], int]:
         _validate_page(limit=limit, offset=offset)
         ordered = sorted(
-            self._tenants.values(),
+            (tenant for tenant in self._tenants.values() if tenant.deleted_at is None),
             key=lambda tenant: (tenant.created_at, tenant.id),
             reverse=True,
         )
@@ -176,6 +187,29 @@ class InMemoryTenantRepository:
             if not changes:
                 return tenant
             updated = replace(tenant, **changes)  # pyright: ignore[reportArgumentType]
+            self._tenants[tenant_id] = updated
+            return updated
+
+    async def rename_tenant(self, tenant_id: UUID, *, name: str) -> Tenant | None:
+        async with self._lock:
+            tenant = self._tenants.get(tenant_id)
+            if tenant is None or tenant.deleted_at is not None:
+                return None
+            if any(
+                other.id != tenant_id and other.name == name and other.deleted_at is None
+                for other in self._tenants.values()
+            ):
+                raise DuplicateTenantError(name)
+            updated = replace(tenant, name=name)
+            self._tenants[tenant_id] = updated
+            return updated
+
+    async def soft_delete_tenant(self, tenant_id: UUID, *, deleted_at: datetime) -> Tenant | None:
+        async with self._lock:
+            tenant = self._tenants.get(tenant_id)
+            if tenant is None or tenant.deleted_at is not None:
+                return None
+            updated = replace(tenant, deleted_at=deleted_at)
             self._tenants[tenant_id] = updated
             return updated
 
@@ -303,6 +337,15 @@ class InMemoryApiKeyRepository:
                 return False
             self._keys[key_id] = replace(record, revoked_at=revoked_at)
             return True
+
+    async def revoke_keys_for_tenant(self, tenant_id: UUID, revoked_at: datetime) -> int:
+        async with self._lock:
+            revoked = 0
+            for key_id, record in list(self._keys.items()):
+                if record.tenant_id == tenant_id and record.revoked_at is None:
+                    self._keys[key_id] = replace(record, revoked_at=revoked_at)
+                    revoked += 1
+            return revoked
 
     async def touch_last_used(self, key_id: UUID, used_at: datetime) -> None:
         async with self._lock:

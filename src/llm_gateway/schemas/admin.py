@@ -121,6 +121,7 @@ class UpdateTenantLimitsRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    name: str | None = Field(default=None, min_length=1, max_length=100)
     monthly_token_quota: int | None = Field(default=None, ge=1)
     requests_per_minute: int | None = Field(default=None, ge=1)
     tokens_per_minute: int | None = Field(default=None, ge=1)
@@ -130,6 +131,13 @@ class UpdateTenantLimitsRequest(BaseModel):
     plan_allow_overage: bool | None = None
     monthly_cost_budget: Decimal | None = Field(default=None, ge=0)
     audit_retention_days: int | None = Field(default=None, ge=0)
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def _strip_name(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip()
+        return value
 
 
 class TenantDetail(BaseModel):
@@ -304,6 +312,10 @@ class UpdateModelRequest(BaseModel):
     upstream_model: str | None = Field(default=None, min_length=1, max_length=256)
     requests_per_minute: int | None = Field(default=None, ge=1)
     tokens_per_minute: int | None = Field(default=None, ge=1)
+    context_window: int | None = Field(default=None, ge=1)
+    max_output_tokens: int | None = Field(default=None, ge=1)
+    supports_tools: bool | None = None
+    supports_streaming: bool | None = None
 
     @field_validator("upstream_model", mode="before")
     @classmethod

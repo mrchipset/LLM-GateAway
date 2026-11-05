@@ -178,11 +178,21 @@ async def update_model(
         upstream_model=payload.upstream_model,
         requests_per_minute=payload.requests_per_minute,
         tokens_per_minute=payload.tokens_per_minute,
+        context_window=payload.context_window,
+        max_output_tokens=payload.max_output_tokens,
+        supports_tools=payload.supports_tools,
+        supports_streaming=payload.supports_streaming,
         set_enabled="enabled" in provided and payload.enabled is not None,
         set_provider="provider" in provided and payload.provider is not None,
         set_upstream_model="upstream_model" in provided and payload.upstream_model is not None,
         set_requests_per_minute="requests_per_minute" in provided,
         set_tokens_per_minute="tokens_per_minute" in provided,
+        set_context_window="context_window" in provided,
+        set_max_output_tokens="max_output_tokens" in provided,
+        set_supports_tools="supports_tools" in provided and payload.supports_tools is not None,
+        set_supports_streaming=(
+            "supports_streaming" in provided and payload.supports_streaming is not None
+        ),
     )
     updated = await container.models.update_model(model_id, patch=patch)
     if updated is None:
