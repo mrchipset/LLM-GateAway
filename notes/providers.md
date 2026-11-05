@@ -72,5 +72,5 @@ the migration.
 - Anthropic `thinking`/reasoning blocks are rejected rather than mapped; a client that needs them
   needs a new internal field, not an adapter hack.
 - Azure's `api-version` is global; per-deployment versions would need another column.
-- The console can register Azure/Anthropic models but does not yet expose capability fields in the
-  create form.
+- Capabilities are fixed at creation; the PATCH endpoint does not accept them, so changing them
+  requires delete and recreate.

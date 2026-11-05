@@ -362,6 +362,35 @@ function ModelsTable({
   );
 }
 
+function formatTokenCapacity(value: number): string {
+  if (value >= 1_000_000) return `${formatCompactNumber(value / 1_000_000)}m`;
+  if (value >= 1_000) return `${formatCompactNumber(value / 1_000)}k`;
+  return formatExactNumber(value);
+}
+
+function modelCapabilitySummary(model: ModelSummary): { summary: string; exact: string } | null {
+  const parts: string[] = [];
+  const exact: string[] = [];
+  if (model.context_window !== null && model.context_window !== undefined) {
+    parts.push(`${formatTokenCapacity(model.context_window)} ctx`);
+    exact.push(`${formatExactNumber(model.context_window)} token context window`);
+  }
+  if (model.max_output_tokens !== null && model.max_output_tokens !== undefined) {
+    parts.push(`${formatTokenCapacity(model.max_output_tokens)} out`);
+    exact.push(`${formatExactNumber(model.max_output_tokens)} max output tokens`);
+  }
+  if (typeof model.supports_tools === 'boolean') {
+    parts.push(model.supports_tools ? 'tools' : 'no tools');
+    exact.push(model.supports_tools ? 'tools supported' : 'tools not supported');
+  }
+  if (typeof model.supports_streaming === 'boolean') {
+    parts.push(model.supports_streaming ? 'stream' : 'no stream');
+    exact.push(model.supports_streaming ? 'streaming supported' : 'streaming not supported');
+  }
+  if (parts.length === 0) return null;
+  return { summary: parts.join(' · '), exact: `Model capabilities: ${exact.join(', ')}` };
+}
+
 function modelLimitSummary(model: ModelSummary): { summary: string; exact: string } | null {
   const parts: string[] = [];
   const exact: string[] = [];
@@ -393,6 +422,7 @@ function ModelRow({
   onEdit: EditModelHandler;
 }) {
   const limits = modelLimitSummary(model);
+  const capabilities = modelCapabilitySummary(model);
   return (
     <tr
       className={`transition-colors hover:bg-surface-sunken/40 ${
@@ -414,6 +444,14 @@ function ModelRow({
             title={limits.exact}
           >
             {limits.summary}
+          </span>
+        )}
+        {capabilities !== null && (
+          <span
+            className="mt-0.5 block break-words font-mono text-[10px] tabular-nums text-ink-muted"
+            title={capabilities.exact}
+          >
+            {capabilities.summary}
           </span>
         )}
       </td>
@@ -485,6 +523,7 @@ function ModelCard({
   onEdit: EditModelHandler;
 }) {
   const limits = modelLimitSummary(model);
+  const capabilities = modelCapabilitySummary(model);
   return (
     <li className={`py-3 ${model.enabled ? '' : 'bg-surface-sunken/30'}`}>
       <div className="flex items-start justify-between gap-3">
@@ -511,6 +550,14 @@ function ModelCard({
             <dt className="text-ink-muted">Limits</dt>
             <dd className="break-words font-mono text-[11px]" title={limits.exact}>
               {limits.summary}
+            </dd>
+          </>
+        )}
+        {capabilities !== null && (
+          <>
+            <dt className="text-ink-muted">Capabilities</dt>
+            <dd className="break-words font-mono text-[11px]" title={capabilities.exact}>
+              {capabilities.summary}
             </dd>
           </>
         )}

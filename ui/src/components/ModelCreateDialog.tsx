@@ -20,30 +20,109 @@ interface ModelCreateDialogProps {
   onCreated: (model: ModelSummary) => void;
 }
 
+interface CapabilityToggleProps {
+  label: string;
+  hint: string;
+  checked: boolean;
+  disabled: boolean;
+  labelId: string;
+  hintId: string;
+  onChange: () => void;
+}
+
+function CapabilityToggle({
+  label,
+  hint,
+  checked,
+  disabled,
+  labelId,
+  hintId,
+  onChange,
+}: CapabilityToggleProps) {
+  return (
+    <div className="flex items-start justify-between gap-3">
+      <div className="min-w-0">
+        <p id={labelId} className="text-[12px] font-medium text-ink">
+          {label}
+        </p>
+        <p id={hintId} className="mt-0.5 text-[11.5px] leading-4 text-ink-muted">
+          {hint}
+        </p>
+      </div>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        aria-labelledby={labelId}
+        aria-describedby={hintId}
+        disabled={disabled}
+        onClick={onChange}
+        className="inline-flex shrink-0 items-center gap-2 rounded focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        <span
+          aria-hidden="true"
+          className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+            checked ? 'bg-accent' : 'bg-line-strong'
+          }`}
+        >
+          <span
+            className={`absolute top-0.5 size-4 rounded-full bg-white shadow-sm transition-transform ${
+              checked ? 'translate-x-[1.125rem]' : 'translate-x-0.5'
+            }`}
+          />
+        </span>
+        <span className="w-6 font-mono text-[10.5px] uppercase tracking-[0.08em] text-ink-muted">
+          {checked ? 'On' : 'Off'}
+        </span>
+      </button>
+    </div>
+  );
+}
+
 export function ModelCreateDialog({ returnFocusRef, onClose, onCreated }: ModelCreateDialogProps) {
   const [id, setId] = useState('');
   const [provider, setProvider] = useState<ModelProvider>('openai');
   const [upstreamModel, setUpstreamModel] = useState('');
   const [rate, setRate] = useState('');
   const [tokens, setTokens] = useState('');
+  const [contextWindow, setContextWindow] = useState('');
+  const [maxOutputTokens, setMaxOutputTokens] = useState('');
+  const [supportsTools, setSupportsTools] = useState(true);
+  const [supportsStreaming, setSupportsStreaming] = useState(true);
   const [enabled, setEnabled] = useState(true);
   const [fieldErrors, setFieldErrors] = useState<ModelDraftErrors>({});
-  const [limitErrors, setLimitErrors] = useState<{ rate?: string; tokens?: string }>({});
+  const [limitErrors, setLimitErrors] = useState<{
+    rate?: string;
+    tokens?: string;
+    contextWindow?: string;
+    maxOutputTokens?: string;
+  }>({});
   const titleId = useId();
   const idInput = useId();
   const providerId = useId();
   const upstreamId = useId();
   const rateId = useId();
   const tokensId = useId();
+  const contextWindowId = useId();
+  const maxOutputTokensId = useId();
   const enabledLabelId = useId();
   const enabledHintId = useId();
+  const toolsLabelId = useId();
+  const toolsHintId = useId();
+  const streamingLabelId = useId();
+  const streamingHintId = useId();
   const hintId = useId();
   const limitsHintId = useId();
+  const capabilitiesHintId = useId();
+  const contextWindowHintId = useId();
+  const maxOutputTokensHintId = useId();
   const providerHintId = useId();
   const idErrorId = useId();
   const upstreamErrorId = useId();
   const rateErrorId = useId();
   const tokensErrorId = useId();
+  const contextWindowErrorId = useId();
+  const maxOutputTokensErrorId = useId();
   const idRef = useRef<HTMLInputElement>(null);
   const createMutation = useCreateModel();
 
@@ -59,9 +138,22 @@ export function ModelCreateDialog({ returnFocusRef, onClose, onCreated }: ModelC
     const nextErrors = validateModelDraft({ id, upstreamModel });
     const rateResult = parseOptionalCount(rate, 1);
     const tokensResult = parseOptionalCount(tokens, 1);
-    const nextLimitErrors: { rate?: string; tokens?: string } = {};
+    const contextWindowResult = parseOptionalCount(contextWindow, 1);
+    const maxOutputTokensResult = parseOptionalCount(maxOutputTokens, 1);
+    const nextLimitErrors: {
+      rate?: string;
+      tokens?: string;
+      contextWindow?: string;
+      maxOutputTokens?: string;
+    } = {};
     if (rateResult.status === 'invalid') nextLimitErrors.rate = countErrorText(1);
     if (tokensResult.status === 'invalid') nextLimitErrors.tokens = countErrorText(1);
+    if (contextWindowResult.status === 'invalid') {
+      nextLimitErrors.contextWindow = countErrorText(1);
+    }
+    if (maxOutputTokensResult.status === 'invalid') {
+      nextLimitErrors.maxOutputTokens = countErrorText(1);
+    }
 
     setFieldErrors(nextErrors);
     setLimitErrors(nextLimitErrors);
@@ -69,7 +161,9 @@ export function ModelCreateDialog({ returnFocusRef, onClose, onCreated }: ModelC
       nextErrors.id !== undefined ||
       nextErrors.upstreamModel !== undefined ||
       nextLimitErrors.rate !== undefined ||
-      nextLimitErrors.tokens !== undefined
+      nextLimitErrors.tokens !== undefined ||
+      nextLimitErrors.contextWindow !== undefined ||
+      nextLimitErrors.maxOutputTokens !== undefined
     ) {
       return;
     }
@@ -79,8 +173,16 @@ export function ModelCreateDialog({ returnFocusRef, onClose, onCreated }: ModelC
       provider,
       upstream_model: upstreamModel.trim(),
       enabled,
+      supports_tools: supportsTools,
+      supports_streaming: supportsStreaming,
       ...(rateResult.status === 'set' ? { requests_per_minute: rateResult.value } : {}),
       ...(tokensResult.status === 'set' ? { tokens_per_minute: tokensResult.value } : {}),
+      ...(contextWindowResult.status === 'set'
+        ? { context_window: contextWindowResult.value }
+        : {}),
+      ...(maxOutputTokensResult.status === 'set'
+        ? { max_output_tokens: maxOutputTokensResult.value }
+        : {}),
     };
 
     createMutation.mutate(input, {
@@ -97,6 +199,14 @@ export function ModelCreateDialog({ returnFocusRef, onClose, onCreated }: ModelC
     limitErrors.rate === undefined ? limitsHintId : `${limitsHintId} ${rateErrorId}`;
   const tokensDescribedBy =
     limitErrors.tokens === undefined ? limitsHintId : `${limitsHintId} ${tokensErrorId}`;
+  const contextWindowDescribedBy =
+    limitErrors.contextWindow === undefined
+      ? contextWindowHintId
+      : `${contextWindowHintId} ${contextWindowErrorId}`;
+  const maxOutputTokensDescribedBy =
+    limitErrors.maxOutputTokens === undefined
+      ? maxOutputTokensHintId
+      : `${maxOutputTokensHintId} ${maxOutputTokensErrorId}`;
 
   return (
     <Modal
@@ -290,6 +400,107 @@ export function ModelCreateDialog({ returnFocusRef, onClose, onCreated }: ModelC
                 </p>
               )}
             </div>
+          </div>
+        </div>
+
+        <div className="mt-4 border-t border-line pt-3">
+          <h4 className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-ink-muted">
+            Capabilities
+          </h4>
+          <p id={capabilitiesHintId} className="mt-1 text-[11.5px] leading-5 text-ink-muted">
+            Declare what this model accepts. Leave a number blank if it is unknown.
+          </p>
+          <div className="mt-2 grid gap-3 sm:grid-cols-2">
+            <div>
+              <label htmlFor={contextWindowId} className="block text-[12px] font-medium text-ink">
+                Context window
+              </label>
+              <input
+                id={contextWindowId}
+                type="number"
+                min={1}
+                step={1}
+                inputMode="numeric"
+                value={contextWindow}
+                onChange={(event) => {
+                  setContextWindow(event.target.value);
+                  setLimitErrors((current) => ({ ...current, contextWindow: undefined }));
+                  clearServerError();
+                }}
+                disabled={pending}
+                placeholder="Not set"
+                aria-invalid={limitErrors.contextWindow !== undefined}
+                aria-describedby={contextWindowDescribedBy}
+                className="mt-1 block w-full min-w-0 rounded-md border border-line-strong bg-white px-2.5 py-1.5 font-mono text-[13px] tabular-nums text-ink placeholder:font-sans placeholder:text-ink-muted/70 focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/15 disabled:cursor-not-allowed disabled:bg-surface-sunken disabled:text-ink-muted"
+              />
+              <p id={contextWindowHintId} className="mt-1 text-[11px] leading-4 text-ink-muted">
+                仅用于容量记录与展示，不参与请求校验。
+              </p>
+              {limitErrors.contextWindow !== undefined && (
+                <p id={contextWindowErrorId} role="alert" className="mt-1 text-xs text-danger">
+                  {limitErrors.contextWindow}
+                </p>
+              )}
+            </div>
+
+            <div>
+              <label htmlFor={maxOutputTokensId} className="block text-[12px] font-medium text-ink">
+                Max output tokens
+              </label>
+              <input
+                id={maxOutputTokensId}
+                type="number"
+                min={1}
+                step={1}
+                inputMode="numeric"
+                value={maxOutputTokens}
+                onChange={(event) => {
+                  setMaxOutputTokens(event.target.value);
+                  setLimitErrors((current) => ({ ...current, maxOutputTokens: undefined }));
+                  clearServerError();
+                }}
+                disabled={pending}
+                placeholder="Not set"
+                aria-invalid={limitErrors.maxOutputTokens !== undefined}
+                aria-describedby={maxOutputTokensDescribedBy}
+                className="mt-1 block w-full min-w-0 rounded-md border border-line-strong bg-white px-2.5 py-1.5 font-mono text-[13px] tabular-nums text-ink placeholder:font-sans placeholder:text-ink-muted/70 focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/15 disabled:cursor-not-allowed disabled:bg-surface-sunken disabled:text-ink-muted"
+              />
+              <p id={maxOutputTokensHintId} className="mt-1 text-[11px] leading-4 text-ink-muted">
+                超过此值的 max_tokens 会在调用上游前返回 400。
+              </p>
+              {limitErrors.maxOutputTokens !== undefined && (
+                <p id={maxOutputTokensErrorId} role="alert" className="mt-1 text-xs text-danger">
+                  {limitErrors.maxOutputTokens}
+                </p>
+              )}
+            </div>
+          </div>
+
+          <div className="mt-3 space-y-3">
+            <CapabilityToggle
+              label="Tools"
+              hint="关闭后，携带 tools 的请求会在调用上游前返回 400。"
+              checked={supportsTools}
+              disabled={pending}
+              labelId={toolsLabelId}
+              hintId={toolsHintId}
+              onChange={() => {
+                setSupportsTools((current) => !current);
+                clearServerError();
+              }}
+            />
+            <CapabilityToggle
+              label="Streaming"
+              hint="关闭后，流式请求会在调用上游前返回 400。"
+              checked={supportsStreaming}
+              disabled={pending}
+              labelId={streamingLabelId}
+              hintId={streamingHintId}
+              onChange={() => {
+                setSupportsStreaming((current) => !current);
+                clearServerError();
+              }}
+            />
           </div>
         </div>
 

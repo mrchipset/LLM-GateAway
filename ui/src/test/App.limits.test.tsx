@@ -346,6 +346,8 @@ describe('limit fields', () => {
       provider: 'openai',
       upstream_model: 'gpt-4o-mini',
       enabled: true,
+      supports_tools: true,
+      supports_streaming: true,
       requests_per_minute: 60,
       tokens_per_minute: 500000,
     });

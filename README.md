@@ -231,7 +231,7 @@ Register the model with `provider: anthropic` and the Messages model id as `upst
 
 ## Model capabilities
 
-Models can declare `context_window`, `max_output_tokens`, `supports_tools`, and `supports_streaming` at registration (the console form is not wired for these yet; use the API). The gateway rejects a request with 400 `request_limit_exceeded` before calling upstream when `max_tokens` exceeds `max_output_tokens`, when tools are disabled, or when streaming is disabled. The context window is recorded for capacity planning but not tokenized precisely; prompt limits remain character-based.
+Models can declare `context_window`, `max_output_tokens`, `supports_tools`, and `supports_streaming` at registration; the console create form and model list expose them. The gateway rejects a request with 400 `request_limit_exceeded` before calling upstream when `max_tokens` exceeds `max_output_tokens`, when tools are disabled, or when streaming is disabled. The context window is recorded for capacity planning but not tokenized precisely; prompt limits remain character-based. Capabilities are fixed at creation; changing them requires delete and recreate.
 
 ## Token usage
 
@@ -828,7 +828,7 @@ design.md            LLM-GateAway design guidance
 ## Known limitations
 
 - OpenAI, DeepSeek, Azure OpenAI, Anthropic (Messages), and the fake provider are implemented. Bedrock and Vertex are not: they need AWS SigV4 / Google OAuth and SDK-level request shapes.
-- Model capabilities (`context_window`, `max_output_tokens`, `supports_tools`, `supports_streaming`) are enforced at request time, but the console create form does not expose them yet; set them through the API. The context window is not tokenized precisely.
+- Model capabilities (`context_window`, `max_output_tokens`, `supports_tools`, `supports_streaming`) are enforced at request time and set at registration; they cannot be changed afterwards. The context window is not tokenized precisely.
 - Multi-deployment routing exists (weights, failover, cooldown), but deployments cannot change provider or name after creation; per-deployment usage attribution is still provider-scoped.
 - No invoicing, per-key or per-model budgets; quotas and budgets are soft against concurrent requests. There is no pre-call reservation by design: a tenant can overshoot by the usage of requests already in flight when the limit is crossed.
 - Rate limits are token buckets for tenant, key, and model. Per-key/model/TPM/concurrency state is shared only with `GATEWAY_RATE_LIMIT_BACKEND=redis`; the `storage` backend keeps those scopes process-local, and its tenant counter is a fixed window.

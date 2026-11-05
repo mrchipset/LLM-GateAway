@@ -28,6 +28,10 @@ export interface ModelSummary {
   created_at: string;
   requests_per_minute?: number | null;
   tokens_per_minute?: number | null;
+  context_window?: number | null;
+  max_output_tokens?: number | null;
+  supports_tools?: boolean;
+  supports_streaming?: boolean;
 }
 
 export interface ModelListResponse {
@@ -46,6 +50,10 @@ export interface CreateModelInput {
   enabled: boolean;
   requests_per_minute?: number;
   tokens_per_minute?: number;
+  context_window?: number;
+  max_output_tokens?: number;
+  supports_tools?: boolean;
+  supports_streaming?: boolean;
 }
 
 /** Only the fields present in the patch are sent; `null` clears a limit. */
@@ -601,7 +609,11 @@ function isModelSummary(value: unknown): value is ModelSummary {
     typeof value.enabled === 'boolean' &&
     typeof value.created_at === 'string' &&
     isOptionalPositiveInt(value.requests_per_minute) &&
-    isOptionalPositiveInt(value.tokens_per_minute)
+    isOptionalPositiveInt(value.tokens_per_minute) &&
+    isOptionalPositiveInt(value.context_window) &&
+    isOptionalPositiveInt(value.max_output_tokens) &&
+    isOptionalBoolean(value.supports_tools) &&
+    isOptionalBoolean(value.supports_streaming)
   );
 }
 
@@ -639,6 +651,11 @@ function isPositiveCount(value: unknown): value is number {
 /** Older backends may omit limit fields; treat an absent field as "not set". */
 function isOptionalPositiveInt(value: unknown): value is number | null | undefined {
   return value === undefined || value === null || isPositiveCount(value);
+}
+
+/** Older backends may omit capability flags; the caller supplies the default. */
+function isOptionalBoolean(value: unknown): value is boolean | undefined {
+  return value === undefined || typeof value === 'boolean';
 }
 
 function isOptionalNullableCount(value: unknown): value is number | null | undefined {

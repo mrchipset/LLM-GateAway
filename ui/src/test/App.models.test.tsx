@@ -12,6 +12,10 @@ const ENABLED_MODEL = {
   upstream_model: 'gpt-4o-mini-2024-07-18',
   enabled: true,
   created_at: '2026-10-24T17:24:00Z',
+  context_window: 128_000,
+  max_output_tokens: 4_000,
+  supports_tools: true,
+  supports_streaming: true,
 };
 
 const MODELS = [
@@ -48,6 +52,30 @@ describe('model registry', () => {
     expect(within(table).getByText('legacy-chat')).toBeInTheDocument();
     expect(within(table).getByText('Enabled')).toBeInTheDocument();
     expect(within(table).getByText('Disabled')).toBeInTheDocument();
+    expect(within(table).getByText('128k ctx · 4k out · tools · stream')).toBeInTheDocument();
+  });
+
+  it('marks disabled capabilities compactly in the registry', async () => {
+    installFetchMock({
+      '/api/v1/models': () =>
+        jsonResponse(
+          payload([
+            {
+              ...ENABLED_MODEL,
+              id: 'text-only',
+              supports_tools: false,
+              supports_streaming: false,
+            },
+          ]),
+        ),
+    });
+    const user = userEvent.setup();
+    renderApp();
+
+    await signIn(user);
+    const table = await screen.findByRole('table', { name: 'Registered models' });
+
+    expect(within(table).getByText('128k ctx · 4k out · no tools · no stream')).toBeInTheDocument();
   });
 
   it('shows how many models are rendered when the registry exceeds one page', async () => {

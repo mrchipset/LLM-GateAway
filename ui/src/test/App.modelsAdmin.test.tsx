@@ -93,6 +93,8 @@ describe('model registration', () => {
       provider: 'deepseek',
       upstream_model: 'deepseek-chat-v3',
       enabled: true,
+      supports_tools: true,
+      supports_streaming: true,
     });
     expect(new Headers(init?.headers).get('x-csrf-token')).toBe(readTestCsrfToken());
 
@@ -127,6 +129,81 @@ describe('model registration', () => {
     expect(call).toBeDefined();
     if (call === undefined) return;
     expect(JSON.parse(String(call[1]?.body))).toMatchObject({ enabled: false });
+  });
+
+  it('sends filled capabilities and leaves unfilled numbers out of the payload', async () => {
+    const posted: CreateModelInput[] = [];
+    let models = [CHAT];
+    installFetchMock({
+      '/api/v1/models': () => jsonResponse(modelPayload(models)),
+      'POST /api/v1/models': (_url, init) => {
+        const body = JSON.parse(String(init.body)) as CreateModelInput;
+        posted.push(body);
+        const created: ModelSummary = { ...body, created_at: '2026-10-25T12:00:00Z' };
+        models = [...models, created];
+        return jsonResponse(created, 201);
+      },
+    });
+    const user = userEvent.setup();
+    renderApp();
+
+    await openRegistry(user);
+    const dialog = await openRegisterDialog(user);
+
+    expect(within(dialog).getByRole('switch', { name: 'Tools' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    );
+    expect(within(dialog).getByRole('switch', { name: 'Streaming' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    );
+
+    await user.type(within(dialog).getByLabelText('Model id'), 'cap-model');
+    await user.type(within(dialog).getByLabelText('Upstream model'), 'cap-upstream');
+    await user.type(within(dialog).getByLabelText('Context window'), '128000');
+    await user.click(within(dialog).getByRole('switch', { name: 'Streaming' }));
+    await user.click(within(dialog).getByRole('button', { name: 'Register model' }));
+
+    expect(await screen.findByText("Model 'cap-model' registered.")).toBeInTheDocument();
+    expect(posted).toEqual([
+      {
+        id: 'cap-model',
+        provider: 'openai',
+        upstream_model: 'cap-upstream',
+        enabled: true,
+        supports_tools: true,
+        supports_streaming: false,
+        context_window: 128000,
+      },
+    ]);
+    expect(posted[0]).not.toHaveProperty('max_output_tokens');
+  });
+
+  it('rejects a capability number below 1 before sending', async () => {
+    const posted: CreateModelInput[] = [];
+    installFetchMock({
+      '/api/v1/models': () => jsonResponse(modelPayload([CHAT])),
+      'POST /api/v1/models': (_url, init) => {
+        posted.push(JSON.parse(String(init.body)) as CreateModelInput);
+        return jsonResponse(CHAT, 201);
+      },
+    });
+    const user = userEvent.setup();
+    renderApp();
+
+    await openRegistry(user);
+    const dialog = await openRegisterDialog(user);
+
+    await user.type(within(dialog).getByLabelText('Model id'), 'bad-cap');
+    await user.type(within(dialog).getByLabelText('Upstream model'), 'bad-cap-upstream');
+    await user.type(within(dialog).getByLabelText('Max output tokens'), '0');
+    await user.click(within(dialog).getByRole('button', { name: 'Register model' }));
+
+    expect(
+      await within(dialog).findByText('Enter a whole number of 1 or more.'),
+    ).toBeInTheDocument();
+    expect(posted).toHaveLength(0);
   });
 
   it('blocks an invalid id and a blank upstream model before sending', async () => {
