@@ -758,6 +758,7 @@ The usage panel provides:
 - 7 / 30 / 90-day rolling ranges with `since` floored to UTC midnight; the final bar is the partial "today so far" bucket.
 - Totals for requests, input, output, cached, and total tokens (cached counts are displayed as reported and labeled as a subset of input).
 - A UTC-aligned, zero-filled daily total-token bar chart.
+- A per-model breakdown (requests, prompt/completion/cached/total, covered/billable, billed cost) with a client-side CSV export for the current tenant and range; the file contains raw numbers and writes nothing to network or browser storage.
 - Per-key usage details (up to 100 keys).
 
 The Access tab manages tenants and API keys:

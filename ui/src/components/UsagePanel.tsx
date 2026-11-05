@@ -3,20 +3,29 @@ import { useId, type ReactNode } from 'react';
 import type { TenantSummary } from '../api/client';
 import type { TenantsQuery } from '../hooks/useTenants';
 import type { UsageByKeyQuery, UsageSeriesQuery, UsageSummaryQuery } from '../hooks/useUsage';
+import { downloadBlob } from '../lib/download';
 import { formatCompactNumber, formatExactNumber, formatUpdatedAt } from '../lib/format';
-import { USAGE_RANGE_PRESETS, type UsageRangeDays } from '../lib/usage';
+import {
+  USAGE_RANGE_PRESETS,
+  usageByModelCsv,
+  usageByModelFilename,
+  type UsageRangeDays,
+} from '../lib/usage';
 import { Button } from './Button';
 import { RefreshIcon } from './Icons';
 import { Panel, PanelHeader } from './Panel';
 import { RequestErrorPanel } from './RequestErrorPanel';
 import { TenantLimitFacts } from './TenantLimitFacts';
 import { UsageByKeyTable, UsageTableSkeleton } from './UsageByKeyTable';
+import { UsageByModelTable } from './UsageByModelTable';
 import { UsageChart } from './UsageChart';
 import { UsageStats, UsageStatsSkeleton } from './UsageStats';
 
 interface UsagePanelProps {
   tenantId: string;
   rangeDays: UsageRangeDays;
+  windowSince: string;
+  windowUntil: string;
   onTenantChange: (tenantId: string) => void;
   onRangeChange: (days: UsageRangeDays) => void;
   onRefresh: () => void;
@@ -29,6 +38,8 @@ interface UsagePanelProps {
 export function UsagePanel({
   tenantId,
   rangeDays,
+  windowSince,
+  windowUntil,
   onTenantChange,
   onRangeChange,
   onRefresh,
@@ -62,6 +73,8 @@ export function UsagePanel({
         <UsageContent
           tenantId={tenantId}
           rangeDays={rangeDays}
+          windowSince={windowSince}
+          windowUntil={windowUntil}
           onTenantChange={onTenantChange}
           onRangeChange={onRangeChange}
           tenantsQuery={tenantsQuery}
@@ -79,6 +92,8 @@ type UsageContentProps = Omit<UsagePanelProps, 'onRefresh'>;
 function UsageContent({
   tenantId,
   rangeDays,
+  windowSince,
+  windowUntil,
   onTenantChange,
   onRangeChange,
   tenantsQuery,
@@ -90,6 +105,7 @@ function UsageContent({
   const rangeLabelId = useId();
   const totalsHeadingId = useId();
   const chartHeadingId = useId();
+  const byModelHeadingId = useId();
   const byKeyHeadingId = useId();
 
   const selectedTenant = tenantsQuery.data?.items.find((tenant) => tenant.id === tenantId) ?? null;
@@ -102,6 +118,20 @@ function UsageContent({
     (max, point) => Math.max(max, point.total_tokens),
     0,
   );
+  const byModelItems = summaryQuery.data?.by_model ?? [];
+  const canExportByModel = summaryQuery.status === 'success' && byModelItems.length > 0;
+
+  const handleExportByModel = () => {
+    if (!canExportByModel) return;
+
+    const csv = usageByModelCsv(byModelItems);
+    const filename = usageByModelFilename(
+      tenantId === '' ? null : tenantId,
+      windowSince,
+      windowUntil,
+    );
+    downloadBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), filename);
+  };
 
   return (
     <>
@@ -161,6 +191,46 @@ function UsageContent({
               <EmptyRange />
             ) : (
               <UsageChart points={seriesQuery.data.points} />
+            )}
+          </div>
+        </section>
+
+        <section aria-labelledby={byModelHeadingId}>
+          <SectionHeading
+            id={byModelHeadingId}
+            aside={
+              canExportByModel ? (
+                <span className="inline-flex items-center gap-2">
+                  <span>
+                    {formatExactNumber(byModelItems.length)}{' '}
+                    {byModelItems.length === 1 ? 'model' : 'models'}
+                  </span>
+                  <Button
+                    variant="ghost"
+                    onClick={handleExportByModel}
+                    disabled={summaryQuery.isFetching}
+                    className="-mr-1 px-1.5 py-0.5 text-[10.5px]"
+                  >
+                    Export CSV
+                  </Button>
+                </span>
+              ) : null
+            }
+          >
+            Usage by model
+          </SectionHeading>
+          <div className="mt-2">
+            {summaryQuery.isPending ? (
+              <UsageTableSkeleton label="usage by model" />
+            ) : summaryQuery.isError ? (
+              <RequestErrorPanel
+                error={summaryQuery.error}
+                title="Could not load usage by model"
+                retryLabel="Retry loading usage by model"
+                onRetry={() => void summaryQuery.refetch()}
+              />
+            ) : (
+              <UsageByModelTable items={byModelItems} />
             )}
           </div>
         </section>
@@ -364,7 +434,7 @@ function SectionHeading({ id, children, aside }: SectionHeadingProps) {
         {children}
       </h3>
       {aside !== null && aside !== undefined && (
-        <p className="font-mono text-[10px] tabular-nums text-ink-muted">{aside}</p>
+        <div className="font-mono text-[10px] tabular-nums text-ink-muted">{aside}</div>
       )}
     </div>
   );

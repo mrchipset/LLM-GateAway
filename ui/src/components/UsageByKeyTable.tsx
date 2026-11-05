@@ -174,10 +174,10 @@ export function UsageByKeyTable({ items, limit }: UsageByKeyTableProps) {
   );
 }
 
-export function UsageTableSkeleton() {
+export function UsageTableSkeleton({ label = 'usage by key' }: { label?: string }) {
   return (
     <div>
-      <span className="sr-only">Loading usage by key…</span>
+      <span className="sr-only">Loading {label}…</span>
       <div aria-hidden="true" className="space-y-2">
         {[0, 1, 2, 3].map((row) => (
           <div

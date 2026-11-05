@@ -197,6 +197,8 @@ export function Workspace() {
         <UsagePanel
           tenantId={tenantId}
           rangeDays={rangeDays}
+          windowSince={since}
+          windowUntil={anchor.toISOString()}
           onTenantChange={setTenantId}
           onRangeChange={handleRangeChange}
           onRefresh={handleRefresh}

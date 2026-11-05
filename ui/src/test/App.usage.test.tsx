@@ -47,6 +47,35 @@ const TENANTS = [
   },
 ];
 
+const MODELS = [
+  {
+    model_id: 'openai/gpt-4o-mini',
+    provider: 'openai',
+    prompt_tokens: 900_000,
+    completion_tokens: 200_000,
+    cached_tokens: 90_000,
+    total_tokens: 1_100_000,
+    requests: 30,
+    covered_tokens: 800_000,
+    billable_tokens: 300_000,
+    list_cost: '0.900000',
+    billed_cost: '0.300000',
+  },
+  {
+    model_id: 'anthropic/claude-sonnet-4',
+    provider: 'anthropic',
+    prompt_tokens: 300_000,
+    completion_tokens: 100_000,
+    cached_tokens: 10_000,
+    total_tokens: 400_000,
+    requests: 12,
+    covered_tokens: 100_000,
+    billable_tokens: 300_000,
+    list_cost: '0.150000',
+    billed_cost: '0.120000',
+  },
+];
+
 const SUMMARY = {
   prompt_tokens: 1_200_000,
   completion_tokens: 300_000,
@@ -57,7 +86,7 @@ const SUMMARY = {
   billable_tokens: 600_000,
   list_cost: '1.050000',
   billed_cost: '0.420000',
-  by_model: [],
+  by_model: MODELS,
 };
 
 const SERIES = {
@@ -172,6 +201,37 @@ async function openUsage(user: ReturnType<typeof userEvent.setup>) {
   await signIn(user);
   await user.click(await screen.findByRole('tab', { name: 'Usage' }));
   await screen.findByRole('heading', { name: 'Usage' });
+}
+
+function stubDownload() {
+  let blob: Blob | null = null;
+  const createObjectURL = vi.fn((value: Blob) => {
+    blob = value;
+    return 'blob:usage-download';
+  });
+  const revokeObjectURL = vi.fn();
+  const originalCreate = URL.createObjectURL;
+  const originalRevoke = URL.revokeObjectURL;
+  URL.createObjectURL = createObjectURL;
+  URL.revokeObjectURL = revokeObjectURL;
+
+  let clicked: { href: string; download: string } | null = null;
+  vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
+    this: HTMLAnchorElement,
+  ) {
+    clicked = { href: this.href, download: this.download };
+  });
+
+  return {
+    createObjectURL,
+    revokeObjectURL,
+    blob: () => blob,
+    clicked: () => clicked,
+    restore: () => {
+      URL.createObjectURL = originalCreate;
+      URL.revokeObjectURL = originalRevoke;
+    },
+  };
 }
 
 describe('usage panel', () => {
@@ -455,6 +515,91 @@ describe('usage panel', () => {
 
     expect(await screen.findByText('No usage in this range')).toBeInTheDocument();
     expect(screen.queryByRole('table', { name: 'Usage by API key' })).not.toBeInTheDocument();
+  });
+
+  it('renders every model from the summary with provider and token counts', async () => {
+    installUsageMock();
+    const user = userEvent.setup();
+    renderApp();
+
+    await openUsage(user);
+
+    const table = await screen.findByRole('table', { name: 'Usage by model' });
+    expect(within(table).getByText('openai/gpt-4o-mini')).toBeInTheDocument();
+    expect(within(table).getByText('anthropic/claude-sonnet-4')).toBeInTheDocument();
+    expect(within(table).getByText('openai')).toBeInTheDocument();
+    expect(within(table).getByText('anthropic')).toBeInTheDocument();
+    expect(within(table).getByText('1,100,000')).toBeInTheDocument();
+    expect(within(table).getByText('0.30')).toBeInTheDocument();
+
+    for (const label of [
+      'Model',
+      'Provider',
+      'Requests',
+      'Prompt',
+      'Completion',
+      'Cached',
+      'Total',
+      'Covered',
+      'Billable',
+      'Billed cost',
+    ]) {
+      expect(within(table).getByRole('columnheader', { name: label })).toBeInTheDocument();
+    }
+
+    const cards = screen.getByRole('list', { name: 'Usage by model cards' });
+    expect(within(cards).getAllByRole('listitem')).toHaveLength(MODELS.length);
+    expect(within(cards).getByText('anthropic/claude-sonnet-4')).toBeInTheDocument();
+  });
+
+  it('exports the by-model breakdown as CSV without extra requests or storage writes', async () => {
+    const download = stubDownload();
+    try {
+      const fetchMock = installUsageMock();
+      const user = userEvent.setup();
+      renderApp();
+
+      await openUsage(user);
+      await screen.findByRole('table', { name: 'Usage by model' });
+      const callsBefore = fetchMock.mock.calls.length;
+
+      await user.click(screen.getByRole('button', { name: 'Export CSV' }));
+
+      expect(fetchMock.mock.calls).toHaveLength(callsBefore);
+      expect(download.createObjectURL).toHaveBeenCalledOnce();
+      expect(download.revokeObjectURL).toHaveBeenCalledWith('blob:usage-download');
+      expect(download.clicked()).toEqual({
+        href: 'blob:usage-download',
+        download: 'usage-by-model-all-2026-09-25-2026-10-25.csv',
+      });
+
+      expect(await download.blob()?.text()).toBe(
+        [
+          'Model,Provider,Requests,Prompt,Completion,Cached,Total,Covered,Billable,Billed cost',
+          'openai/gpt-4o-mini,openai,30,900000,200000,90000,1100000,800000,300000,0.300000',
+          'anthropic/claude-sonnet-4,anthropic,12,300000,100000,10000,400000,100000,300000,0.120000',
+        ].join('\n'),
+      );
+
+      expect(localStorage.length).toBe(0);
+      expect(sessionStorage.length).toBe(0);
+    } finally {
+      download.restore();
+    }
+  });
+
+  it('hides the model export control when the summary has no rows', async () => {
+    installUsageMock({
+      '/api/v1/usage/summary': () => jsonResponse({ ...SUMMARY, by_model: [] }),
+    });
+    const user = userEvent.setup();
+    renderApp();
+
+    await openUsage(user);
+
+    expect(await screen.findByText('No usage in this window.')).toBeInTheDocument();
+    expect(screen.queryByRole('table', { name: 'Usage by model' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Export CSV' })).not.toBeInTheDocument();
   });
 
   it('shows the HTTP status, message, code, and request id when by-key usage fails', async () => {
