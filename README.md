@@ -887,7 +887,8 @@ design.md            LLM-GateAway design guidance
 - [`docs/tenant-key-model.md`](docs/tenant-key-model.md): focused runbook for creating a tenant, API key, and model registration, with a verified DeepSeek call
 - [`docs/docker.md`](docs/docker.md): Docker Compose deployment, configuration, upgrades, and backups
 - [`docs/runbook-backup.md`](docs/runbook-backup.md): backup, restore drill, integrity checks, and recovery steps
-- [`TODO.md`](TODO.md): P2 items and the remaining P1e audit operations
+- [`docs/status.md`](docs/status.md): delivery status, acceptance evidence, explicit gaps, and the production checklist
+- [`TODO.md`](TODO.md): roadmap, enterprise readiness items (G0/G1/G2), and their acceptance criteria
 
 ## Agent skill
 
