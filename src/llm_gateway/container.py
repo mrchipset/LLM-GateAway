@@ -15,6 +15,7 @@ from llm_gateway.metrics import configure_metrics, shutdown_metrics
 from llm_gateway.providers.factory import build_providers
 from llm_gateway.providers.pool import ProviderPool
 from llm_gateway.providers.registry import ProviderRegistry
+from llm_gateway.services.oidc import OIDCService
 from llm_gateway.services.routing import ModelRouter
 from llm_gateway.storage.cooldowns import (
     DeploymentHealth,
@@ -92,6 +93,7 @@ class Container:
     inflight: InFlightTracker = field(default_factory=InFlightTracker)
     last_used_sampler: LastUsedSampler = field(default_factory=LastUsedSampler)
     redis_client: Redis | None = None
+    oidc: OIDCService | None = None
 
     def __post_init__(self) -> None:
         seen: set[str] = set()
@@ -123,6 +125,8 @@ class Container:
             await self.providers.aclose()
         finally:
             try:
+                if self.oidc is not None:
+                    await self.oidc.aclose()
                 if self.redis_client is not None:
                     await self.redis_client.aclose()
             finally:
@@ -233,4 +237,6 @@ def build_container(settings: Settings, *, telemetry: Telemetry | None = None) -
     container.last_used_sampler = LastUsedSampler(
         interval_seconds=settings.last_used_sample_seconds,
     )
+    if settings.oidc_enabled:
+        container.oidc = OIDCService(settings=settings)
     return container

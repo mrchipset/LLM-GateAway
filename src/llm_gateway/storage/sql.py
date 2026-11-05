@@ -1580,6 +1580,7 @@ def _to_admin_user(row: AdminUserRow) -> AdminUser:
         updated_at=row.updated_at,
         password_changed_at=row.password_changed_at,
         last_login_at=row.last_login_at,
+        oidc_subject=row.oidc_subject,
     )
 
 
@@ -1627,6 +1628,7 @@ class SqlAlchemyAdminUserRepository:
             updated_at=admin.updated_at,
             password_changed_at=admin.password_changed_at,
             last_login_at=admin.last_login_at,
+            oidc_subject=admin.oidc_subject,
         )
         try:
             async with self._session_factory() as session, session.begin():
@@ -1646,6 +1648,13 @@ class SqlAlchemyAdminUserRepository:
         async with self._session_factory() as session, session.begin():
             row = await session.scalar(
                 select(AdminUserRow).where(AdminUserRow.username == username)
+            )
+            return _to_admin_user(row) if row is not None else None
+
+    async def get_admin_by_oidc_subject(self, subject: str) -> AdminUser | None:
+        async with self._session_factory() as session, session.begin():
+            row = await session.scalar(
+                select(AdminUserRow).where(AdminUserRow.oidc_subject == subject)
             )
             return _to_admin_user(row) if row is not None else None
 

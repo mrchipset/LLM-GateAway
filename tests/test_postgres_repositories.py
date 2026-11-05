@@ -2786,3 +2786,13 @@ async def test_update_model_capabilities_round_trip(database: Database) -> None:
     assert cleared.context_window is None
     assert cleared.max_output_tokens is None
     assert cleared.supports_tools is False
+
+
+async def test_admin_oidc_subject_lookup(database: Database) -> None:
+    admin = replace(_admin_user(1), oidc_subject="idp-subject-1")
+    await database.admins.create_admin(admin)
+
+    stored = await database.admins.get_admin_by_oidc_subject("idp-subject-1")
+    assert stored == admin
+    assert await database.admins.get_admin_by_oidc_subject("missing") is None
+    assert await database.admins.get_admin_by_username(admin.username) == admin

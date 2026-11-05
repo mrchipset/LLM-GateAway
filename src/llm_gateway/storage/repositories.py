@@ -978,6 +978,7 @@ class AdminUser:
     updated_at: datetime
     password_changed_at: datetime
     last_login_at: datetime | None = None
+    oidc_subject: str | None = None
 
     def __post_init__(self) -> None:
         _require_uuid(self.id, "id")
@@ -1065,6 +1066,8 @@ class AdminUserRepository(Protocol):
     async def get_admin(self, admin_id: UUID) -> AdminUser | None: ...
 
     async def get_admin_by_username(self, username: str) -> AdminUser | None: ...
+
+    async def get_admin_by_oidc_subject(self, subject: str) -> AdminUser | None: ...
 
     async def list_admins(self, *, limit: int, offset: int) -> tuple[Sequence[AdminUser], int]: ...
 

@@ -281,3 +281,40 @@ def test_database_and_lifecycle_bounds_are_validated() -> None:
     assert settings.database_max_overflow == 0
     assert settings.database_statement_timeout_ms == 0
     assert settings.stream_idle_timeout_seconds == 0
+
+
+def test_oidc_requires_the_full_configuration() -> None:
+    base = {
+        "_env_file": None,
+        "environment": Environment.TEST,
+        "master_key": MASTER_KEY,
+    }
+
+    with pytest.raises(ValidationError):
+        Settings(**{**base, "oidc_enabled": True})
+
+    with pytest.raises(ValidationError):
+        Settings(
+            **{
+                **base,
+                "oidc_enabled": True,
+                "oidc_issuer": "https://idp.test",
+                "oidc_client_id": "gw",
+                "oidc_client_secret": "secret",
+                "oidc_redirect_uri": "https://gw.test/callback",
+                "oidc_role_map": '{"group":"admin"}',
+            }
+        )
+
+    settings = Settings(
+        **{
+            **base,
+            "oidc_enabled": True,
+            "oidc_issuer": "https://idp.test",
+            "oidc_client_id": "gw",
+            "oidc_client_secret": "secret",
+            "oidc_redirect_uri": "https://gw.test/callback",
+            "oidc_role_map": '{"gateway-ops":"operator"}',
+        }
+    )
+    assert settings.oidc_enabled is True

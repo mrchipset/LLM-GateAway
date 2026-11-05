@@ -530,8 +530,13 @@ async def test_every_admin_route_rejects_missing_and_inference_credentials(
     for path, operations in app.openapi()["paths"].items():
         if not path.startswith("/api/v1/"):
             continue
-        if path == "/api/v1/auth/login":
-            # Public by design: it authenticates, so it cannot require authentication.
+        if path in {
+            "/api/v1/auth/login",
+            "/api/v1/auth/oidc/status",
+            "/api/v1/auth/oidc/start",
+            "/api/v1/auth/oidc/callback",
+        }:
+            # Public by design: they authenticate or validate their own flow state.
             continue
         concrete = path.replace("{key_id}", str(uuid4())).replace("{model_id}", "missing-model")
         targets.extend((method.upper(), concrete) for method in operations)

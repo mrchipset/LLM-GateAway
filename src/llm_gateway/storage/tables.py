@@ -489,9 +489,16 @@ class AdminUserRow(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     password_changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    oidc_subject: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     __table_args__ = (
         Index("ix_admin_users_username", "username", unique=True),
+        Index(
+            "uq_admin_users_oidc_subject",
+            "oidc_subject",
+            unique=True,
+            postgresql_where=text("oidc_subject IS NOT NULL"),
+        ),
         CheckConstraint(
             "role IN ('owner', 'operator', 'auditor')",
             name="ck_admin_users_role",

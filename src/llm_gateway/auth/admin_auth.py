@@ -122,7 +122,10 @@ class AdminAuthService:
             return None
 
         await self._throttle.clear(key=throttle_key)
+        return await self.issue_session(admin, now=now)
 
+    async def issue_session(self, admin: AdminUser, *, now: datetime) -> LoginResult:
+        """Create an admin session for an already-authenticated principal (e.g. OIDC)."""
         token = generate_session_token()
         csrf_token = generate_csrf_token()
         session = AdminSession(

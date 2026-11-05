@@ -10,12 +10,14 @@ from llm_gateway.api.admin import (
     deployments,
     keys,
     models,
+    oidc,
     tenants,
     usage,
 )
 
 router = APIRouter(prefix="/api/v1", tags=["admin"])
 router.include_router(auth.router)
+router.include_router(oidc.router)
 router.include_router(admin_audit.router)
 router.include_router(admins.router)
 router.include_router(audit.router)

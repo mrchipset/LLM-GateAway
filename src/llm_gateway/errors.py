@@ -28,6 +28,7 @@ class ApiErrorCode(StrEnum):
     CSRF_FAILED = "csrf_failed"
     INVALID_CREDENTIALS = "invalid_credentials"
     LOGIN_THROTTLED = "login_throttled"
+    OIDC_STATE_INVALID = "oidc_state_invalid"
     ADMIN_NOT_FOUND = "admin_not_found"
     DUPLICATE_ADMIN = "duplicate_admin"
     LAST_OWNER_REQUIRED = "last_owner_required"

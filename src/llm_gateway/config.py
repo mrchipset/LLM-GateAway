@@ -92,6 +92,15 @@ class Settings(BaseSettings):
     route_failure_threshold: int = Field(default=3, ge=1, le=100)
     route_cooldown_seconds: int = Field(default=30, ge=1, le=3600)
     session_ttl_hours: int = Field(default=12, ge=1, le=720)
+    oidc_enabled: bool = False
+    oidc_issuer: str | None = None
+    oidc_client_id: str | None = None
+    oidc_client_secret: SecretStr | None = None
+    oidc_redirect_uri: str | None = None
+    oidc_scopes: str = "openid email profile"
+    oidc_role_claim: str = "groups"
+    oidc_role_map: str = "{}"
+    oidc_jit_provisioning: bool = False
     master_key_enabled: bool = True
     bootstrap_admin_username: str | None = None
     bootstrap_admin_password: SecretStr | None = None
@@ -169,6 +178,41 @@ class Settings(BaseSettings):
             raise ValueError("database_url is required when storage_backend is postgres")
         if self.rate_limit_backend is RateLimitBackend.REDIS and not self.redis_url:
             raise ValueError("redis_url is required when rate_limit_backend is redis")
+        if self.oidc_enabled:
+            missing = [
+                name
+                for name, value in (
+                    ("oidc_issuer", self.oidc_issuer),
+                    ("oidc_client_id", self.oidc_client_id),
+                    ("oidc_client_secret", self.oidc_client_secret),
+                    ("oidc_redirect_uri", self.oidc_redirect_uri),
+                )
+                if value is None
+            ]
+            if missing:
+                raise ValueError(f"oidc_enabled requires: {', '.join(missing)}")
+            assert self.oidc_issuer is not None
+            assert self.oidc_redirect_uri is not None
+            if not self.oidc_issuer.startswith(("https://", "http://")):
+                raise ValueError("oidc_issuer must be an http(s) URL")
+            if not self.oidc_redirect_uri.startswith(("https://", "http://")):
+                raise ValueError("oidc_redirect_uri must be an http(s) URL")
+            try:
+                role_map = json.loads(self.oidc_role_map or "{}")
+            except json.JSONDecodeError as exc:
+                raise ValueError("oidc_role_map must be a JSON object") from exc
+            if not isinstance(role_map, dict):
+                raise ValueError("oidc_role_map must be a JSON object")
+            valid_roles = {"owner", "operator", "auditor"}
+            for claim, role in role_map.items():
+                if not isinstance(claim, str) or role not in valid_roles:
+                    raise ValueError(
+                        "oidc_role_map must map claim values to owner/operator/auditor"
+                    )
+            if not self.oidc_role_claim.strip():
+                raise ValueError("oidc_role_claim must not be blank")
+            if not {"openid"} <= set(self.oidc_scopes.split()):
+                raise ValueError("oidc_scopes must include openid")
 
         if self.environment is Environment.PRODUCTION:
             if len(secret) < 32:

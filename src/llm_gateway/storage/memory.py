@@ -914,6 +914,12 @@ class InMemoryAdminUserRepository:
                 return admin
         return None
 
+    async def get_admin_by_oidc_subject(self, subject: str) -> AdminUser | None:
+        for admin in self._admins.values():
+            if admin.oidc_subject == subject:
+                return admin
+        return None
+
     async def list_admins(self, *, limit: int, offset: int) -> tuple[Sequence[AdminUser], int]:
         _validate_page(limit=limit, offset=offset)
         ordered = sorted(
