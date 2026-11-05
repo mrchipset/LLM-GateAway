@@ -277,13 +277,14 @@
   - 进度（2026-11-05，并发）：租户与 key 的 `max_concurrent_requests`（迁移 `0013`）用带 TTL 的租约实现，流式在 SSE 生成器的 shield finally 中释放；租约 TTL 由 `GATEWAY_CONCURRENCY_LEASE_SECONDS`（默认 600）控制，用于崩溃回收；超限 429 `concurrency_limited`，限流后端不可用时沿用 fail-open/fail-closed 策略。
   - 进度（2026-11-05，共享 cooldown）：`DeploymentHealth` 改为异步协议；Redis 后端下失败计数与 cooldown 截止时间共享（`storage/cooldowns.py`），失败计数按一个 cooldown 窗口过期；Redis 异常降级为“可用”并累加 `gateway_cooldown_degraded`。G1.2 全部完成，`storage` 后端的新增 scope 仍为进程内，Redis 后端可安全多 worker。
 
-- [ ] **G1.3 热路径读写放大治理**（压测已确认整月用量聚合是第一瓶颈，优先做）
+- [x] **G1.3 热路径读写放大治理**（压测已确认整月用量聚合是第一瓶颈，优先做）
   - 现状：每请求包含 key 查询、`last_used_at` 写入、租户查询、整月用量聚合、限流单行 upsert、usage 插入，全部同步打 PostgreSQL，无缓存。
   - 范围：key/tenant 短期缓存（含显式失效）、`last_used_at` 采样或批量、usage 异步批量写入、日/月预聚合表、聚合查询走预聚合而非明细扫描。
   - 验收：单请求 DB 往返次数有明确预算并可测；P95 延迟在目标 QPS 下不随月内累计用量增长而退化。
   - 进度（2026-11-04）：压测已确认整月聚合是首要瓶颈（见 G1.7）。按决定暂缓本体实现，先提供逃生开关 `GATEWAY_BILLING_ENABLED`（默认 `true`）；关闭后跳过套餐/预算校验与成本结算，热路径不再做月聚合与价格查询，usage 仍记录 token 但成本字段留空，`/tenants/{id}/billing` 返回 `enabled:false`。语义与风险见 `notes/billing.md` 2.8。恢复计费前需按版本化价格回填该窗口的未结算记录。
   - 进度（2026-11-05）：月聚合改为 `tenant_month_usage` 单行预聚合（迁移 `0014`，含历史回填），与 usage 明细在同一事务内 UPSERT；套餐/预算/月配额读取该行，非整月窗口仍回退明细。`last_used_at` 改为按 `GATEWAY_LAST_USED_SAMPLE_SECONDS`（默认 60）采样。价格与 key/tenant 缓存经评估不做：计量伤害来自聚合而非单行查询，缓存会引入价格生效延迟与吊销延迟。批写入按实测决定，暂不实现。设计说明见 `notes/hot-path.md`。
   - 待验证：在 215k 行租户上以 60 RPS 重跑，确认 p95 回到基线（约 53ms）。
+  - 结论（2026-11-05，见 `notes/load-baseline.md` 第 8 节）：215k 行、60 RPS 下 p95 48ms，与同日基线 55ms 持平（此前为 83ms vs 53ms，且 60 RPS 只能跑到 39.6 RPS）。100 RPS 时 p95 8.1s、吞吐 89.8 RPS，单 worker 单核 100%、8 核闲置——瓶颈已从数据库月扫描变成进程 CPU。计费开关不再需要为容量而关闭。下一步容量实验是多 worker + Redis（G1.2 已完成），而不是继续改查询。
 
 - [x] **G1.4 成本与预算**
   - 现状：只有 token，无价格表、无货币、无成本聚合。

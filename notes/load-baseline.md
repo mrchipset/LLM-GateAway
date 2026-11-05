@@ -141,3 +141,35 @@ local stub; `ttfb/token/tokens` differ per run as noted.
 - Co-located generator: numbers are a lower bound for throughput; cross-host k6 will be run
   after the G1.3 change to confirm.
 
+
+## 8. Re-measurement after the monthly rollup (2026-11-05)
+
+Same host, same embedded PostgreSQL, same stub (`5 ms + 8 x 1 ms`), same 120 s runs. The billing
+tenant already held ~220k usage rows for the month; the migration backfilled the rollup and the
+detail/rollup token totals matched exactly (480,918,501).
+
+| Run | Rows in month | Target RPS | Achieved | err | p95 | Gateway CPU |
+|---|---|---|---|---|---|---|
+| billing, rollup | 215k+ | 60 | 60.0 | 0 | 48.3 ms | ~72% |
+| baseline, same day | 242k (unbilled, no plan) | 60 | 60.0 | 0 | 55.4 ms | ~72% |
+| billing, rollup | 215k+ | 100 | 89.8 | 0 | 8.13 s | 100% |
+
+### Findings
+
+1. **The month scan is gone.** At 60 RPS billing is now indistinguishable from baseline (48 ms vs
+   55 ms, within run-to-run noise); the previous measurement was 83 ms vs 53 ms, and 215k rows at
+   60 RPS could only reach 39.6 RPS at p95 15.3 s.
+2. **The 100 RPS ceiling is the single worker, not the database.** At 100 RPS the process is pinned
+   at 100% of one core with 11 database connections; 8 cores are idle. The pre-billing baseline
+   already saturated near 100 RPS at ~81% CPU, so the new work lowered the ceiling rather than
+   reintroducing a volume-dependent query.
+3. **Next lever is workers.** G1.2 now shares limits, leases, and cooldown in Redis, so
+   `GATEWAY_WORKERS>1` is safe when `GATEWAY_RATE_LIMIT_BACKEND=redis`. Batched usage writes would
+   trim per-request CPU but cannot match a second core. The remote test host has no Redis server,
+   so the multi-worker run is still pending.
+
+### Decision
+
+G1.3's enforcement goal is met: p95 no longer grows with the month's row count, and the escape
+hatch (`GATEWAY_BILLING_ENABLED=false`) is no longer needed for capacity. A multi-worker run with
+Redis is the next capacity experiment, not a correctness fix.
