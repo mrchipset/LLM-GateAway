@@ -173,6 +173,7 @@ def main() -> int:
     parser.add_argument("--stream", action="store_true")
     parser.add_argument("--users", type=int, default=50)
     parser.add_argument("--max-users", type=int, default=500)
+    parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--storage", choices=("memory", "postgres"), default="memory")
     parser.add_argument("--ttfb-ms", type=int, default=40)
     parser.add_argument("--token-ms", type=int, default=15)
@@ -244,6 +245,8 @@ def main() -> int:
             args.host,
             "--port",
             str(gateway_port),
+            "--workers",
+            str(args.workers),
         ],
         cwd=ROOT,
         env=base_env,
