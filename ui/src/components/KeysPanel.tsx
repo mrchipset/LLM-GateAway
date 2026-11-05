@@ -9,6 +9,7 @@ import { formatExactNumber, formatUpdatedAt } from '../lib/format';
 import { Button } from './Button';
 import { CheckCircleIcon, RefreshIcon } from './Icons';
 import { KeyCreateDialog } from './KeyCreateDialog';
+import { KeyLimitsDialog } from './KeyLimitsDialog';
 import { KeyRevokeDialog } from './KeyRevokeDialog';
 import { KeySecretDialog } from './KeySecretDialog';
 import { EmptyKeys, KeysPagination, KeysSkeleton, KeysTable } from './KeysTable';
@@ -27,11 +28,13 @@ export function KeysPanel() {
   const [createOpen, setCreateOpen] = useState(false);
   const [secret, setSecret] = useState<CreatedApiKey | null>(null);
   const [revokingKey, setRevokingKey] = useState<ApiKeySummary | null>(null);
+  const [editingKey, setEditingKey] = useState<ApiKeySummary | null>(null);
   const [statusNow, setStatusNow] = useState<number | null>(null);
   const filterId = useId();
   const tenantNoteId = useId();
   const createButtonRef = useRef<HTMLButtonElement>(null);
   const revokeTriggerRef = useRef<HTMLElement | null>(null);
+  const editTriggerRef = useRef<HTMLElement | null>(null);
   const queryClient = useQueryClient();
 
   const tenantsQuery = useTenants();
@@ -103,6 +106,12 @@ export function KeysPanel() {
     setNotice(null);
     revokeTriggerRef.current = trigger;
     setRevokingKey(apiKey);
+  };
+
+  const handleEdit = (apiKey: ApiKeySummary, trigger: HTMLButtonElement) => {
+    setNotice(null);
+    editTriggerRef.current = trigger;
+    setEditingKey(apiKey);
   };
 
   return (
@@ -204,6 +213,7 @@ export function KeysPanel() {
             canCreate={canCreate}
             onCreate={openCreate}
             onRevoke={handleRevoke}
+            onEdit={handleEdit}
             onPrevious={() =>
               setOffset(Math.max(0, (keyPage.data?.offset ?? offset) - KEY_PAGE_SIZE))
             }
@@ -238,6 +248,18 @@ export function KeysPanel() {
           }}
         />
       )}
+
+      {canWrite && editingKey !== null && (
+        <KeyLimitsDialog
+          apiKey={editingKey}
+          returnFocusRef={editTriggerRef}
+          onClose={() => setEditingKey(null)}
+          onSaved={(message) => {
+            setEditingKey(null);
+            setNotice(message);
+          }}
+        />
+      )}
     </Panel>
   );
 }
@@ -250,6 +272,7 @@ interface KeyDirectoryProps {
   canCreate: boolean;
   onCreate: () => void;
   onRevoke: (apiKey: ApiKeySummary, trigger: HTMLButtonElement) => void;
+  onEdit: (apiKey: ApiKeySummary, trigger: HTMLButtonElement) => void;
   onPrevious: () => void;
   onNext: () => void;
 }
@@ -262,6 +285,7 @@ function KeyDirectory({
   canCreate,
   onCreate,
   onRevoke,
+  onEdit,
   onPrevious,
   onNext,
 }: KeyDirectoryProps) {
@@ -289,6 +313,7 @@ function KeyDirectory({
         tenantNames={tenants}
         now={now}
         canWrite={canWrite}
+        onEdit={onEdit}
         onRevoke={onRevoke}
       />
       <KeysPagination

@@ -9,10 +9,11 @@ import {
   formatUpdatedAt,
 } from '../lib/format';
 import { Button } from './Button';
-import { CheckCircleIcon, DeployIcon, RefreshIcon, TagIcon, TrashIcon } from './Icons';
+import { CheckCircleIcon, DeployIcon, EditIcon, RefreshIcon, TagIcon, TrashIcon } from './Icons';
 import { DeploymentDialog } from './DeploymentDialog';
 import { ModelCreateDialog } from './ModelCreateDialog';
 import { ModelDeleteDialog } from './ModelDeleteDialog';
+import { ModelEditDialog } from './ModelEditDialog';
 import { ModelPricingDialog } from './ModelPricingDialog';
 import { Panel, PanelHeader } from './Panel';
 import { RequestErrorPanel } from './RequestErrorPanel';
@@ -25,6 +26,7 @@ interface ModelsPanelProps {
 type DeleteModelHandler = (model: ModelSummary, trigger: HTMLButtonElement) => void;
 type PriceModelHandler = (model: ModelSummary, trigger: HTMLButtonElement) => void;
 type DeploymentsHandler = (model: ModelSummary, trigger: HTMLButtonElement) => void;
+type EditModelHandler = (model: ModelSummary, trigger: HTMLButtonElement) => void;
 
 export function ModelsPanel({ query }: ModelsPanelProps) {
   const { canWrite } = useAdminSession();
@@ -33,10 +35,12 @@ export function ModelsPanel({ query }: ModelsPanelProps) {
   const [deletingModel, setDeletingModel] = useState<ModelSummary | null>(null);
   const [pricingModel, setPricingModel] = useState<ModelSummary | null>(null);
   const [deploymentsModel, setDeploymentsModel] = useState<ModelSummary | null>(null);
+  const [editingModel, setEditingModel] = useState<ModelSummary | null>(null);
   const registerButtonRef = useRef<HTMLButtonElement>(null);
   const deleteTriggerRef = useRef<HTMLElement | null>(null);
   const priceTriggerRef = useRef<HTMLElement | null>(null);
   const deploymentTriggerRef = useRef<HTMLElement | null>(null);
+  const editTriggerRef = useRef<HTMLElement | null>(null);
 
   const count =
     query.status === 'success'
@@ -68,6 +72,12 @@ export function ModelsPanel({ query }: ModelsPanelProps) {
     setNotice(null);
     deploymentTriggerRef.current = trigger;
     setDeploymentsModel(model);
+  };
+
+  const handleEdit = (model: ModelSummary, trigger: HTMLButtonElement) => {
+    setNotice(null);
+    editTriggerRef.current = trigger;
+    setEditingModel(model);
   };
 
   return (
@@ -114,6 +124,7 @@ export function ModelsPanel({ query }: ModelsPanelProps) {
           onDelete={handleDelete}
           onPricing={handlePricing}
           onDeployments={handleDeployments}
+          onEdit={handleEdit}
         />
       </div>
 
@@ -158,6 +169,18 @@ export function ModelsPanel({ query }: ModelsPanelProps) {
           onClose={() => setDeploymentsModel(null)}
         />
       )}
+
+      {canWrite && editingModel !== null && (
+        <ModelEditDialog
+          model={editingModel}
+          returnFocusRef={editTriggerRef}
+          onClose={() => setEditingModel(null)}
+          onSaved={(message) => {
+            setEditingModel(null);
+            setNotice(message);
+          }}
+        />
+      )}
     </Panel>
   );
 }
@@ -169,6 +192,7 @@ interface ModelsContentProps {
   onDelete: DeleteModelHandler;
   onPricing: PriceModelHandler;
   onDeployments: DeploymentsHandler;
+  onEdit: EditModelHandler;
 }
 
 function ModelsContent({
@@ -178,6 +202,7 @@ function ModelsContent({
   onDelete,
   onPricing,
   onDeployments,
+  onEdit,
 }: ModelsContentProps) {
   if (query.isPending) return <ModelsSkeleton />;
   if (query.status === 'error') {
@@ -212,6 +237,7 @@ function ModelsContent({
           onDelete={onDelete}
           onPricing={onPricing}
           onDeployments={onDeployments}
+          onEdit={onEdit}
         />
       )}
     </>
@@ -265,12 +291,14 @@ function ModelsTable({
   onDelete,
   onPricing,
   onDeployments,
+  onEdit,
 }: {
   models: ModelSummary[];
   canWrite: boolean;
   onDelete: DeleteModelHandler;
   onPricing: PriceModelHandler;
   onDeployments: DeploymentsHandler;
+  onEdit: EditModelHandler;
 }) {
   return (
     <>
@@ -311,6 +339,7 @@ function ModelsTable({
                 onDelete={onDelete}
                 onPricing={onPricing}
                 onDeployments={onDeployments}
+                onEdit={onEdit}
               />
             ))}
           </tbody>
@@ -325,6 +354,7 @@ function ModelsTable({
             onDelete={onDelete}
             onPricing={onPricing}
             onDeployments={onDeployments}
+            onEdit={onEdit}
           />
         ))}
       </ul>
@@ -353,12 +383,14 @@ function ModelRow({
   onDelete,
   onPricing,
   onDeployments,
+  onEdit,
 }: {
   model: ModelSummary;
   canWrite: boolean;
   onDelete: DeleteModelHandler;
   onPricing: PriceModelHandler;
   onDeployments: DeploymentsHandler;
+  onEdit: EditModelHandler;
 }) {
   const limits = modelLimitSummary(model);
   return (
@@ -394,6 +426,15 @@ function ModelRow({
       {canWrite && (
         <td className="py-2.5 text-right align-top">
           <div className="flex justify-end gap-0.5">
+            <Button
+              variant="ghost"
+              onClick={(event) => onEdit(model, event.currentTarget)}
+              aria-label={`Edit ${model.id}`}
+              title="Edit model"
+              className="shrink-0 px-2 py-1 text-[12px]"
+            >
+              <EditIcon className="size-3.5" />
+            </Button>
             <Button
               variant="ghost"
               onClick={(event) => onDeployments(model, event.currentTarget)}
@@ -434,12 +475,14 @@ function ModelCard({
   onDelete,
   onPricing,
   onDeployments,
+  onEdit,
 }: {
   model: ModelSummary;
   canWrite: boolean;
   onDelete: DeleteModelHandler;
   onPricing: PriceModelHandler;
   onDeployments: DeploymentsHandler;
+  onEdit: EditModelHandler;
 }) {
   const limits = modelLimitSummary(model);
   return (
@@ -478,6 +521,15 @@ function ModelCard({
       </dl>
       {canWrite && (
         <div className="mt-2 flex flex-wrap justify-end gap-2">
+          <Button
+            variant="ghost"
+            onClick={(event) => onEdit(model, event.currentTarget)}
+            aria-label={`Edit ${model.id}`}
+            className="shrink-0 px-2 py-1 text-[12px]"
+          >
+            <EditIcon className="size-3.5" />
+            <span>Edit</span>
+          </Button>
           <Button
             variant="ghost"
             onClick={(event) => onDeployments(model, event.currentTarget)}

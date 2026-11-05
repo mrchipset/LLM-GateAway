@@ -1,6 +1,12 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 
-import { createModel, deleteModel, type CreateModelInput } from '../api/client';
+import {
+  createModel,
+  deleteModel,
+  updateModel,
+  type CreateModelInput,
+  type UpdateModelInput,
+} from '../api/client';
 import { queryKeys } from '../lib/queryKeys';
 
 export function useCreateModel() {
@@ -19,6 +25,18 @@ export function useDeleteModel() {
 
   return useMutation({
     mutationFn: (modelId: string) => deleteModel(modelId),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.models });
+    },
+  });
+}
+
+export function useUpdateModel() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (input: { modelId: string; patch: UpdateModelInput }) =>
+      updateModel(input.modelId, input.patch),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.models });
     },

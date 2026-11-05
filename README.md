@@ -704,6 +704,7 @@ The console exposes the sections your role can use:
 The Models tab provides:
 
 - Register a model (id, provider, upstream model, enabled, optional RPM/TPM) with client-side validation mirroring the API; provider configuration is still a backend concern.
+- Edit a model's enabled flag and limits in place; provider and upstream model stay read-only.
 - Delete a model with confirmation; deleting it also removes it from every tenant allowlist.
 - Manage the per-model price list: versions newest first, with an append form (prices are per million tokens and a new version applies from its effective date).
 - Manage deployments per model: weighted routing, per-deployment credential env names and base URLs, enable/disable, and deletion, with a note that failover and cooldown apply.
@@ -723,7 +724,7 @@ The Access tab manages tenants and API keys:
 - Create tenants and edit the monthly token quota, requests-per-minute, tokens-per-minute, max concurrent requests, and audit retention (empty inherits the global retention; `0` is a legal hold); empty input clears a limit.
 - Set each tenant's model access policy (`All models` or an explicit allowlist) in a dedicated dialog. The dialog shows an explicit warning when an empty allowlist would block every model.
 - Manage each tenant's plan (tokens, overage switch) and monthly cost budget, with the current period summary: used / covered / billable tokens, list and billed cost, and budget remaining.
-- Create keys per tenant with an optional expiry and optional per-key RPM / TPM / concurrency limits. The plaintext is shown once, can be copied, and is never written to storage, the URL, or the query cache; closing an uncopied dialog asks for confirmation. The key list shows configured limits.
+- Create keys per tenant with an optional expiry and optional per-key RPM / TPM / concurrency limits. The plaintext is shown once, can be copied, and is never written to storage, the URL, or the query cache; closing an uncopied dialog asks for confirmation. The key list shows configured limits, and each key's limits can be edited later (only changed fields are sent; clearing a field removes that limit).
 - Revoke keys with confirmation. Revoked and expired keys are labeled, and only non-revoked keys offer the revoke action.
 - Export audit data (owner/auditor) and delete it permanently (owner) from the Audit panel: export streams to a downloaded file, never browser storage; deletion previews the count first and requires a second confirmation.
 

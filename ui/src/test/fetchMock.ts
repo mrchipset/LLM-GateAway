@@ -12,6 +12,7 @@ export interface Routes {
   '/api/v1/auth/me'?: RouteHandler;
   '/api/v1/models'?: RouteHandler;
   'POST /api/v1/models'?: RouteHandler;
+  'PATCH /api/v1/models/:id'?: RouteHandler;
   'DELETE /api/v1/models/:id'?: RouteHandler;
   'GET /api/v1/models/:id/deployments'?: RouteHandler;
   'POST /api/v1/models/:id/deployments'?: RouteHandler;
@@ -27,6 +28,7 @@ export interface Routes {
   'PUT /api/v1/tenants/:id/model-access'?: RouteHandler;
   '/api/v1/keys'?: RouteHandler;
   'POST /api/v1/keys'?: RouteHandler;
+  'PATCH /api/v1/keys/:id'?: RouteHandler;
   'DELETE /api/v1/keys/:id'?: RouteHandler;
   '/api/v1/usage/summary'?: RouteHandler;
   '/api/v1/usage/series'?: RouteHandler;
@@ -196,6 +198,9 @@ function createDefaultRoutes(
     'POST /api/v1/models': () => {
       throw new Error('Unexpected request: POST /api/v1/models');
     },
+    'PATCH /api/v1/models/:id': () => {
+      throw new Error('Unexpected request: PATCH /api/v1/models/:id');
+    },
     'DELETE /api/v1/models/:id': () => {
       throw new Error('Unexpected request: DELETE /api/v1/models/:id');
     },
@@ -252,6 +257,9 @@ function createDefaultRoutes(
       jsonResponse({ items: [], total: 0, limit: 20, offset: 0, tenant_id: null }),
     'POST /api/v1/keys': () => {
       throw new Error('Unexpected request: POST /api/v1/keys');
+    },
+    'PATCH /api/v1/keys/:id': () => {
+      throw new Error('Unexpected request: PATCH /api/v1/keys/:id');
     },
     'DELETE /api/v1/keys/:id': () => {
       throw new Error('Unexpected request: DELETE /api/v1/keys/:id');
@@ -388,8 +396,18 @@ function resolveHandler(routes: Routes, url: URL, init: RequestInit): RouteHandl
     if (handler !== undefined) return handler;
   }
 
+  if (method === 'PATCH' && /^\/api\/v1\/models\/[^/]+$/.test(url.pathname)) {
+    const handler = routes['PATCH /api/v1/models/:id'];
+    if (handler !== undefined) return handler;
+  }
+
   if (method === 'DELETE' && url.pathname.startsWith('/api/v1/models/')) {
     const handler = routes['DELETE /api/v1/models/:id'];
+    if (handler !== undefined) return handler;
+  }
+
+  if (method === 'PATCH' && /^\/api\/v1\/keys\/[^/]+$/.test(url.pathname)) {
+    const handler = routes['PATCH /api/v1/keys/:id'];
     if (handler !== undefined) return handler;
   }
 

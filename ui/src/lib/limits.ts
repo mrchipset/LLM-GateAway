@@ -8,6 +8,11 @@ export function countErrorText(min: number): string {
   return `Enter a whole number of ${min} or more.`;
 }
 
+/** Formats an optional limit for a form input; `null` and absent both read as blank. */
+export function limitToInput(value: number | null | undefined): string {
+  return value === null || value === undefined ? '' : String(value);
+}
+
 export function parseOptionalCount(raw: string, min: number): OptionalCountResult {
   const value = raw.trim();
   if (value === '') return { status: 'empty' };

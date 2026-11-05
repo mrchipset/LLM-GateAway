@@ -1,6 +1,12 @@
 import { useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
 
-import { createKey, revokeKey, type CreateApiKeyInput } from '../api/client';
+import {
+  createKey,
+  revokeKey,
+  updateApiKeyLimits,
+  type ApiKeyLimitsPatch,
+  type CreateApiKeyInput,
+} from '../api/client';
 import { queryKeys, usageByKeyPrefix } from '../lib/queryKeys';
 
 const createKeyMutationKey = ['admin-keys', 'create'] as const;
@@ -33,6 +39,18 @@ export function useRevokeKey() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.keys });
       void queryClient.invalidateQueries({ queryKey: usageByKeyPrefix });
+    },
+  });
+}
+
+export function useUpdateApiKeyLimits() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (input: { keyId: string; patch: ApiKeyLimitsPatch }) =>
+      updateApiKeyLimits(input.keyId, input.patch),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.keys });
     },
   });
 }

@@ -48,6 +48,13 @@ export interface CreateModelInput {
   tokens_per_minute?: number;
 }
 
+/** Only the fields present in the patch are sent; `null` clears a limit. */
+export interface UpdateModelInput {
+  enabled?: boolean;
+  requests_per_minute?: number | null;
+  tokens_per_minute?: number | null;
+}
+
 export interface ModelDeployment {
   id: string;
   model_id: string;
@@ -173,6 +180,13 @@ export interface CreateApiKeyInput {
   requests_per_minute?: number;
   tokens_per_minute?: number;
   max_concurrent_requests?: number;
+}
+
+/** Only the fields present in the patch are sent; `null` clears a limit. */
+export interface ApiKeyLimitsPatch {
+  requests_per_minute?: number | null;
+  tokens_per_minute?: number | null;
+  max_concurrent_requests?: number | null;
 }
 
 export interface CreateTenantInput {
@@ -1581,6 +1595,20 @@ export async function createModel(
   return payload;
 }
 
+export async function updateModel(
+  modelId: string,
+  patch: UpdateModelInput,
+  signal?: AbortSignal,
+): Promise<ModelSummary> {
+  const path = `/api/v1/models/${encodeURIComponent(modelId)}`;
+  const response = await sendAdminJson(path, 'PATCH', patch, signal);
+  const payload = await readJson(response, path);
+  if (!isModelSummary(payload)) {
+    throw unexpectedPayload(response, 'model');
+  }
+  return payload;
+}
+
 export async function deleteModel(modelId: string, signal?: AbortSignal): Promise<void> {
   await sendAdminDelete(`/api/v1/models/${encodeURIComponent(modelId)}`, signal);
 }
@@ -1784,6 +1812,20 @@ export async function createKey(
 export async function revokeKey(keyId: string, signal?: AbortSignal): Promise<void> {
   const path = `/api/v1/keys/${encodeURIComponent(keyId)}`;
   await sendAdminDelete(path, signal);
+}
+
+export async function updateApiKeyLimits(
+  keyId: string,
+  patch: ApiKeyLimitsPatch,
+  signal?: AbortSignal,
+): Promise<ApiKeySummary> {
+  const path = `/api/v1/keys/${encodeURIComponent(keyId)}`;
+  const response = await sendAdminJson(path, 'PATCH', patch, signal);
+  const payload = await readJson(response, path);
+  if (!isApiKeySummary(payload)) {
+    throw unexpectedPayload(response, 'API key');
+  }
+  return payload;
 }
 
 export async function getUsageSummary(

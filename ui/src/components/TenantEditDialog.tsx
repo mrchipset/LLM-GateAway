@@ -2,7 +2,12 @@ import { useId, useRef, useState, type FormEvent, type RefObject } from 'react';
 
 import type { TenantLimitsPatch, TenantSummary } from '../api/client';
 import { useUpdateTenantLimits } from '../hooks/useTenantMutations';
-import { countErrorText, parseCountChange, type CountChangeResult } from '../lib/limits';
+import {
+  countErrorText,
+  limitToInput,
+  parseCountChange,
+  type CountChangeResult,
+} from '../lib/limits';
 import { Button } from './Button';
 import { CloseIcon } from './Icons';
 import { Modal } from './Modal';
@@ -21,10 +26,6 @@ interface LimitFieldErrors {
   tokens?: string;
   concurrent?: string;
   retention?: string;
-}
-
-function limitToInput(value: number | null | undefined): string {
-  return value === null || value === undefined ? '' : String(value);
 }
 
 export function TenantEditDialog({

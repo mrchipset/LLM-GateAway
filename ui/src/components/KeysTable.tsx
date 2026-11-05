@@ -8,7 +8,7 @@ import {
 } from '../lib/format';
 import { apiKeyStatus, type KeyStatus } from '../lib/keys';
 import { Button } from './Button';
-import { TrashIcon } from './Icons';
+import { EditIcon, TrashIcon } from './Icons';
 
 const STATUS_CLASSES: Record<KeyStatus, string> = {
   Active: 'border-ok/25 bg-ok-soft text-ok',
@@ -73,6 +73,29 @@ interface RevokeButtonProps {
   withLabel?: boolean;
 }
 
+function EditButton({
+  apiKey,
+  onEdit,
+  withLabel = false,
+}: {
+  apiKey: ApiKeySummary;
+  onEdit: KeysTableProps['onEdit'];
+  withLabel?: boolean;
+}) {
+  return (
+    <Button
+      variant="ghost"
+      onClick={(event) => onEdit(apiKey, event.currentTarget)}
+      aria-label={`Edit limits for ${apiKey.name}`}
+      title="Edit key limits"
+      className="shrink-0 px-2 py-1 text-[12px]"
+    >
+      <EditIcon className="size-3.5" />
+      {withLabel && <span>Edit</span>}
+    </Button>
+  );
+}
+
 function RevokeButton({ apiKey, onRevoke, withLabel = false }: RevokeButtonProps) {
   return (
     <Button
@@ -93,10 +116,11 @@ interface KeysTableProps {
   tenantNames: ReadonlyMap<string, string>;
   now: number;
   canWrite: boolean;
+  onEdit: (apiKey: ApiKeySummary, trigger: HTMLButtonElement) => void;
   onRevoke: (apiKey: ApiKeySummary, trigger: HTMLButtonElement) => void;
 }
 
-export function KeysTable({ keys, tenantNames, now, canWrite, onRevoke }: KeysTableProps) {
+export function KeysTable({ keys, tenantNames, now, canWrite, onEdit, onRevoke }: KeysTableProps) {
   return (
     <>
       <div className="hidden md:block">
@@ -107,8 +131,8 @@ export function KeysTable({ keys, tenantNames, now, canWrite, onRevoke }: KeysTa
             <col className="w-[15%]" />
             <col className="w-[17%]" />
             <col className="w-[17%]" />
-            <col className={canWrite ? 'w-[23%]' : 'w-[30%]'} />
-            {canWrite && <col className="w-[7%]" />}
+            <col className={canWrite ? 'w-[20%]' : 'w-[30%]'} />
+            {canWrite && <col className="w-[10%]" />}
           </colgroup>
           <thead>
             <tr className="border-b border-line">
@@ -209,7 +233,12 @@ export function KeysTable({ keys, tenantNames, now, canWrite, onRevoke }: KeysTa
                   </td>
                   {canWrite && (
                     <td className="py-3 text-right align-top">
-                      {status !== 'Revoked' && <RevokeButton apiKey={apiKey} onRevoke={onRevoke} />}
+                      <div className="flex justify-end gap-0.5">
+                        {status !== 'Revoked' && <EditButton apiKey={apiKey} onEdit={onEdit} />}
+                        {status !== 'Revoked' && (
+                          <RevokeButton apiKey={apiKey} onRevoke={onRevoke} />
+                        )}
+                      </div>
                     </td>
                   )}
                 </tr>
@@ -272,7 +301,8 @@ export function KeysTable({ keys, tenantNames, now, canWrite, onRevoke }: KeysTa
                 )}
               </dl>
               {canWrite && status !== 'Revoked' && (
-                <div className="mt-2 flex justify-end">
+                <div className="mt-2 flex justify-end gap-2">
+                  <EditButton apiKey={apiKey} onEdit={onEdit} withLabel />
                   <RevokeButton apiKey={apiKey} onRevoke={onRevoke} withLabel />
                 </div>
               )}
