@@ -173,3 +173,36 @@ detail/rollup token totals matched exactly (480,918,501).
 G1.3's enforcement goal is met: p95 no longer grows with the month's row count, and the escape
 hatch (`GATEWAY_BILLING_ENABLED=false`) is no longer needed for capacity. A multi-worker run with
 Redis is the next capacity experiment, not a correctness fix.
+
+### Multi-worker capacity (Redis backend)
+
+Redis 7.4.2 was built from source on the test host (no sudo, no Docker) and the billing tenant was
+given high but real limits (`requests_per_minute=100000`, `tokens_per_minute=100000000`,
+`max_concurrent_requests=1000`), so every request exercised the shared bucket, lease, and TPM
+settlement. Backend: `GATEWAY_RATE_LIMIT_BACKEND=redis`, Redis on loopback.
+
+| Workers | Target RPS | Achieved | err | p95 | p99 |
+|---|---|---|---|---|---|
+| 1 | 100 | 82.0 | 0 | 10.02 s | 12.16 s |
+| 4 | 100 | 100.0 | 0 | 34.9 ms | 36.9 ms |
+| 4 | 200 | 199.9 | 0 | 58.3 ms | 73.4 ms |
+| 8 | 400 | 247.8 | 0 | 3.09 s | 3.70 s |
+
+### Findings
+
+1. **Workers are the lever.** One process cannot hold 100 RPS with the full limit path (82 RPS,
+   p95 10 s); four processes hold 100 RPS at 35 ms and 200 RPS at 58 ms with zero errors.
+2. **The host ceiling is around 250 RPS co-located.** Eight workers at 400 RPS reached 247.8 RPS
+   and p95 3.1 s: k6, eight uvicorn processes, and PostgreSQL share eight cores. Cross-host k6
+   would move this ceiling; the current number is a lower bound.
+3. **Shared state was actually in the path:** Redis held `llm-gateway:rate:tenant:<id>:rpm|tpm`
+   after the runs, and the limits were configured, so this is not a "workers without limits" number.
+4. **Caveat:** Prometheus metrics bind one port per process, so only one worker's counters are
+   scraped; k6's end-to-end percentiles are the authoritative numbers here.
+
+### Practical guidance
+
+- Single worker: usable to roughly 60 RPS with billing enabled (p95 48 ms at 215k rows).
+- Four workers with Redis: 200 RPS at p95 58 ms on this host, zero errors.
+- Do not raise workers without `GATEWAY_RATE_LIMIT_BACKEND=redis`; the storage backend keeps
+  per-key/model/TPM/concurrency/cooldown state process-local.
