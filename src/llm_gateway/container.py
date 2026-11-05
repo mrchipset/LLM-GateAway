@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from fastapi import Request
 from redis.asyncio import Redis
 
+from llm_gateway.auth.last_used import LastUsedSampler
 from llm_gateway.clock import Clock, SystemClock
 from llm_gateway.config import RateLimitBackend, Settings, StorageBackend
 from llm_gateway.lifecycle import InFlightTracker
@@ -89,6 +90,7 @@ class Container:
     router: ModelRouter | None = None
     telemetry: Telemetry | None = None
     inflight: InFlightTracker = field(default_factory=InFlightTracker)
+    last_used_sampler: LastUsedSampler = field(default_factory=LastUsedSampler)
     redis_client: Redis | None = None
 
     def __post_init__(self) -> None:
@@ -227,5 +229,8 @@ def build_container(settings: Settings, *, telemetry: Telemetry | None = None) -
         clock=clock,
         tracer=resolved_telemetry.tracer,
         max_attempts=settings.route_max_attempts,
+    )
+    container.last_used_sampler = LastUsedSampler(
+        interval_seconds=settings.last_used_sample_seconds,
     )
     return container

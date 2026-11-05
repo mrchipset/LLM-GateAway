@@ -2552,3 +2552,69 @@ async def test_tenant_key_and_model_rate_limits_round_trip(database: Database) -
     )
     await database.api_keys.create_key(key)
     assert await database.api_keys.get_key(key.id) == key
+
+
+async def test_month_counter_matches_detail_and_is_used_for_month_windows(
+    database: Database,
+) -> None:
+    tenant = await database.tenants.create_tenant(_tenant(1))
+    key = _key(1, tenant_id=tenant.id)
+    await database.api_keys.create_key(key)
+    month_start = datetime(2026, 1, 1, tzinfo=UTC)
+    month_end = datetime(2026, 2, 1, tzinfo=UTC)
+
+    records = [
+        replace(
+            _usage(index, tenant_id=tenant.id, api_key_id=key.id),
+            covered_tokens=10,
+            billable_tokens=5,
+            list_cost=Decimal("0.001000"),
+            billed_cost=Decimal("0.000500"),
+        )
+        for index in range(3)
+    ]
+    unpriced = replace(_usage(9, tenant_id=tenant.id, api_key_id=key.id), covered_tokens=0)
+    for record in [*records, unpriced]:
+        await database.usage.record(record)
+
+    totals = await database.usage.monthly_totals(
+        tenant_id=tenant.id, since=month_start, until=month_end
+    )
+    token_total = await database.usage.token_total(
+        tenant_id=tenant.id, since=month_start, until=month_end
+    )
+
+    assert totals.total_tokens == 4 * 15
+    assert totals.covered_tokens == 30
+    assert totals.billable_tokens == 15
+    assert totals.list_cost == Decimal("0.003000")
+    assert totals.billed_cost == Decimal("0.001500")
+    assert totals.requests == 4
+    assert token_total == 4 * 15
+
+    engine = create_async_engine(_test_url())
+    try:
+        async with engine.connect() as connection:
+            row = (
+                await connection.execute(
+                    text(
+                        "SELECT prompt_tokens, completion_tokens, requests "
+                        "FROM tenant_month_usage WHERE tenant_id = :tenant_id"
+                    ),
+                    {"tenant_id": tenant.id},
+                )
+            ).one()
+    finally:
+        await engine.dispose()
+
+    assert row[0] == 40
+    assert row[1] == 20
+    assert row[2] == 4
+
+    partial = await database.usage.monthly_totals(
+        tenant_id=tenant.id,
+        since=BASE,
+        until=BASE + timedelta(seconds=2, microseconds=500000),
+    )
+    assert partial.requests == 3, "a non-month window must fall back to detail rows"
+    assert partial.total_tokens == 45

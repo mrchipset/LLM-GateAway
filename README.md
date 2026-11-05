@@ -282,6 +282,11 @@ Invoke-RestMethod -Method Patch `
 - PATCH only writes the fields present in the body; an explicit `null` clears that limit.
 - Quotas are soft: they are checked before the request, so concurrent or in-flight requests can slightly overshoot, and usage write failures can cause drift.
 - Rejected requests (rate-limited or over quota) do not create usage records.
+- Monthly totals are read from `tenant_month_usage`, one row per tenant and UTC month, updated in
+  the same transaction as each usage record. Enforcement is therefore O(1) regardless of how many
+  rows the month holds; non-month reporting windows still aggregate detail rows.
+- `last_used_at` is refreshed at most once per `GATEWAY_LAST_USED_SAMPLE_SECONDS` per key rather
+  than on every request.
 - Rate limiting applies only to `POST /v1/chat/completions`; `/v1/models`, health checks, and the management API are not tenant-limited.
 - The `storage` backend keeps the tenant counter in PostgreSQL (shared across workers, fixed window), but per-key/model buckets, TPM, concurrency leases, and cooldown are process-local. Configure `GATEWAY_RATE_LIMIT_BACKEND=redis` when those limits must hold across replicas.
 
@@ -524,6 +529,7 @@ Invoke-RestMethod -Uri http://127.0.0.1:4000/api/v1/tenants -WebSession $session
 | `GATEWAY_ROUTE_FAILURE_THRESHOLD` | Consecutive failovers before cooldown, default 3 |
 | `GATEWAY_ROUTE_COOLDOWN_SECONDS` | Cooldown length after the threshold, default 30 |
 | `GATEWAY_MASTER_KEY_ENABLED` | Accept the master key as a break-glass owner credential, default `true` |
+| `GATEWAY_LAST_USED_SAMPLE_SECONDS` | Refresh `last_used_at` at most once per key per interval, default 60; `0` writes every request |
 | `GATEWAY_SESSION_TTL_HOURS` | Admin session lifetime, default 12 |
 | `GATEWAY_BOOTSTRAP_ADMIN_USERNAME` | Optional first-run owner username (3–64 chars, `a-z0-9._-`) |
 | `GATEWAY_BOOTSTRAP_ADMIN_PASSWORD` | Optional first-run owner password (12+ chars); ignored once an owner exists |

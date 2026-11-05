@@ -60,7 +60,8 @@ async def require_api_key(
         raise _unauthorized("Invalid API key", ApiErrorCode.INVALID_API_KEY)
 
     try:
-        await container.api_keys.touch_last_used(record.id, now)
+        if container.last_used_sampler.should_touch(record.id, now):
+            await container.api_keys.touch_last_used(record.id, now)
     except Exception:
         # Best effort: a storage failure must not reject an authenticated request.
         logger.warning(

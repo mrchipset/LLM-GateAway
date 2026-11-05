@@ -65,6 +65,7 @@ from llm_gateway.storage.tables import (
     ModelPriceRow,
     ModelRow,
     TenantModelAccessRow,
+    TenantMonthUsageRow,
     TenantRow,
     UsageRow,
 )
@@ -188,6 +189,24 @@ def _validate_token_window(*, since: datetime, until: datetime) -> None:
             raise ValueError(f"{field} must be timezone-aware")
     if since >= until:
         raise ValueError("since must be before until")
+
+
+def _calendar_month_start(since: datetime) -> datetime:
+    start = since.astimezone(UTC)
+    return start.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
+def _is_calendar_month(since: datetime, until: datetime) -> bool:
+    """True when the window is exactly one UTC calendar month."""
+    start = since.astimezone(UTC)
+    if start != _calendar_month_start(start):
+        return False
+    next_month = (
+        start.replace(year=start.year + 1, month=1)
+        if start.month == 12
+        else start.replace(month=start.month + 1)
+    )
+    return until.astimezone(UTC) == next_month
 
 
 def _to_key(row: ApiKeyRow) -> ApiKeyRecord:
@@ -603,6 +622,48 @@ class SqlAlchemyUsageRepository:
         try:
             async with self._session_factory() as session, session.begin():
                 session.add(row)
+                await session.execute(
+                    pg_insert(TenantMonthUsageRow)
+                    .values(
+                        tenant_id=record.tenant_id,
+                        period_start=record.created_at.astimezone(UTC).date().replace(day=1),
+                        prompt_tokens=record.prompt_tokens,
+                        completion_tokens=record.completion_tokens,
+                        cached_tokens=record.cached_tokens,
+                        total_tokens=record.total_tokens,
+                        covered_tokens=record.covered_tokens,
+                        billable_tokens=record.billable_tokens,
+                        list_cost=record.list_cost or Decimal("0"),
+                        billed_cost=record.billed_cost or Decimal("0"),
+                        requests=1,
+                        updated_at=record.created_at,
+                    )
+                    .on_conflict_do_update(
+                        index_elements=[
+                            TenantMonthUsageRow.tenant_id,
+                            TenantMonthUsageRow.period_start,
+                        ],
+                        set_={
+                            "prompt_tokens": TenantMonthUsageRow.prompt_tokens
+                            + record.prompt_tokens,
+                            "completion_tokens": TenantMonthUsageRow.completion_tokens
+                            + record.completion_tokens,
+                            "cached_tokens": TenantMonthUsageRow.cached_tokens
+                            + record.cached_tokens,
+                            "total_tokens": TenantMonthUsageRow.total_tokens + record.total_tokens,
+                            "covered_tokens": TenantMonthUsageRow.covered_tokens
+                            + record.covered_tokens,
+                            "billable_tokens": TenantMonthUsageRow.billable_tokens
+                            + record.billable_tokens,
+                            "list_cost": TenantMonthUsageRow.list_cost
+                            + (record.list_cost or Decimal("0")),
+                            "billed_cost": TenantMonthUsageRow.billed_cost
+                            + (record.billed_cost or Decimal("0")),
+                            "requests": TenantMonthUsageRow.requests + 1,
+                            "updated_at": record.created_at,
+                        },
+                    )
+                )
         except IntegrityError as exc:
             if _is_foreign_key_violation(exc) and _is_tenant_foreign_key_violation(exc):
                 raise UnknownTenantError(record.tenant_id) from exc
@@ -610,6 +671,13 @@ class SqlAlchemyUsageRepository:
 
     async def token_total(self, *, tenant_id: UUID, since: datetime, until: datetime) -> int:
         _validate_token_window(since=since, until=until)
+        if _is_calendar_month(since, until):
+            async with self._session_factory() as session, session.begin():
+                counter = await session.get(
+                    TenantMonthUsageRow,
+                    (tenant_id, _calendar_month_start(since).date()),
+                )
+            return int(counter.total_tokens) if counter is not None else 0
         statement = select(func.coalesce(func.sum(UsageRow.total_tokens), 0)).where(
             UsageRow.tenant_id == tenant_id,
             UsageRow.created_at >= since,
@@ -623,6 +691,22 @@ class SqlAlchemyUsageRepository:
         self, *, tenant_id: UUID, since: datetime, until: datetime
     ) -> MonthlyUsage:
         _validate_token_window(since=since, until=until)
+        if _is_calendar_month(since, until):
+            async with self._session_factory() as session, session.begin():
+                counter = await session.get(
+                    TenantMonthUsageRow,
+                    (tenant_id, _calendar_month_start(since).date()),
+                )
+            if counter is None:
+                return MonthlyUsage()
+            return MonthlyUsage(
+                total_tokens=int(counter.prompt_tokens + counter.completion_tokens),
+                covered_tokens=int(counter.covered_tokens),
+                billable_tokens=int(counter.billable_tokens),
+                list_cost=Decimal(counter.list_cost),
+                billed_cost=Decimal(counter.billed_cost),
+                requests=int(counter.requests),
+            )
         statement = select(
             func.coalesce(func.sum(UsageRow.prompt_tokens + UsageRow.completion_tokens), 0),
             func.coalesce(func.sum(UsageRow.covered_tokens), 0),

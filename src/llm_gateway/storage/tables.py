@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
@@ -9,6 +9,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -357,6 +358,43 @@ class UsageRow(Base):
         Index("ix_usage_records_created_at", "created_at"),
         Index("ix_usage_records_trace_id", "trace_id"),
     )
+
+
+class TenantMonthUsageRow(Base):
+    """O(1) monthly rollup, updated in the same transaction as ``usage_records``."""
+
+    __tablename__ = "tenant_month_usage"
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey(
+            "tenants.id",
+            name="fk_tenant_month_usage_tenant_id",
+            ondelete="CASCADE",
+        ),
+        primary_key=True,
+    )
+    period_start: Mapped[date] = mapped_column(Date, primary_key=True)
+    prompt_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
+    completion_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("0")
+    )
+    cached_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
+    total_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
+    covered_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("0")
+    )
+    billable_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("0")
+    )
+    list_cost: Mapped[Decimal] = mapped_column(
+        Numeric(18, 6), nullable=False, server_default=text("0")
+    )
+    billed_cost: Mapped[Decimal] = mapped_column(
+        Numeric(18, 6), nullable=False, server_default=text("0")
+    )
+    requests: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class ModelRow(Base):

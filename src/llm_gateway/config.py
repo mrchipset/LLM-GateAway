@@ -58,6 +58,7 @@ class Settings(BaseSettings):
     connect_timeout_seconds: float = Field(default=10.0, gt=0)
     stream_idle_timeout_seconds: float = Field(default=60.0, ge=0, le=3600)
     shutdown_grace_seconds: float = Field(default=30.0, ge=0, le=600)
+    last_used_sample_seconds: int = Field(default=60, ge=0, le=3600)
     max_retries: int = Field(default=2, ge=0, le=5)
     audit_enabled: bool = False
     audit_max_content_bytes: int = Field(default=262144, ge=1024)
