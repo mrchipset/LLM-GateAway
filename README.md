@@ -512,6 +512,27 @@ Invoke-RestMethod -Uri http://127.0.0.1:4000/api/v1/tenants -WebSession $session
 - The session cookie is `HttpOnly`, `SameSite=Lax`, and `Secure` in production; the TTL is `GATEWAY_SESSION_TTL_HOURS` (default 12).
 - State-changing calls made with a session must echo the readable `gw_admin_csrf` cookie in the `x-csrf-token` header; a missing or wrong token returns 403 `csrf_failed`.
 - Login is throttled to 5 failed attempts per username per 15 minutes and returns 429 `login_throttled`.
+
+### Single sign-on (OIDC)
+
+Set the issuer, client credentials, and redirect URI to enable an authorization-code flow with PKCE. The console shows a "Sign in with SSO" button when `/api/v1/auth/oidc/status` reports it enabled; the password form stays available.
+
+```dotenv
+GATEWAY_OIDC_ENABLED=true
+GATEWAY_OIDC_ISSUER=https://idp.example.com
+GATEWAY_OIDC_CLIENT_ID=llm-gateway
+GATEWAY_OIDC_CLIENT_SECRET=...
+GATEWAY_OIDC_REDIRECT_URI=https://gateway.example.com/api/v1/auth/oidc/callback
+GATEWAY_OIDC_ROLE_CLAIM=groups
+GATEWAY_OIDC_ROLE_MAP={"gateway-owners":"owner","gateway-ops":"operator","gateway-auditors":"auditor"}
+GATEWAY_OIDC_JIT_PROVISIONING=true
+```
+
+- The code is exchanged server-side; the ID token is validated against the provider JWKS (issuer, audience, expiry, nonce). The browser never sees the client secret or tokens.
+- The identity is linked by `sub`; a matching username never takes over a local account.
+- Roles come from the configured claim; an unmapped login is rejected (`role_not_mapped`). With JIT enabled the first login creates the admin; otherwise the identity must be provisioned first.
+- Flow cookies (`state`, `nonce`, `code_verifier`) are HttpOnly, scoped to the callback path, and cleared on every outcome. Failures redirect to `/?sso_error=<code>`.
+- Logout is local; the provider session is not terminated. Roles are not re-synced on later logins for an existing OIDC admin. See `notes/oidc.md`.
 - `PATCH /api/v1/admins/{id}` changes role, active flag, display name, or password. At least one active owner must remain, and a password change revokes that admin's sessions.
 - `GET /api/v1/admin-audit` (owner/auditor) lists actions with actor, target, before/after business fields, and request id. It never contains passwords, tokens, or key material.
 
@@ -577,6 +598,14 @@ Invoke-RestMethod -Uri http://127.0.0.1:4000/api/v1/tenants -WebSession $session
 | `GATEWAY_MASTER_KEY_ENABLED` | Accept the master key as a break-glass owner credential, default `true` |
 | `GATEWAY_LAST_USED_SAMPLE_SECONDS` | Refresh `last_used_at` at most once per key per interval, default 60; `0` writes every request |
 | `GATEWAY_SESSION_TTL_HOURS` | Admin session lifetime, default 12 |
+| `GATEWAY_OIDC_ENABLED` | Enable admin SSO via OIDC, default `false`; requires the four settings below |
+| `GATEWAY_OIDC_ISSUER` | OIDC issuer URL; discovery is read from `/.well-known/openid-configuration` |
+| `GATEWAY_OIDC_CLIENT_ID` / `GATEWAY_OIDC_CLIENT_SECRET` | Confidential client credentials; the secret never reaches the browser |
+| `GATEWAY_OIDC_REDIRECT_URI` | Callback URL registered at the provider, typically `/api/v1/auth/oidc/callback` |
+| `GATEWAY_OIDC_SCOPES` | Scopes, default `openid email profile`; must include `openid` |
+| `GATEWAY_OIDC_ROLE_CLAIM` | Claim holding group/role values, default `groups` |
+| `GATEWAY_OIDC_ROLE_MAP` | JSON object mapping claim values to `owner`/`operator`/`auditor` |
+| `GATEWAY_OIDC_JIT_PROVISIONING` | Create an admin on first SSO login, default `false` |
 | `GATEWAY_BOOTSTRAP_ADMIN_USERNAME` | Optional first-run owner username (3–64 chars, `a-z0-9._-`) |
 | `GATEWAY_BOOTSTRAP_ADMIN_PASSWORD` | Optional first-run owner password (12+ chars); ignored once an owner exists |
 
