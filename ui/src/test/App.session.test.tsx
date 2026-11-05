@@ -1,6 +1,6 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import type { CreateModelInput, ModelSummary } from '../api/client';
 import {
@@ -200,5 +200,91 @@ describe('admin session', () => {
     expect(document.cookie).not.toContain('gw_admin_session');
     expect(document.cookie).not.toContain(DEFAULT_ADMIN_PASSWORD);
     expect(document.body.textContent).not.toContain(DEFAULT_ADMIN_PASSWORD);
+  });
+});
+
+describe('single sign-on', () => {
+  afterEach(() => {
+    window.history.replaceState({}, '', '/');
+  });
+
+  it('offers SSO when the backend reports it enabled and keeps the password form', async () => {
+    installFetchMock({
+      '/api/v1/auth/oidc/status': () => jsonResponse({ enabled: true }),
+    });
+    renderApp();
+
+    const link = await screen.findByRole('link', { name: 'Sign in with SSO' });
+    expect(link).toHaveAttribute('href', '/api/v1/auth/oidc/start');
+    expect(screen.getByLabelText('Password')).toHaveAttribute('type', 'password');
+    expect(screen.getByRole('button', { name: 'Sign in' })).toBeInTheDocument();
+  });
+
+  it('hides SSO when the backend reports it disabled', async () => {
+    const fetchMock = installFetchMock({
+      '/api/v1/auth/oidc/status': () => jsonResponse({ enabled: false }),
+    });
+    renderApp();
+
+    await loginScreen();
+    await waitFor(() => {
+      expect(callsTo(fetchMock, '/api/v1/auth/oidc/status')).toHaveLength(1);
+    });
+    expect(screen.queryByRole('link', { name: 'Sign in with SSO' })).not.toBeInTheDocument();
+  });
+
+  it('hides SSO and still signs in with a password when the status probe fails', async () => {
+    installFetchMock({
+      '/api/v1/auth/oidc/status': () =>
+        jsonResponse(
+          {
+            error: {
+              message: 'OIDC status is unavailable',
+              type: 'server_error',
+              param: null,
+              code: 'internal_error',
+              request_id: 'req_oidc_status',
+            },
+          },
+          500,
+        ),
+    });
+    const user = userEvent.setup();
+    renderApp();
+
+    await loginScreen();
+    expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Sign in with SSO' })).not.toBeInTheDocument();
+
+    await signIn(user);
+    expect(await screen.findByRole('tab', { name: 'Models' })).toBeInTheDocument();
+  });
+
+  it('explains a failed SSO sign-in and clears the error code from the URL', async () => {
+    installFetchMock();
+    window.history.replaceState({}, '', '/?sso_error=role_not_mapped');
+    renderApp();
+
+    expect(
+      await screen.findByText(
+        'Your sign-in role does not grant access to the console. Ask an owner to check the role mapping.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('Single sign-on failed');
+    await waitFor(() => {
+      expect(window.location.search).toBe('');
+    });
+  });
+
+  it('falls back to a generic message for an unknown SSO error code', async () => {
+    installFetchMock();
+    window.history.replaceState({}, '', '/?sso_error=a_new_provider_failure');
+    renderApp();
+
+    expect(
+      await screen.findByText(
+        'Single sign-on could not be completed. Try again, or sign in with your password.',
+      ),
+    ).toBeInTheDocument();
   });
 });

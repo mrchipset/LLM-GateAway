@@ -504,6 +504,10 @@ export interface LoginInput {
   password: string;
 }
 
+export interface OidcStatus {
+  enabled: boolean;
+}
+
 export interface LoginResult {
   username: string;
   display_name: string;
@@ -1340,6 +1344,22 @@ async function sendAdminJson(
 
 async function sendAdminDelete(path: string, signal?: AbortSignal): Promise<Response> {
   return adminResponse(path, { method: 'DELETE', signal });
+}
+
+/**
+ * Public endpoint: it is read before sign-in, so it must not report an unauthorized
+ * response as an expired session.
+ */
+export async function getOidcStatus(signal?: AbortSignal): Promise<OidcStatus> {
+  const path = '/api/v1/auth/oidc/status';
+  const response = await send(path, { signal, headers: { Accept: 'application/json' } });
+  if (!response.ok) throw await toRequestError(response);
+
+  const payload = await readJson(response, path);
+  if (!isRecord(payload) || typeof payload.enabled !== 'boolean') {
+    throw unexpectedPayload(response, 'OIDC status');
+  }
+  return { enabled: payload.enabled };
 }
 
 export async function login(input: LoginInput, signal?: AbortSignal): Promise<LoginResult> {

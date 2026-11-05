@@ -1,9 +1,11 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 
-import type { LoginInput } from '../api/client';
+import { getOidcStatus, type LoginInput } from '../api/client';
 import type { BackendStatus } from '../hooks/useBackendStatus';
 import { ROLE_LABELS, ROLE_SUMMARIES, type AdminRole } from '../lib/session';
+import { OIDC_START_PATH, readSsoErrorCode, ssoErrorMessage, withoutSsoError } from '../lib/sso';
 import { Button } from './Button';
+import { buttonClassName } from './buttonStyles';
 import { Panel, PanelHeader } from './Panel';
 import { RequestErrorPanel } from './RequestErrorPanel';
 import { StatusPanel } from './StatusPanel';
@@ -30,6 +32,8 @@ export function LoginScreen({
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [fieldError, setFieldError] = useState<string | null>(null);
+  const [ssoErrorCode] = useState(() => readSsoErrorCode(window.location.search));
+  const [oidcEnabled, setOidcEnabled] = useState(false);
   const usernameId = useId();
   const passwordId = useId();
   const hintId = useId();
@@ -37,9 +41,32 @@ export function LoginScreen({
   const fieldErrorId = useId();
   const usernameRef = useRef<HTMLInputElement>(null);
   const trimmedUsername = username.trim();
+  const ssoError = ssoErrorMessage(ssoErrorCode);
 
   useEffect(() => {
     usernameRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    if (ssoErrorCode === null) return;
+    const search = withoutSsoError(window.location.search);
+    window.history.replaceState(
+      window.history.state,
+      '',
+      `${window.location.pathname}${search}${window.location.hash}`,
+    );
+  }, [ssoErrorCode]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    getOidcStatus(controller.signal)
+      .then((status) => {
+        if (!controller.signal.aborted) setOidcEnabled(status.enabled);
+      })
+      .catch(() => {
+        // Best effort: if the probe fails, the password form is still the way in.
+      });
+    return () => controller.abort();
   }, []);
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
@@ -108,6 +135,16 @@ export function LoginScreen({
             <Panel labelledBy="login-heading">
               <PanelHeader id="login-heading" eyebrow="Session" title="Sign in" />
               <div className="p-5">
+                {ssoError !== null && (
+                  <div
+                    role="alert"
+                    className="mb-4 rounded border border-danger/30 bg-danger-soft px-2.5 py-1.5"
+                  >
+                    <p className="text-[12px] font-medium text-danger">Single sign-on failed</p>
+                    <p className="mt-0.5 text-[12px] leading-5 text-ink-muted">{ssoError}</p>
+                  </div>
+                )}
+
                 {notice !== null && (
                   <p
                     id={noticeId}
@@ -185,6 +222,24 @@ export function LoginScreen({
                   <div className="mt-4">
                     <RequestErrorPanel error={error} title="Could not sign in" />
                   </div>
+                )}
+
+                {oidcEnabled && (
+                  <>
+                    <div className="mt-4 flex items-center gap-3" aria-hidden="true">
+                      <span className="h-px flex-1 bg-line" />
+                      <span className="font-mono text-[10px] font-medium uppercase tracking-[0.16em] text-ink-muted">
+                        or
+                      </span>
+                      <span className="h-px flex-1 bg-line" />
+                    </div>
+                    <a
+                      href={OIDC_START_PATH}
+                      className={buttonClassName('secondary', 'mt-3 w-full')}
+                    >
+                      Sign in with SSO
+                    </a>
+                  </>
                 )}
               </div>
             </Panel>

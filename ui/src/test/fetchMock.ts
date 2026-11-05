@@ -10,6 +10,7 @@ export interface Routes {
   'POST /api/v1/auth/login'?: RouteHandler;
   'POST /api/v1/auth/logout'?: RouteHandler;
   '/api/v1/auth/me'?: RouteHandler;
+  '/api/v1/auth/oidc/status'?: RouteHandler;
   '/api/v1/models'?: RouteHandler;
   'POST /api/v1/models'?: RouteHandler;
   'PATCH /api/v1/models/:id'?: RouteHandler;
@@ -194,6 +195,8 @@ function createDefaultRoutes(
         session_expires_at: '2026-11-05T12:00:00Z',
       });
     },
+
+    '/api/v1/auth/oidc/status': () => jsonResponse({ enabled: false }),
 
     '/api/v1/models': () => jsonResponse({ items: [], total: 0, limit: 100, offset: 0 }),
     'POST /api/v1/models': () => {
@@ -473,7 +476,10 @@ export function installFetchMock(
     }
 
     if (url.pathname.startsWith('/api/v1/')) {
-      if (url.pathname === '/api/v1/auth/login' && method === 'POST') {
+      if (
+        url.pathname === '/api/v1/auth/oidc/status' ||
+        (url.pathname === '/api/v1/auth/login' && method === 'POST')
+      ) {
         return handler(url, requestInit);
       }
 
