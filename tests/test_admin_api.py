@@ -16,6 +16,7 @@ from llm_gateway.providers.fake import FakeProvider
 from llm_gateway.providers.openai import OpenAIProvider
 from llm_gateway.providers.registry import ProviderRegistry
 from llm_gateway.providers.retry import RetryPolicy
+from llm_gateway.storage.repositories import ModelDeployment
 from support import (
     FROZEN_NOW,
     FrozenClock,
@@ -1091,3 +1092,51 @@ async def test_patch_model_toggles_and_clears_limits(
     assert cleared.json()["tokens_per_minute"] is None
     assert missing.status_code == 404
     assert missing.json()["error"]["code"] == "model_not_found"
+
+
+async def test_patch_model_routing_fields_requires_no_deployments(
+    make_container: Callable[..., Container],
+    make_client: Callable[..., Any],
+    settings: Settings,
+) -> None:
+    container = make_container(settings, clock=SteppingClock())
+    master = _auth(_master(settings))
+    await seed_model(container, model_id="routing-model")
+
+    async with make_client(settings, container) as client:
+        updated = await client.patch(
+            "/api/v1/models/routing-model",
+            json={"provider": "anthropic", "upstream_model": "claude-sonnet-4-5"},
+            headers=master,
+        )
+        await container.deployments.create_deployment(
+            ModelDeployment(
+                id=uuid4(),
+                model_id="routing-model",
+                name="primary",
+                provider=ProviderName.ANTHROPIC,
+                upstream_model="claude-sonnet-4-5",
+                weight=1,
+                enabled=True,
+                created_at=FROZEN_NOW,
+            )
+        )
+        blocked = await client.patch(
+            "/api/v1/models/routing-model",
+            json={"provider": "openai", "upstream_model": "gpt-4o-mini"},
+            headers=master,
+        )
+        still_editable = await client.patch(
+            "/api/v1/models/routing-model",
+            json={"enabled": False},
+            headers=master,
+        )
+
+    assert updated.status_code == 200
+    assert updated.json()["provider"] == "anthropic"
+    assert updated.json()["upstream_model"] == "claude-sonnet-4-5"
+    assert blocked.status_code == 409
+    assert blocked.json()["error"]["code"] == "model_has_deployments"
+    assert still_editable.status_code == 200
+    assert still_editable.json()["enabled"] is False
+    assert still_editable.json()["provider"] == "anthropic"

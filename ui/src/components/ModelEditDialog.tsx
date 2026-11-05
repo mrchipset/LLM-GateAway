@@ -1,9 +1,19 @@
 import { useId, useRef, useState, type FormEvent, type RefObject } from 'react';
 
-import type { ModelSummary, UpdateModelInput } from '../api/client';
+import {
+  ApiRequestError,
+  type ModelProvider,
+  type ModelSummary,
+  type UpdateModelInput,
+} from '../api/client';
 import { useUpdateModel } from '../hooks/useModelMutations';
 import { countErrorText, limitToInput, parseCountChange } from '../lib/limits';
-import { modelProviderLabel } from '../lib/models';
+import {
+  MODEL_PROVIDERS,
+  MODEL_PROVIDER_LABELS,
+  isModelProvider,
+  validateUpstreamModel,
+} from '../lib/models';
 import { Button } from './Button';
 import { CloseIcon } from './Icons';
 import { Modal } from './Modal';
@@ -16,39 +26,52 @@ interface ModelEditDialogProps {
   onSaved: (message: string) => void;
 }
 
-interface LimitFieldErrors {
+interface EditFieldErrors {
   rate?: string;
   tokens?: string;
+  upstream?: string;
 }
 
 export function ModelEditDialog({ model, returnFocusRef, onClose, onSaved }: ModelEditDialogProps) {
+  const originalProvider: ModelProvider = isModelProvider(model.provider)
+    ? model.provider
+    : 'openai';
+  const originalUpstream = model.upstream_model;
   const originalRate = limitToInput(model.requests_per_minute);
   const originalTokens = limitToInput(model.tokens_per_minute);
   const [enabled, setEnabled] = useState(model.enabled);
+  const [provider, setProvider] = useState<ModelProvider>(originalProvider);
+  const [upstream, setUpstream] = useState(originalUpstream);
   const [rate, setRate] = useState(originalRate);
   const [tokens, setTokens] = useState(originalTokens);
-  const [fieldErrors, setFieldErrors] = useState<LimitFieldErrors>({});
+  const [fieldErrors, setFieldErrors] = useState<EditFieldErrors>({});
   const titleId = useId();
+  const providerId = useId();
+  const upstreamId = useId();
   const rateId = useId();
   const tokensId = useId();
   const enabledLabelId = useId();
   const enabledHintId = useId();
+  const routingHintId = useId();
   const hintId = useId();
+  const upstreamErrorId = useId();
   const rateErrorId = useId();
   const tokensErrorId = useId();
-  const rateRef = useRef<HTMLInputElement>(null);
+  const providerRef = useRef<HTMLSelectElement>(null);
   const updateMutation = useUpdateModel();
 
   const enabledDirty = enabled !== model.enabled;
+  const providerDirty = provider !== originalProvider;
+  const upstreamDirty = upstream.trim() !== originalUpstream.trim();
   const rateDirty = rate.trim() !== originalRate;
   const tokensDirty = tokens.trim() !== originalTokens;
-  const hasChanges = enabledDirty || rateDirty || tokensDirty;
+  const hasChanges = enabledDirty || providerDirty || upstreamDirty || rateDirty || tokensDirty;
 
   const clearing: string[] = [];
   if (rateDirty && rate.trim() === '') clearing.push('requests per minute');
   if (tokensDirty && tokens.trim() === '') clearing.push('tokens per minute');
 
-  const clearFieldError = (field: keyof LimitFieldErrors) => {
+  const clearFieldError = (field: keyof EditFieldErrors) => {
     setFieldErrors((current) => ({ ...current, [field]: undefined }));
     if (updateMutation.isError) updateMutation.reset();
   };
@@ -58,14 +81,18 @@ export function ModelEditDialog({ model, returnFocusRef, onClose, onSaved }: Mod
 
     const rateResult = parseCountChange(rate, originalRate, 1);
     const tokensResult = parseCountChange(tokens, originalTokens, 1);
-    const nextErrors: LimitFieldErrors = {};
+    const upstreamError = validateUpstreamModel(upstream);
+    const nextErrors: EditFieldErrors = {};
     if (rateResult.status === 'invalid') nextErrors.rate = countErrorText(1);
     if (tokensResult.status === 'invalid') nextErrors.tokens = countErrorText(1);
+    if (upstreamError !== undefined) nextErrors.upstream = upstreamError;
     setFieldErrors(nextErrors);
     if (Object.values(nextErrors).some((message) => message !== undefined)) return;
 
     const patch: UpdateModelInput = {};
     if (enabledDirty) patch.enabled = enabled;
+    if (providerDirty) patch.provider = provider;
+    if (upstreamDirty) patch.upstream_model = upstream.trim();
     if (rateResult.status === 'set') patch.requests_per_minute = rateResult.value;
     if (tokensResult.status === 'set') patch.tokens_per_minute = tokensResult.value;
     if (Object.keys(patch).length === 0) return;
@@ -80,16 +107,23 @@ export function ModelEditDialog({ model, returnFocusRef, onClose, onSaved }: Mod
     );
   };
 
+  const upstreamDescribedBy =
+    fieldErrors.upstream === undefined
+      ? routingHintId
+      : `${routingHintId} ${upstreamErrorId}`;
   const rateDescribedBy = fieldErrors.rate === undefined ? hintId : `${hintId} ${rateErrorId}`;
   const tokensDescribedBy =
     fieldErrors.tokens === undefined ? hintId : `${hintId} ${tokensErrorId}`;
+  const routingConflict =
+    updateMutation.error instanceof ApiRequestError &&
+    updateMutation.error.code === 'model_has_deployments';
 
   return (
     <Modal
       labelledBy={titleId}
       onClose={onClose}
       closeDisabled={updateMutation.isPending}
-      initialFocusRef={rateRef}
+      initialFocusRef={providerRef}
       returnFocusRef={returnFocusRef}
     >
       <div className="flex items-start justify-between gap-3 border-b border-line px-5 py-3.5">
@@ -119,21 +153,67 @@ export function ModelEditDialog({ model, returnFocusRef, onClose, onSaved }: Mod
         className="px-5 py-4"
         aria-busy={updateMutation.isPending}
       >
-        <dl className="grid gap-2 rounded-md border border-line bg-surface-sunken/60 px-3 py-2 text-[12px] sm:grid-cols-2">
-          <div>
-            <dt className="text-ink-muted">Provider</dt>
-            <dd className="mt-0.5 break-words text-ink">{modelProviderLabel(model.provider)}</dd>
-          </div>
-          <div>
-            <dt className="text-ink-muted">Upstream model</dt>
-            <dd className="mt-0.5 break-words font-mono text-[11.5px] text-ink">
-              {model.upstream_model}
-            </dd>
-          </div>
-        </dl>
-        <p className="mt-1.5 text-[11px] leading-4 text-ink-muted">
-          Provider and upstream model cannot be changed here.
+        <h4 className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-ink-muted">
+          Routing
+        </h4>
+        <p id={routingHintId} className="mt-1 text-[11.5px] leading-5 text-ink-muted">
+          修改 Provider 或上游模型前，需先删除该模型的全部部署。部署会覆盖这两项默认值，部署还在时保存会返回
+          409，修改不会生效。
         </p>
+        <div className="mt-2 grid gap-3 sm:grid-cols-2">
+          <div>
+            <label htmlFor={providerId} className="block text-[12px] font-medium text-ink">
+              Provider
+            </label>
+            <select
+              ref={providerRef}
+              id={providerId}
+              value={provider}
+              onChange={(event) => {
+                setProvider(event.target.value as ModelProvider);
+                clearFieldError('upstream');
+              }}
+              disabled={updateMutation.isPending}
+              aria-describedby={routingHintId}
+              className="mt-1 block w-full min-w-0 rounded-md border border-line-strong bg-white px-2.5 py-1.5 text-[13px] text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/15 disabled:cursor-not-allowed disabled:bg-surface-sunken disabled:text-ink-muted"
+            >
+              {MODEL_PROVIDERS.map((option) => (
+                <option key={option} value={option}>
+                  {MODEL_PROVIDER_LABELS[option]}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label htmlFor={upstreamId} className="block text-[12px] font-medium text-ink">
+              Upstream model
+            </label>
+            <input
+              id={upstreamId}
+              type="text"
+              value={upstream}
+              onChange={(event) => {
+                setUpstream(event.target.value);
+                clearFieldError('upstream');
+              }}
+              disabled={updateMutation.isPending}
+              autoComplete="off"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              aria-invalid={fieldErrors.upstream !== undefined}
+              aria-describedby={upstreamDescribedBy}
+              placeholder="e.g. gpt-4o-mini-2024-07-18"
+              className="mt-1 block w-full min-w-0 rounded-md border border-line-strong bg-white px-2.5 py-1.5 font-mono text-[13px] text-ink placeholder:font-sans placeholder:text-ink-muted/70 focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/15 disabled:cursor-not-allowed disabled:bg-surface-sunken disabled:text-ink-muted"
+            />
+            {fieldErrors.upstream !== undefined && (
+              <p id={upstreamErrorId} role="alert" className="mt-1 text-xs text-danger">
+                {fieldErrors.upstream}
+              </p>
+            )}
+          </div>
+        </div>
 
         <div className="mt-4 border-t border-line pt-3">
           <h4 className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-ink-muted">
@@ -148,7 +228,6 @@ export function ModelEditDialog({ model, returnFocusRef, onClose, onSaved }: Mod
                 Requests per minute
               </label>
               <input
-                ref={rateRef}
                 id={rateId}
                 type="number"
                 min={1}
@@ -253,6 +332,12 @@ export function ModelEditDialog({ model, returnFocusRef, onClose, onSaved }: Mod
         {updateMutation.isError && updateMutation.error !== null && (
           <div className="mt-3">
             <RequestErrorPanel error={updateMutation.error} title="Could not update model" />
+            {routingConflict && (
+              <p className="mt-2 rounded border border-warn/30 bg-warn-soft px-2.5 py-1.5 text-[11.5px] leading-5 text-warn">
+                该模型仍有部署。请先在「Deployments」对话框中删除全部部署，再保存 Provider
+                或上游模型的修改。
+              </p>
+            )}
           </div>
         )}
 

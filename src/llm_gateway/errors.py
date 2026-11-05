@@ -44,6 +44,7 @@ class ApiErrorCode(StrEnum):
     MODEL_PRICE_MISSING = "model_price_missing"
     MODEL_NOT_FOUND = "model_not_found"
     MODEL_DISABLED = "model_disabled"
+    MODEL_HAS_DEPLOYMENTS = "model_has_deployments"
     MODEL_NOT_ALLOWED = "model_not_allowed"
     DUPLICATE_MODEL = "duplicate_model"
     DUPLICATE_PRICE = "duplicate_price"

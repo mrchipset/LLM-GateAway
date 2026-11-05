@@ -300,8 +300,17 @@ class UpdateModelRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     enabled: bool | None = None
+    provider: ProviderName | None = None
+    upstream_model: str | None = Field(default=None, min_length=1, max_length=256)
     requests_per_minute: int | None = Field(default=None, ge=1)
     tokens_per_minute: int | None = Field(default=None, ge=1)
+
+    @field_validator("upstream_model", mode="before")
+    @classmethod
+    def _strip_upstream_model(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip()
+        return value
 
 
 class ModelListResponse(BaseModel):

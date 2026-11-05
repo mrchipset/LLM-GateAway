@@ -841,10 +841,10 @@ design.md            LLM-GateAway design guidance
 - Tracing covers the server span and per-attempt upstream spans only: no database spans and no tail-based sampling.
 - Metrics expose counters and histograms but ship without dashboards, alert rules, or OTLP metric export; database pool occupancy is not exported yet.
 - A stream that disconnects before usage arrives leaves no record; write timeouts or failures only log a warning.
-- Model configuration supports create, list, PATCH (enabled and limits), and delete; provider and upstream_model changes require delete and recreate.
+- Model configuration supports create, list, PATCH (enabled, limits, provider, upstream_model), and delete. Provider/upstream changes return 409 model_has_deployments while deployments exist, because deployments override those defaults; delete the deployments first.
 - `/v1/models` returns at most 1000 entries; the management API uses offset pagination.
 - `last_used_at` is sampled per `GATEWAY_LAST_USED_SAMPLE_SECONDS`; the sample window divides across workers, which is acceptable for a display field.
-- The console can manage deployments, limits, and audit export/retention, but a model's provider and upstream_model cannot be changed after creation (PATCH accepts only `enabled` and limits); changing them requires delete and recreate. Per-key and per-model limits can be edited in place. The usage panel is read-only with daily granularity, caps keys and tenants at 100 each, and labels the final bar as today so far. Tenant delete/rename is not available.
+- The console can manage deployments, limits, audit export/retention, and model settings. A model's provider/upstream can be edited only when it has no deployments (the API returns 409 otherwise, and the console explains why). Capabilities are fixed at creation. The usage panel supports a per-day drill-down and CSV exports, caps keys and tenants at 100 each, and labels the final bar as today so far. Tenant delete/rename is not available.
 - Local `uv` runs require a manual `alembic upgrade head`; Compose runs it through the one-shot `migrate` service, and the application process itself never migrates.
 
 ## Related documents

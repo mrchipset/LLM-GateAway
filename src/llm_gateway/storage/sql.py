@@ -295,6 +295,10 @@ class SqlAlchemyModelRepository:
         values: dict[str, object] = {}
         if patch.set_enabled and patch.enabled is not None:
             values["enabled"] = patch.enabled
+        if patch.set_provider and patch.provider is not None:
+            values["provider"] = patch.provider.value
+        if patch.set_upstream_model and patch.upstream_model is not None:
+            values["upstream_model"] = patch.upstream_model
         if patch.set_requests_per_minute:
             values["requests_per_minute"] = patch.requests_per_minute
         if patch.set_tokens_per_minute:

@@ -20,6 +20,10 @@ export function modelProviderLabel(provider: string): string {
   return MODEL_PROVIDER_LABELS[provider as ModelProvider] ?? provider;
 }
 
+export function isModelProvider(value: string): value is ModelProvider {
+  return (MODEL_PROVIDERS as readonly string[]).includes(value);
+}
+
 export const MODEL_ID_MAX_LENGTH = 128;
 export const MODEL_ID_PATTERN = /^[A-Za-z0-9._:-]+$/;
 export const UPSTREAM_MODEL_MAX_LENGTH = 256;
@@ -34,6 +38,15 @@ export interface ModelDraftErrors {
   upstreamModel?: string;
 }
 
+export function validateUpstreamModel(value: string): string | undefined {
+  const upstream = value.trim();
+  if (upstream.length === 0) return 'Enter the upstream model name.';
+  if (upstream.length > UPSTREAM_MODEL_MAX_LENGTH) {
+    return `Use ${UPSTREAM_MODEL_MAX_LENGTH} characters or fewer.`;
+  }
+  return undefined;
+}
+
 export function validateModelDraft(draft: ModelDraft): ModelDraftErrors {
   const errors: ModelDraftErrors = {};
 
@@ -45,12 +58,8 @@ export function validateModelDraft(draft: ModelDraft): ModelDraftErrors {
     errors.id = 'Use only letters, numbers, and . _ : -';
   }
 
-  const upstream = draft.upstreamModel.trim();
-  if (upstream.length === 0) {
-    errors.upstreamModel = 'Enter the upstream model name.';
-  } else if (upstream.length > UPSTREAM_MODEL_MAX_LENGTH) {
-    errors.upstreamModel = `Use ${UPSTREAM_MODEL_MAX_LENGTH} characters or fewer.`;
-  }
+  const upstreamError = validateUpstreamModel(draft.upstreamModel);
+  if (upstreamError !== undefined) errors.upstreamModel = upstreamError;
 
   return errors;
 }

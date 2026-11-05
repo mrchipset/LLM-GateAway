@@ -59,6 +59,8 @@ export interface CreateModelInput {
 /** Only the fields present in the patch are sent; `null` clears a limit. */
 export interface UpdateModelInput {
   enabled?: boolean;
+  provider?: ModelProvider;
+  upstream_model?: string;
   requests_per_minute?: number | null;
   tokens_per_minute?: number | null;
 }

@@ -571,9 +571,13 @@ class ModelPatch:
     """Partial model update; only fields with a true ``set_*`` flag are written."""
 
     enabled: bool | None = None
+    provider: ProviderName | None = None
+    upstream_model: str | None = None
     requests_per_minute: int | None = None
     tokens_per_minute: int | None = None
     set_enabled: bool = False
+    set_provider: bool = False
+    set_upstream_model: bool = False
     set_requests_per_minute: bool = False
     set_tokens_per_minute: bool = False
 

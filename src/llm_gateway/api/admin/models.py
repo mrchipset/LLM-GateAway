@@ -159,11 +159,28 @@ async def update_model(
         )
 
     provided = payload.model_fields_set
+    changes_routing = "provider" in provided or "upstream_model" in provided
+    if changes_routing:
+        deployments = await container.deployments.list_deployments(model_id)
+        if deployments:
+            raise ApiError(
+                status_code=409,
+                code=ApiErrorCode.MODEL_HAS_DEPLOYMENTS,
+                message=(
+                    "Delete the model's deployments before changing provider or upstream_model; "
+                    "deployments override these defaults"
+                ),
+                error_type="conflict_error",
+            )
     patch = ModelPatch(
         enabled=payload.enabled,
+        provider=payload.provider,
+        upstream_model=payload.upstream_model,
         requests_per_minute=payload.requests_per_minute,
         tokens_per_minute=payload.tokens_per_minute,
         set_enabled="enabled" in provided and payload.enabled is not None,
+        set_provider="provider" in provided and payload.provider is not None,
+        set_upstream_model="upstream_model" in provided and payload.upstream_model is not None,
         set_requests_per_minute="requests_per_minute" in provided,
         set_tokens_per_minute="tokens_per_minute" in provided,
     )

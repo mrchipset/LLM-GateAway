@@ -2700,3 +2700,23 @@ async def test_model_capabilities_round_trip(database: Database) -> None:
     assert stored.max_output_tokens == 4096
     assert stored.supports_tools is False
     assert stored.supports_streaming is False
+
+
+async def test_update_model_routing_fields_round_trip(database: Database) -> None:
+    model = _model(1)
+    await database.models.create_model(model)
+
+    updated = await database.models.update_model(
+        model.id,
+        patch=ModelPatch(
+            provider=ProviderName.ANTHROPIC,
+            upstream_model="claude-sonnet-4-5",
+            set_provider=True,
+            set_upstream_model=True,
+        ),
+    )
+
+    assert updated is not None
+    assert updated.provider is ProviderName.ANTHROPIC
+    assert updated.upstream_model == "claude-sonnet-4-5"
+    assert await database.models.get_model(model.id) == updated
