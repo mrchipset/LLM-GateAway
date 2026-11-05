@@ -78,13 +78,27 @@ starts at `limit`, a request is admitted while tokens remain, and the reported u
 afterwards. The overshoot is bounded by one request's usage; the next request sees a negative
 bucket and is rejected with 429 `token_rate_limited` until refill covers it.
 
+### Concurrency is a lease, not a bucket
+
+In-flight requests are capped with a counter keyed like the buckets. Acquire happens after the
+token checks and before the upstream call; release happens when the response is done, including
+inside the shielded `finally` of the SSE generator so a client disconnect still frees the slot.
+The Redis lease expires after `GATEWAY_CONCURRENCY_LEASE_SECONDS` (default 600), which is the
+crash-recovery story: a process that dies mid-request leaks at most one slot until the TTL.
+The TTL is refreshed on every acquire; a stream that outlives it would let the counter reset and
+briefly over-admit, which is the safe direction compared with a permanently dead slot.
+
+Leases are per tenant and per key, not per model: concurrency is a property of the caller, while
+model protection is the RPM/TPM bucket. Rejection is 429 `concurrency_limited`; limiter failure
+follows the same fail-open/fail-closed policy as the buckets, and a fail-open request holds no
+lease, so nothing is released later.
+
 Still missing:
 
-1. in-flight concurrency (needs a lease with expiry so a crashed process cannot leak a slot);
-2. shared deployment health (cooldown), which is still process-local.
+1. shared deployment health (cooldown), which is still process-local.
 
-Per-key/model buckets use the same `(scope, key)` namespace; the `storage` backend keeps them in
-a process-local bucket, while Redis shares them across replicas.
+Per-key/model/concurrency state uses the same `(scope, key)` namespace; the `storage` backend
+keeps it in a process-local structure, while Redis shares it across replicas.
 
 ## Consequences
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
@@ -94,3 +95,19 @@ async def test_unreachable_redis_raises_a_typed_error() -> None:
         await unreachable.aclose()
 
     assert info.value.reason == "error"
+
+
+async def test_concurrency_leases_are_shared_and_expire(client: Redis) -> None:
+    prefix = f"test:{uuid4()}"
+    replica_a = RedisRateLimiter(client=client, key_prefix=prefix)
+    replica_b = RedisRateLimiter(client=client, key_prefix=prefix)
+
+    assert await replica_a.acquire(scope="tenant", key="lease", limit=1, ttl_seconds=1) is True
+    assert await replica_b.acquire(scope="tenant", key="lease", limit=1, ttl_seconds=1) is False
+
+    await replica_b.release(scope="tenant", key="lease")
+    assert await replica_a.acquire(scope="tenant", key="lease", limit=1, ttl_seconds=1) is True
+
+    # A crashed process leaves the slot behind; the TTL must reclaim it.
+    await asyncio.sleep(1.1)
+    assert await replica_b.acquire(scope="tenant", key="lease", limit=1, ttl_seconds=1) is True

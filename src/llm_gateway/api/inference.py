@@ -33,8 +33,10 @@ from llm_gateway.services.chat import ChatService, ChatStream, map_provider_erro
 from llm_gateway.services.guards import enforce_chat_request_limits, limits_from_settings
 from llm_gateway.services.limits import (
     InferenceAccess,
+    acquire_concurrency,
     enforce_inference_limits,
     enforce_model_limits,
+    release_concurrency,
 )
 from llm_gateway.services.routing import DeploymentUse
 from llm_gateway.services.usage import (
@@ -44,6 +46,7 @@ from llm_gateway.services.usage import (
     UsageRecorder,
     record_usage_safely,
 )
+from llm_gateway.storage.rate_limits import BucketScope
 from llm_gateway.storage.repositories import ModelAccessMode
 from llm_gateway.telemetry import annotate_current_span
 
@@ -150,6 +153,8 @@ async def _stream_sse(
     audit_turn: AuditTurn | None = None,
     audit_service: AuditService | None = None,
     audit_timeout_seconds: float = DEFAULT_AUDIT_WRITE_TIMEOUT_SECONDS,
+    container: Container | None = None,
+    leases: list[tuple[BucketScope, str]] | None = None,
 ) -> AsyncGenerator[bytes, None]:
     status = "completed"
     content_parts: list[str] = []
@@ -224,6 +229,8 @@ async def _stream_sse(
                         finish_reason=finish_reason,
                         usage=stream.usage,
                     )
+                if container is not None and leases:
+                    await release_concurrency(container, leases)
 
 
 @router.post("/v1/chat/completions", response_model=ChatCompletionResponse)
@@ -282,50 +289,60 @@ async def create_chat_completion(
         is_stream=payload.stream,
     )
 
+    leases = await acquire_concurrency(
+        container,
+        tenant=access.tenant,
+        key_record=access.api_key.record,
+    )
+
     if not payload.stream:
         try:
-            result = await service.complete(payload, tenant_id=access.api_key.record.tenant_id)
-        except Exception as exc:
+            try:
+                result = await service.complete(payload, tenant_id=access.api_key.record.tenant_id)
+            except Exception as exc:
+                if audit_turn is not None:
+                    await record_audit_safely(
+                        service=audit_service,
+                        turn=audit_turn,
+                        provider="unknown",
+                        status=_error_status(exc),
+                    )
+                raise
+            await record_usage_safely(
+                recorder=recorder,
+                context=UsageContext(
+                    request_id=request_id,
+                    tenant_id=access.api_key.record.tenant_id,
+                    api_key_id=access.api_key.record.id,
+                    model_id=result.model.id,
+                    provider=result.model.provider,
+                    allowance=allowance,
+                    token_limits=token_limits,
+                ),
+                usage=result.response.usage,
+            )
             if audit_turn is not None:
+                choice = result.response.choices[0]
                 await record_audit_safely(
                     service=audit_service,
                     turn=audit_turn,
-                    provider="unknown",
-                    status=_error_status(exc),
+                    provider=result.model.provider.value,
+                    status="completed",
+                    response_content=_response_content_text(choice.message.content),
+                    response_tool_calls=choice.message.tool_calls,
+                    finish_reason=choice.finish_reason,
+                    usage=result.response.usage,
                 )
-            raise
-        await record_usage_safely(
-            recorder=recorder,
-            context=UsageContext(
-                request_id=request_id,
-                tenant_id=access.api_key.record.tenant_id,
-                api_key_id=access.api_key.record.id,
-                model_id=result.model.id,
-                provider=result.model.provider,
-                allowance=allowance,
-                token_limits=token_limits,
-            ),
-            usage=result.response.usage,
-        )
-        if audit_turn is not None:
-            choice = result.response.choices[0]
-            await record_audit_safely(
-                service=audit_service,
-                turn=audit_turn,
-                provider=result.model.provider.value,
-                status="completed",
-                response_content=_response_content_text(choice.message.content),
-                response_tool_calls=choice.message.tool_calls,
-                finish_reason=choice.finish_reason,
-                usage=result.response.usage,
-            )
-        for name, value in _route_headers(result.deployment).items():
-            response.headers[name] = value
-        return result.response
+            for name, value in _route_headers(result.deployment).items():
+                response.headers[name] = value
+            return result.response
+        finally:
+            await release_concurrency(container, leases)
 
     try:
         stream = await service.open_stream(payload, tenant_id=access.api_key.record.tenant_id)
     except Exception as exc:
+        await release_concurrency(container, leases)
         if audit_turn is not None:
             await record_audit_safely(
                 service=audit_service,
@@ -350,6 +367,8 @@ async def create_chat_completion(
             audit_turn=audit_turn,
             audit_service=audit_service,
             audit_timeout_seconds=audit_service.settings.audit_write_timeout_seconds,
+            container=container,
+            leases=leases,
         ),
         media_type="text/event-stream",
         headers={

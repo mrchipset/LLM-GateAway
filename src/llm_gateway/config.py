@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     rate_limit_backend: RateLimitBackend = RateLimitBackend.STORAGE
     rate_limit_fail_open: bool = True
     rate_limit_redis_timeout_seconds: float = Field(default=0.2, ge=0.01, le=10)
+    concurrency_lease_seconds: int = Field(default=600, ge=30, le=3600)
     openai_api_key: SecretStr | None = None
     openai_base_url: str = "https://api.openai.com/v1"
     deepseek_api_key: SecretStr | None = None

@@ -2520,17 +2520,26 @@ async def test_iter_requests_for_export_paginates_without_gaps_or_duplicates(
 
 
 async def test_tenant_key_and_model_rate_limits_round_trip(database: Database) -> None:
-    tenant = await database.tenants.create_tenant(replace(_tenant(1), tokens_per_minute=500))
+    tenant = await database.tenants.create_tenant(
+        replace(_tenant(1), tokens_per_minute=500, max_concurrent_requests=2)
+    )
     stored = await database.tenants.get_tenant(tenant.id)
     assert stored is not None
     assert stored.tokens_per_minute == 500
+    assert stored.max_concurrent_requests == 2
 
     patched = await database.tenants.set_tenant_limits(
         tenant.id,
-        patch=TenantLimitPatch(tokens_per_minute=900, set_tokens_per_minute=True),
+        patch=TenantLimitPatch(
+            tokens_per_minute=900,
+            max_concurrent_requests=3,
+            set_tokens_per_minute=True,
+            set_max_concurrent_requests=True,
+        ),
     )
     assert patched is not None
     assert patched.tokens_per_minute == 900
+    assert patched.max_concurrent_requests == 3
 
     model = replace(_model(1), requests_per_minute=2, tokens_per_minute=3)
     await database.models.create_model(model)

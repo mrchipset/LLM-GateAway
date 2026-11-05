@@ -14,11 +14,18 @@ from llm_gateway.logging import get_logger
 from llm_gateway.metrics import current_metrics
 from llm_gateway.services.billing import month_window
 from llm_gateway.storage.rate_limits import BucketScope, RateLimiterUnavailable
-from llm_gateway.storage.repositories import Tenant
+from llm_gateway.storage.repositories import ApiKeyRecord, Tenant
 
 logger = get_logger(__name__)
 
-__all__ = ["InferenceAccess", "enforce_inference_limits", "enforce_model_limits", "month_window"]
+__all__ = [
+    "InferenceAccess",
+    "acquire_concurrency",
+    "enforce_inference_limits",
+    "enforce_model_limits",
+    "month_window",
+    "release_concurrency",
+]
 
 _BUCKET_WINDOW_SECONDS = 60.0
 
@@ -148,6 +155,68 @@ def _limiter_unavailable() -> ApiError:
         error_type="server_error",
         headers={"Retry-After": "1"},
     )
+
+
+def _deny_concurrency() -> ApiError:
+    return ApiError(
+        status_code=429,
+        code=ApiErrorCode.CONCURRENCY_LIMITED,
+        message="Concurrent request limit exceeded",
+        error_type="rate_limit_error",
+        headers={"Retry-After": "1"},
+    )
+
+
+async def acquire_concurrency(
+    container: Container,
+    *,
+    tenant: Tenant,
+    key_record: ApiKeyRecord,
+) -> list[tuple[BucketScope, str]]:
+    """Take tenant and key in-flight slots; returns the leases that must be released."""
+    limits: tuple[tuple[BucketScope, str, int | None], ...] = (
+        ("tenant", f"{tenant.id}:conc", tenant.max_concurrent_requests),
+        ("key", f"{key_record.id}:conc", key_record.max_concurrent_requests),
+    )
+    leases: list[tuple[BucketScope, str]] = []
+    ttl = container.settings.concurrency_lease_seconds
+    try:
+        for scope, bucket, limit in limits:
+            if limit is None:
+                continue
+            acquired = await container.rate_limiter.acquire(
+                scope=scope,
+                key=bucket,
+                limit=limit,
+                ttl_seconds=ttl,
+            )
+            if not acquired:
+                await release_concurrency(container, leases)
+                current_metrics().rejections.add(1, {"reason": "concurrency"})
+                logger.warning(
+                    "concurrency_limit_exceeded",
+                    extra={"scope": scope, "limit": limit},
+                )
+                raise _deny_concurrency()
+            leases.append((scope, bucket))
+    except RateLimiterUnavailable as exc:
+        _degraded(container, exc, scope="concurrency")
+        await release_concurrency(container, leases)
+        if not container.settings.rate_limit_fail_open:
+            raise _limiter_unavailable() from exc
+        return []
+    return leases
+
+
+async def release_concurrency(
+    container: Container,
+    leases: list[tuple[BucketScope, str]],
+) -> None:
+    for scope, bucket in leases:
+        try:
+            await container.rate_limiter.release(scope=scope, key=bucket)
+        except RateLimiterUnavailable as exc:
+            _degraded(container, exc, scope="concurrency")
 
 
 async def enforce_inference_limits(

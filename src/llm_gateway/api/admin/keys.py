@@ -63,6 +63,7 @@ async def create_api_key(
         expires_at=payload.expires_at,
         requests_per_minute=payload.requests_per_minute,
         tokens_per_minute=payload.tokens_per_minute,
+        max_concurrent_requests=payload.max_concurrent_requests,
     )
     try:
         await container.api_keys.create_key(record)
@@ -90,6 +91,7 @@ async def create_api_key(
         expires_at=record.expires_at,
         requests_per_minute=record.requests_per_minute,
         tokens_per_minute=record.tokens_per_minute,
+        max_concurrent_requests=record.max_concurrent_requests,
     )
 
 
@@ -120,6 +122,7 @@ async def list_api_keys(
                 last_used_at=record.last_used_at,
                 requests_per_minute=record.requests_per_minute,
                 tokens_per_minute=record.tokens_per_minute,
+                max_concurrent_requests=record.max_concurrent_requests,
             )
             for record in records
         ],

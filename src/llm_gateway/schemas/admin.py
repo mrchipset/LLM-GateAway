@@ -20,6 +20,7 @@ class CreateApiKeyRequest(BaseModel):
     expires_at: datetime | None = None
     requests_per_minute: int | None = Field(default=None, ge=1)
     tokens_per_minute: int | None = Field(default=None, ge=1)
+    max_concurrent_requests: int | None = Field(default=None, ge=1)
 
     @field_validator("name", mode="before")
     @classmethod
@@ -50,6 +51,7 @@ class CreatedApiKeyResponse(BaseModel):
     expires_at: datetime | None = None
     requests_per_minute: int | None = None
     tokens_per_minute: int | None = None
+    max_concurrent_requests: int | None = None
 
 
 class ApiKeySummary(BaseModel):
@@ -67,6 +69,7 @@ class ApiKeySummary(BaseModel):
     last_used_at: datetime | None = None
     requests_per_minute: int | None = None
     tokens_per_minute: int | None = None
+    max_concurrent_requests: int | None = None
 
 
 class ApiKeyListResponse(BaseModel):
@@ -88,6 +91,7 @@ class CreateTenantRequest(BaseModel):
     monthly_token_quota: int | None = Field(default=None, ge=1)
     requests_per_minute: int | None = Field(default=None, ge=1)
     tokens_per_minute: int | None = Field(default=None, ge=1)
+    max_concurrent_requests: int | None = Field(default=None, ge=1)
     audit_enabled: bool = False
     audit_retention_days: int | None = Field(default=None, ge=0)
 
@@ -110,6 +114,7 @@ class UpdateTenantLimitsRequest(BaseModel):
     monthly_token_quota: int | None = Field(default=None, ge=1)
     requests_per_minute: int | None = Field(default=None, ge=1)
     tokens_per_minute: int | None = Field(default=None, ge=1)
+    max_concurrent_requests: int | None = Field(default=None, ge=1)
     audit_enabled: bool | None = None
     plan_tokens: int | None = Field(default=None, ge=1)
     plan_allow_overage: bool | None = None
@@ -126,6 +131,7 @@ class TenantDetail(BaseModel):
     monthly_token_quota: int | None = None
     requests_per_minute: int | None = None
     tokens_per_minute: int | None = None
+    max_concurrent_requests: int | None = None
     audit_enabled: bool = False
     model_access_mode: ModelAccessMode = ModelAccessMode.ALL
     plan_tokens: int | None = None

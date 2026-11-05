@@ -62,6 +62,32 @@ return {allowed, math.floor(tokens), wait_ms}
 """
 
 
+_REDIS_RELEASE_SCRIPT = """
+local key = KEYS[1]
+local current = tonumber(redis.call('GET', key) or '0')
+if current <= 0 then
+  return 0
+end
+current = redis.call('DECR', key)
+if current <= 0 then
+  redis.call('DEL', key)
+end
+return 1
+"""
+_REDIS_ACQUIRE_SCRIPT = """
+local key = KEYS[1]
+local limit = tonumber(ARGV[1])
+local ttl = tonumber(ARGV[2])
+local current = tonumber(redis.call('GET', key) or '0')
+if current >= limit then
+  return 0
+end
+redis.call('INCR', key)
+redis.call('PEXPIRE', key, ttl)
+return 1
+"""
+
+
 @dataclass(frozen=True, slots=True)
 class RateLimitResult:
     allowed: bool
@@ -117,6 +143,21 @@ class RateLimiter(Protocol):
         """Refill and return the current token count without taking anything."""
         ...
 
+    async def acquire(
+        self,
+        *,
+        scope: BucketScope,
+        key: str,
+        limit: int,
+        ttl_seconds: int,
+    ) -> bool:
+        """Take one in-flight slot; the slot expires after ``ttl_seconds``."""
+        ...
+
+    async def release(self, *, scope: BucketScope, key: str) -> None:
+        """Release one in-flight slot; never drops the counter below zero."""
+        ...
+
 
 def _validate_hit(*, limit: int, now: datetime) -> None:
     if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
@@ -151,6 +192,7 @@ class InMemoryRateLimiter:
 
     def __init__(self) -> None:
         self._buckets: dict[tuple[str, str], tuple[float, float]] = {}
+        self._leases: dict[tuple[str, str], int] = {}
         self._lock = asyncio.Lock()
 
     async def take(
@@ -209,6 +251,31 @@ class InMemoryRateLimiter:
             self._buckets[(scope, key)] = (tokens, now.timestamp())
         return tokens
 
+    async def acquire(
+        self,
+        *,
+        scope: BucketScope,
+        key: str,
+        limit: int,
+        ttl_seconds: int,
+    ) -> bool:
+        if limit < 1 or ttl_seconds < 1:
+            raise ValueError("limit and ttl_seconds must be >= 1")
+        async with self._lock:
+            current = self._leases.get((scope, key), 0)
+            if current >= limit:
+                return False
+            self._leases[(scope, key)] = current + 1
+            return True
+
+    async def release(self, *, scope: BucketScope, key: str) -> None:
+        async with self._lock:
+            current = self._leases.get((scope, key), 0)
+            if current <= 1:
+                self._leases.pop((scope, key), None)
+            else:
+                self._leases[(scope, key)] = current - 1
+
     def _refill(
         self,
         scope: str,
@@ -252,6 +319,8 @@ class RedisRateLimiter:
         self._key_prefix = key_prefix
         self._timeout_seconds = timeout_seconds
         self._script = client.register_script(_REDIS_SCRIPT)
+        self._acquire_script = client.register_script(_REDIS_ACQUIRE_SCRIPT)
+        self._release_script = client.register_script(_REDIS_RELEASE_SCRIPT)
 
     async def take(
         self,
@@ -300,6 +369,39 @@ class RedisRateLimiter:
 
     async def hit(self, *, tenant_id: UUID, limit: int, now: datetime) -> RateLimitResult:
         return await self.take(scope="tenant", key=str(tenant_id), limit=limit, now=now)
+
+    async def acquire(
+        self,
+        *,
+        scope: BucketScope,
+        key: str,
+        limit: int,
+        ttl_seconds: int,
+    ) -> bool:
+        if limit < 1 or ttl_seconds < 1:
+            raise ValueError("limit and ttl_seconds must be >= 1")
+        lease = f"{self._key_prefix}:conc:{scope}:{key}"
+        try:
+            async with asyncio.timeout(self._timeout_seconds):
+                result = await self._acquire_script(
+                    keys=[lease],
+                    args=[limit, ttl_seconds * 1000],
+                )
+        except TimeoutError as exc:
+            raise RateLimiterUnavailable("timeout") from exc
+        except (RedisError, OSError) as exc:
+            raise RateLimiterUnavailable("error") from exc
+        return int(result) == 1
+
+    async def release(self, *, scope: BucketScope, key: str) -> None:
+        lease = f"{self._key_prefix}:conc:{scope}:{key}"
+        try:
+            async with asyncio.timeout(self._timeout_seconds):
+                await self._release_script(keys=[lease])
+        except TimeoutError as exc:
+            raise RateLimiterUnavailable("timeout") from exc
+        except (RedisError, OSError) as exc:
+            raise RateLimiterUnavailable("error") from exc
 
     async def _run(
         self,
@@ -410,3 +512,21 @@ class SqlAlchemyRateLimiter:
         now: datetime,
     ) -> float:
         return await self._local.available(scope=scope, key=key, limit=limit, now=now)
+
+    async def acquire(
+        self,
+        *,
+        scope: BucketScope,
+        key: str,
+        limit: int,
+        ttl_seconds: int,
+    ) -> bool:
+        return await self._local.acquire(
+            scope=scope,
+            key=key,
+            limit=limit,
+            ttl_seconds=ttl_seconds,
+        )
+
+    async def release(self, *, scope: BucketScope, key: str) -> None:
+        await self._local.release(scope=scope, key=key)

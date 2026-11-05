@@ -257,7 +257,7 @@
   - 范围：请求体大小上限、单请求 token 估算上限、`max_tokens` 上限、并发上限、按模型的上下文窗口校验、参数白名单（区分“允许透传”和“拒绝”的字段）。
   - 验收：超限请求返回 4xx 且错误码稳定，不触达上游；单客户端无法通过超长 prompt 或无限 `max_tokens` 打穿内存与成本。
   - 进度（2026-11-04）：已落地单请求边界——`GATEWAY_MAX_REQUEST_BYTES`（Content-Length + 流式计数）超限 413 `request_too_large`；`GATEWAY_MAX_MESSAGES` / `GATEWAY_MAX_PROMPT_CHARS` / `GATEWAY_MAX_TOOLS` / `GATEWAY_MAX_TOKENS_LIMIT` 超限 400 `request_limit_exceeded` 并带 `param`；护栏在认证/配额/限流之后、计费与上游调用之前执行，超限不写 usage、不触达上游。
-  - 剩余：并发（in-flight）上限归 G1.2；按模型的上下文窗口需要先有模型能力表（归 G2.1）；参数白名单暂不做（`extra="allow"` 是为兼容 provider 专有字段），保持现状并在 README 说明。
+  - 剩余：按模型的上下文窗口需要先有模型能力表（归 G2.1）；参数白名单暂不做（`extra="allow"` 是为兼容 provider 专有字段），保持现状并在 README 说明。并发上限已在 G1.2 完成。
 
 ### G1 生产可靠性
 
@@ -274,7 +274,8 @@
   - 范围：Redis 令牌桶（per-key / per-tenant / per-model）、TPM 与并发上限、RPM 与 TPM 同时生效、`Retry-After` 语义明确；限流不可用时降级策略显式（fail-open 必须告警）。
   - 验收：多副本下限流口径一致；边界不出现 2 倍突发；Redis 不可用时行为符合配置且可观测。
   - 进度（2026-11-05）：租户级已完成并切换为**令牌桶**（容量=每分钟限额，按秒连续补充），`GATEWAY_RATE_LIMIT_BACKEND=redis` 时由一段 Lua 脚本原子完成补充与取用，多副本共享同一桶；边界不再出现 2 倍突发。**按 key、按模型**的 RPM 桶与三层 **TPM** 已落地（迁移 `0012`；TPM 为结算后扣减，超支最多一个请求的用量，下一次请求 429 `token_rate_limited`）。`GATEWAY_RATE_LIMIT_FAIL_OPEN`（默认 true）控制 Redis 超时/报错时的降级：fail-open 放行并累加 `gateway_rate_limit_degraded{reason}` 与 `rate_limit_unavailable` 告警；fail-closed 返回 503 `rate_limiter_unavailable` + `Retry-After: 1`，并增加 `rate_limiter` readiness 检查。Redis 调用受 `GATEWAY_RATE_LIMIT_REDIS_TIMEOUT_SECONDS`（默认 0.2s）约束；时钟回拨只减少补充量，不会多发票。设计说明见 `notes/rate-limiting.md`。
-  - 未做（下一阶段）：并发租约（需超时与崩溃回收，G0.8 的并发上限一并解决）、共享部署健康/cooldown（仍为进程内）。
+  - 进度（2026-11-05，并发）：租户与 key 的 `max_concurrent_requests`（迁移 `0013`）用带 TTL 的租约实现，流式在 SSE 生成器的 shield finally 中释放；租约 TTL 由 `GATEWAY_CONCURRENCY_LEASE_SECONDS`（默认 600）控制，用于崩溃回收；超限 429 `concurrency_limited`，限流后端不可用时沿用 fail-open/fail-closed 策略。
+  - 未做（最后一项）：共享部署健康/cooldown（仍为进程内）。
 
 - [ ] **G1.3 热路径读写放大治理**（压测已确认整月用量聚合是第一瓶颈，优先做）
   - 现状：每请求包含 key 查询、`last_used_at` 写入、租户查询、整月用量聚合、限流单行 upsert、usage 插入，全部同步打 PostgreSQL，无缓存。

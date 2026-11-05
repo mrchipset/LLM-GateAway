@@ -106,6 +106,7 @@ class Tenant:
     monthly_cost_budget: Decimal | None = None
     audit_retention_days: int | None = None
     tokens_per_minute: int | None = None
+    max_concurrent_requests: int | None = None
 
     def __post_init__(self) -> None:
         _require_uuid(self.id, "id")
@@ -114,6 +115,7 @@ class Tenant:
         _require_optional_positive_int(self.monthly_token_quota, "monthly_token_quota")
         _require_optional_positive_int(self.requests_per_minute, "requests_per_minute")
         _require_optional_positive_int(self.tokens_per_minute, "tokens_per_minute")
+        _require_optional_positive_int(self.max_concurrent_requests, "max_concurrent_requests")
         _require_optional_positive_int(self.plan_tokens, "plan_tokens")
         if not isinstance(self.plan_allow_overage, bool):
             raise ValueError("plan_allow_overage must be a boolean")
@@ -212,6 +214,7 @@ class ApiKeyRecord:
     last_used_at: datetime | None = None
     requests_per_minute: int | None = None
     tokens_per_minute: int | None = None
+    max_concurrent_requests: int | None = None
 
     def __post_init__(self) -> None:
         _require_uuid(self.tenant_id, "tenant_id")
@@ -220,6 +223,7 @@ class ApiKeyRecord:
         _require_aware(self.created_at, "created_at")
         _require_optional_positive_int(self.requests_per_minute, "requests_per_minute")
         _require_optional_positive_int(self.tokens_per_minute, "tokens_per_minute")
+        _require_optional_positive_int(self.max_concurrent_requests, "max_concurrent_requests")
         for field in ("expires_at", "revoked_at", "last_used_at"):
             value = getattr(self, field)
             if value is not None:
@@ -465,6 +469,7 @@ class TenantLimitPatch:
     monthly_cost_budget: Decimal | None = None
     audit_retention_days: int | None = None
     tokens_per_minute: int | None = None
+    max_concurrent_requests: int | None = None
     set_monthly_token_quota: bool = False
     set_requests_per_minute: bool = False
     set_audit_enabled: bool = False
@@ -473,6 +478,7 @@ class TenantLimitPatch:
     set_monthly_cost_budget: bool = False
     set_audit_retention_days: bool = False
     set_tokens_per_minute: bool = False
+    set_max_concurrent_requests: bool = False
 
 
 class TenantRepository(Protocol):

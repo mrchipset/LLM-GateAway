@@ -55,6 +55,7 @@ class TenantRow(Base):
     )
     audit_retention_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
     tokens_per_minute: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    max_concurrent_requests: Mapped[int | None] = mapped_column(Integer, nullable=True)
     __table_args__ = (
         Index("ix_tenants_name", "name", unique=True),
         CheckConstraint(
@@ -84,6 +85,10 @@ class TenantRow(Base):
         CheckConstraint(
             "tokens_per_minute IS NULL OR tokens_per_minute >= 1",
             name="ck_tenants_tokens_per_minute_positive",
+        ),
+        CheckConstraint(
+            "max_concurrent_requests IS NULL OR max_concurrent_requests >= 1",
+            name="ck_tenants_max_concurrent_requests_positive",
         ),
     )
 
@@ -147,6 +152,7 @@ class ApiKeyRow(Base):
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     requests_per_minute: Mapped[int | None] = mapped_column(Integer, nullable=True)
     tokens_per_minute: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    max_concurrent_requests: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     __table_args__ = (
         Index("ix_api_keys_key_hash", "key_hash", unique=True),
@@ -158,6 +164,10 @@ class ApiKeyRow(Base):
         CheckConstraint(
             "tokens_per_minute IS NULL OR tokens_per_minute >= 1",
             name="ck_api_keys_tokens_per_minute_positive",
+        ),
+        CheckConstraint(
+            "max_concurrent_requests IS NULL OR max_concurrent_requests >= 1",
+            name="ck_api_keys_max_concurrent_requests_positive",
         ),
     )
 

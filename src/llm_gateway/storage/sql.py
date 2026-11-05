@@ -178,6 +178,7 @@ def _to_tenant(row: TenantRow) -> Tenant:
         ),
         audit_retention_days=row.audit_retention_days,
         tokens_per_minute=row.tokens_per_minute,
+        max_concurrent_requests=row.max_concurrent_requests,
     )
 
 
@@ -202,6 +203,7 @@ def _to_key(row: ApiKeyRow) -> ApiKeyRecord:
         last_used_at=row.last_used_at,
         requests_per_minute=row.requests_per_minute,
         tokens_per_minute=row.tokens_per_minute,
+        max_concurrent_requests=row.max_concurrent_requests,
     )
 
 
@@ -357,6 +359,7 @@ class SqlAlchemyTenantRepository:
             monthly_cost_budget=tenant.monthly_cost_budget,
             audit_retention_days=tenant.audit_retention_days,
             tokens_per_minute=tenant.tokens_per_minute,
+            max_concurrent_requests=tenant.max_concurrent_requests,
         )
         try:
             async with self._session_factory() as session, session.begin():
@@ -410,6 +413,8 @@ class SqlAlchemyTenantRepository:
             values["audit_retention_days"] = patch.audit_retention_days
         if patch.set_tokens_per_minute:
             values["tokens_per_minute"] = patch.tokens_per_minute
+        if patch.set_max_concurrent_requests:
+            values["max_concurrent_requests"] = patch.max_concurrent_requests
         async with self._session_factory() as session, session.begin():
             if not values:
                 row = await session.get(TenantRow, tenant_id)
@@ -497,6 +502,7 @@ class SqlAlchemyApiKeyRepository:
             last_used_at=record.last_used_at,
             requests_per_minute=record.requests_per_minute,
             tokens_per_minute=record.tokens_per_minute,
+            max_concurrent_requests=record.max_concurrent_requests,
         )
         try:
             async with self._session_factory() as session, session.begin():

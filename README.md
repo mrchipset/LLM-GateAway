@@ -487,6 +487,7 @@ Invoke-RestMethod -Uri http://127.0.0.1:4000/api/v1/tenants -WebSession $session
 | `GATEWAY_RATE_LIMIT_BACKEND` | `storage` (default: per-process counter, single worker only) or `redis` (shared token bucket across replicas) |
 | `GATEWAY_RATE_LIMIT_FAIL_OPEN` | Admit traffic when the limiter backend is unreachable, default `true`; set `false` for 503 plus a readiness gate |
 | `GATEWAY_RATE_LIMIT_REDIS_TIMEOUT_SECONDS` | Per-call Redis budget before treating the limiter as unavailable, default 0.2 |
+| `GATEWAY_CONCURRENCY_LEASE_SECONDS` | In-flight lease TTL before a crashed process's slot is reclaimed, default 600 |
 | `GATEWAY_OPENAI_API_KEY` | When empty, the OpenAI provider is not registered |
 | `GATEWAY_OPENAI_BASE_URL` | Defaults to `https://api.openai.com/v1` |
 | `GATEWAY_DEEPSEEK_API_KEY` | When empty, the DeepSeek provider is not registered |
@@ -568,6 +569,10 @@ does.
   429 `token_rate_limited`. This mirrors the no-reservation billing decision.
 - Per-key and per-model limits are shared when the backend is `redis`; on `storage` they fall back
   to a process-local bucket, which is why multi-worker deployments should use Redis.
+- **Concurrency** is capped per tenant and key with a lease counter. A lease is taken before the
+  upstream call and released when the response (or the stream) finishes; the Redis lease expires
+  after `GATEWAY_CONCURRENCY_LEASE_SECONDS`, so a crashed process cannot leak a slot forever.
+  Exhaustion returns 429 `concurrency_limited` with `Retry-After: 1`.
 - `storage` keeps the tenant counter in PostgreSQL: one atomic row, shared by workers, but a fixed
   window and a write per request. Per-key/model buckets and TPM fall back to a process-local
   bucket there; use Redis for those across replicas.

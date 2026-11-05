@@ -147,6 +147,8 @@ class InMemoryTenantRepository:
                 changes["audit_retention_days"] = patch.audit_retention_days
             if patch.set_tokens_per_minute:
                 changes["tokens_per_minute"] = patch.tokens_per_minute
+            if patch.set_max_concurrent_requests:
+                changes["max_concurrent_requests"] = patch.max_concurrent_requests
             if not changes:
                 return tenant
             updated = replace(tenant, **changes)  # pyright: ignore[reportArgumentType]
