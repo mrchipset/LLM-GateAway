@@ -431,6 +431,7 @@ Request auditing is opt-in twice: set `GATEWAY_AUDIT_ENABLED=true` globally and 
 - Requests are stored with bounded content (default 256 KiB) and deterministic turn diffs (`new_session`, `continuation`, `regeneration`, `edit`, `truncation`). Hashes and diffs use the original content, and `truncated=true` is explicit.
 - Optional redaction runs before hashing: `GATEWAY_AUDIT_REDACT_PATTERNS` is a JSON array of `{"name","pattern"}` rules; matches become `[redacted:<name>]` in messages, parameters, and responses, so the same conversation still groups correctly.
 - Read APIs: `GET /api/v1/audit/sessions`, `GET /api/v1/audit/sessions/{id}?include_content=`, `GET /api/v1/audit/requests/{request_id}`. Owner and auditor only.
+- Viewing a session or request and exporting rows write admin audit events (`audit.session_viewed`, `audit.request_viewed`, `audit.exported`) with the actor, target, and filters only; the content itself is never copied into the event.
 - `GET /api/v1/audit/export` streams JSONL or CSV for one tenant and time window; `DELETE /api/v1/audit` hard-deletes a tenant window (owner only) with a `dry_run` count and a follow-up `requests_remaining` proof.
 - Retention defaults to 90 days (`GATEWAY_AUDIT_RETENTION_DAYS`, `0` disables); a tenant's `audit_retention_days` overrides it and `0` is a legal hold. Run `uv run python scripts/audit_cleanup.py` from cron or a Kubernetes Job.
 - The Audit tab shows the session timeline, bounded previews, parameter/usage/response changes, and loads full content on demand. Content is never written to browser storage or URLs.
@@ -856,6 +857,7 @@ design.md            LLM-GateAway design guidance
 - [`docs/verification.md`](docs/verification.md): step-by-step verification for DeepSeek, tenant keys, and gateway calls
 - [`docs/tenant-key-model.md`](docs/tenant-key-model.md): focused runbook for creating a tenant, API key, and model registration, with a verified DeepSeek call
 - [`docs/docker.md`](docs/docker.md): Docker Compose deployment, configuration, upgrades, and backups
+- [`docs/runbook-backup.md`](docs/runbook-backup.md): backup, restore drill, integrity checks, and recovery steps
 - [`TODO.md`](TODO.md): P2 items and the remaining P1e audit operations
 
 ## Agent skill
