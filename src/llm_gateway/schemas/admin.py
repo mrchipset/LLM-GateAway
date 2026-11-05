@@ -37,6 +37,16 @@ class CreateApiKeyRequest(BaseModel):
         return value
 
 
+class UpdateApiKeyLimitsRequest(BaseModel):
+    """Body for `PATCH /api/v1/keys/{key_id}`; omitted fields are unchanged."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    requests_per_minute: int | None = Field(default=None, ge=1)
+    tokens_per_minute: int | None = Field(default=None, ge=1)
+    max_concurrent_requests: int | None = Field(default=None, ge=1)
+
+
 class CreatedApiKeyResponse(BaseModel):
     """Response for `POST /api/v1/keys`; contains the plaintext key exactly once."""
 
@@ -274,6 +284,16 @@ class ModelDetail(BaseModel):
     created_at: datetime
     requests_per_minute: int | None = None
     tokens_per_minute: int | None = None
+
+
+class UpdateModelRequest(BaseModel):
+    """Body for `PATCH /api/v1/models/{model_id}`; omitted fields are unchanged."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    enabled: bool | None = None
+    requests_per_minute: int | None = Field(default=None, ge=1)
+    tokens_per_minute: int | None = Field(default=None, ge=1)
 
 
 class ModelListResponse(BaseModel):

@@ -27,6 +27,7 @@ from llm_gateway.storage.repositories import (
     AdminRole,
     AdminSession,
     AdminUser,
+    ApiKeyLimitPatch,
     ApiKeyRecord,
     AuditPrefixRecord,
     AuditRequestRecord,
@@ -44,6 +45,7 @@ from llm_gateway.storage.repositories import (
     ModelAccessMode,
     ModelConfig,
     ModelDeployment,
+    ModelPatch,
     ModelPrice,
     Tenant,
     TenantLimitPatch,
@@ -2618,3 +2620,63 @@ async def test_month_counter_matches_detail_and_is_used_for_month_windows(
     )
     assert partial.requests == 3, "a non-month window must fall back to detail rows"
     assert partial.total_tokens == 45
+
+
+async def test_update_model_and_key_limits_round_trip(database: Database) -> None:
+    model = _model(1)
+    await database.models.create_model(model)
+
+    updated = await database.models.update_model(
+        model.id,
+        patch=ModelPatch(
+            enabled=False,
+            requests_per_minute=3,
+            tokens_per_minute=4,
+            set_enabled=True,
+            set_requests_per_minute=True,
+            set_tokens_per_minute=True,
+        ),
+    )
+    assert updated is not None
+    assert updated.enabled is False
+    assert updated.requests_per_minute == 3
+    assert updated.tokens_per_minute == 4
+    assert await database.models.get_model(model.id) == updated
+
+    cleared = await database.models.update_model(
+        model.id,
+        patch=ModelPatch(tokens_per_minute=None, set_tokens_per_minute=True),
+    )
+    assert cleared is not None
+    assert cleared.tokens_per_minute is None
+    assert cleared.requests_per_minute == 3
+    assert await database.models.update_model("missing", patch=ModelPatch()) is None
+
+    tenant = await database.tenants.create_tenant(_tenant(1))
+    key = _key(1, tenant_id=tenant.id)
+    await database.api_keys.create_key(key)
+
+    key_updated = await database.api_keys.set_key_limits(
+        key.id,
+        patch=ApiKeyLimitPatch(
+            requests_per_minute=7,
+            tokens_per_minute=8,
+            max_concurrent_requests=9,
+            set_requests_per_minute=True,
+            set_tokens_per_minute=True,
+            set_max_concurrent_requests=True,
+        ),
+    )
+    assert key_updated is not None
+    assert key_updated.requests_per_minute == 7
+    assert key_updated.tokens_per_minute == 8
+    assert key_updated.max_concurrent_requests == 9
+
+    key_cleared = await database.api_keys.set_key_limits(
+        key.id,
+        patch=ApiKeyLimitPatch(requests_per_minute=None, set_requests_per_minute=True),
+    )
+    assert key_cleared is not None
+    assert key_cleared.requests_per_minute is None
+    assert key_cleared.tokens_per_minute == 8
+    assert await database.api_keys.set_key_limits(uuid4(), patch=ApiKeyLimitPatch()) is None

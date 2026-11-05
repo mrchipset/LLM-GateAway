@@ -1009,3 +1009,85 @@ async def test_tenant_audit_flag_defaults_false_and_patch_toggles_it(
     assert omitted_after_disable.json()["audit_enabled"] is False
     assert reenabled.json()["audit_enabled"] is True
     assert omitted_after_enable.json()["audit_enabled"] is True
+
+
+async def test_patch_api_key_limits_sets_and_clears(
+    make_container: Callable[..., Container],
+    make_client: Callable[..., Any],
+    settings: Settings,
+) -> None:
+    container = make_container(settings, clock=SteppingClock())
+    master = _auth(_master(settings))
+    tenant = await seed_tenant(container)
+    await seed_api_key(container, tenant_id=tenant.id)
+    key = (await container.api_keys.list_keys(limit=1, offset=0))[0][0]
+
+    async with make_client(settings, container) as client:
+        updated = await client.patch(
+            f"/api/v1/keys/{key.id}",
+            json={
+                "requests_per_minute": 30,
+                "tokens_per_minute": 1000,
+                "max_concurrent_requests": 2,
+            },
+            headers=master,
+        )
+        cleared = await client.patch(
+            f"/api/v1/keys/{key.id}",
+            json={"requests_per_minute": None, "max_concurrent_requests": None},
+            headers=master,
+        )
+        missing = await client.patch(
+            "/api/v1/keys/00000000-0000-0000-0000-000000000000",
+            json={"requests_per_minute": 1},
+            headers=master,
+        )
+
+    assert updated.status_code == 200
+    assert updated.json()["requests_per_minute"] == 30
+    assert updated.json()["tokens_per_minute"] == 1000
+    assert updated.json()["max_concurrent_requests"] == 2
+    assert cleared.status_code == 200
+    assert cleared.json()["requests_per_minute"] is None
+    assert cleared.json()["tokens_per_minute"] == 1000
+    assert cleared.json()["max_concurrent_requests"] is None
+    assert missing.status_code == 404
+    assert missing.json()["error"]["code"] == "key_not_found"
+
+
+async def test_patch_model_toggles_and_clears_limits(
+    make_container: Callable[..., Container],
+    make_client: Callable[..., Any],
+    settings: Settings,
+) -> None:
+    container = make_container(settings, clock=SteppingClock())
+    master = _auth(_master(settings))
+    await seed_model(container, model_id="mutable-model")
+
+    async with make_client(settings, container) as client:
+        updated = await client.patch(
+            "/api/v1/models/mutable-model",
+            json={"enabled": False, "requests_per_minute": 5, "tokens_per_minute": 500},
+            headers=master,
+        )
+        cleared = await client.patch(
+            "/api/v1/models/mutable-model",
+            json={"requests_per_minute": None, "tokens_per_minute": None},
+            headers=master,
+        )
+        missing = await client.patch(
+            "/api/v1/models/absent-model",
+            json={"enabled": True},
+            headers=master,
+        )
+
+    assert updated.status_code == 200
+    assert updated.json()["enabled"] is False
+    assert updated.json()["requests_per_minute"] == 5
+    assert updated.json()["tokens_per_minute"] == 500
+    assert cleared.status_code == 200
+    assert cleared.json()["enabled"] is False
+    assert cleared.json()["requests_per_minute"] is None
+    assert cleared.json()["tokens_per_minute"] is None
+    assert missing.status_code == 404
+    assert missing.json()["error"]["code"] == "model_not_found"

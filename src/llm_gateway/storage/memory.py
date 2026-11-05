@@ -12,6 +12,7 @@ from llm_gateway.storage.repositories import (
     AdminRole,
     AdminSession,
     AdminUser,
+    ApiKeyLimitPatch,
     ApiKeyRecord,
     AuditPrefixRecord,
     AuditRequestRecord,
@@ -32,6 +33,7 @@ from llm_gateway.storage.repositories import (
     ModelAccessMode,
     ModelConfig,
     ModelDeployment,
+    ModelPatch,
     ModelPrice,
     ModelUsage,
     MonthlyUsage,
@@ -89,6 +91,24 @@ class InMemoryModelRepository:
     async def delete_model(self, model_id: str) -> bool:
         async with self._lock:
             return self._models.pop(model_id, None) is not None
+
+    async def update_model(self, model_id: str, *, patch: ModelPatch) -> ModelConfig | None:
+        async with self._lock:
+            model = self._models.get(model_id)
+            if model is None:
+                return None
+            changes: dict[str, object] = {}
+            if patch.set_enabled and patch.enabled is not None:
+                changes["enabled"] = patch.enabled
+            if patch.set_requests_per_minute:
+                changes["requests_per_minute"] = patch.requests_per_minute
+            if patch.set_tokens_per_minute:
+                changes["tokens_per_minute"] = patch.tokens_per_minute
+            if not changes:
+                return model
+            updated = replace(model, **changes)  # pyright: ignore[reportArgumentType]
+            self._models[model_id] = updated
+            return updated
 
 
 class InMemoryTenantRepository:
@@ -286,6 +306,24 @@ class InMemoryApiKeyRepository:
             if record is None:
                 raise KeyError(f"api key {key_id} not found")
             self._keys[key_id] = replace(record, last_used_at=used_at)
+
+    async def set_key_limits(self, key_id: UUID, *, patch: ApiKeyLimitPatch) -> ApiKeyRecord | None:
+        async with self._lock:
+            record = self._keys.get(key_id)
+            if record is None:
+                return None
+            changes: dict[str, object] = {}
+            if patch.set_requests_per_minute:
+                changes["requests_per_minute"] = patch.requests_per_minute
+            if patch.set_tokens_per_minute:
+                changes["tokens_per_minute"] = patch.tokens_per_minute
+            if patch.set_max_concurrent_requests:
+                changes["max_concurrent_requests"] = patch.max_concurrent_requests
+            if not changes:
+                return record
+            updated = replace(record, **changes)  # pyright: ignore[reportArgumentType]
+            self._keys[key_id] = updated
+            return updated
 
 
 def _validate_token_window(*, since: datetime, until: datetime) -> None:

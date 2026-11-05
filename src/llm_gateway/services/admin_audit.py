@@ -112,6 +112,8 @@ def model_snapshot(model: Any) -> dict[str, object]:
         "provider": model.provider.value,
         "upstream_model": model.upstream_model,
         "enabled": model.enabled,
+        "requests_per_minute": model.requests_per_minute,
+        "tokens_per_minute": model.tokens_per_minute,
     }
 
 
@@ -146,6 +148,9 @@ def key_snapshot(key: Any) -> dict[str, object]:
         "key_prefix": key.key_prefix,
         "expires_at": key.expires_at.isoformat() if key.expires_at is not None else None,
         "revoked": key.revoked_at is not None,
+        "requests_per_minute": key.requests_per_minute,
+        "tokens_per_minute": key.tokens_per_minute,
+        "max_concurrent_requests": key.max_concurrent_requests,
     }
 
 

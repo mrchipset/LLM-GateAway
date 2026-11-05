@@ -15,17 +15,34 @@ from llm_gateway.schemas.admin import (
     ApiKeySummary,
     CreateApiKeyRequest,
     CreatedApiKeyResponse,
+    UpdateApiKeyLimitsRequest,
 )
 from llm_gateway.services.admin_audit import (
     key_snapshot,
     record_admin_event_safely,
 )
-from llm_gateway.storage.repositories import UnknownTenantError
+from llm_gateway.storage.repositories import ApiKeyLimitPatch, ApiKeyRecord, UnknownTenantError
 
 router = APIRouter()
 
 PaginationLimit = Annotated[int, Query(ge=1, le=100)]
 PaginationOffset = Annotated[int, Query(ge=0)]
+
+
+def _summary(record: ApiKeyRecord) -> ApiKeySummary:
+    return ApiKeySummary(
+        id=record.id,
+        tenant_id=record.tenant_id,
+        name=record.name,
+        key_prefix=record.key_prefix,
+        created_at=record.created_at,
+        expires_at=record.expires_at,
+        revoked_at=record.revoked_at,
+        last_used_at=record.last_used_at,
+        requests_per_minute=record.requests_per_minute,
+        tokens_per_minute=record.tokens_per_minute,
+        max_concurrent_requests=record.max_concurrent_requests,
+    )
 
 
 def _tenant_not_found(tenant_id: UUID) -> ApiError:
@@ -95,6 +112,52 @@ async def create_api_key(
     )
 
 
+@router.patch("/keys/{key_id}", response_model=ApiKeySummary)
+async def update_api_key_limits(
+    key_id: UUID,
+    payload: UpdateApiKeyLimitsRequest,
+    principal: Annotated[AdminPrincipal, Depends(require_write_access)],
+    container: Annotated[Container, Depends(get_container)],
+) -> ApiKeySummary:
+    existing = await container.api_keys.get_key(key_id)
+    if existing is None:
+        raise ApiError(
+            status_code=404,
+            code=ApiErrorCode.KEY_NOT_FOUND,
+            message="API key not found",
+            error_type="invalid_request_error",
+        )
+
+    provided = payload.model_fields_set
+    patch = ApiKeyLimitPatch(
+        requests_per_minute=payload.requests_per_minute,
+        tokens_per_minute=payload.tokens_per_minute,
+        max_concurrent_requests=payload.max_concurrent_requests,
+        set_requests_per_minute="requests_per_minute" in provided,
+        set_tokens_per_minute="tokens_per_minute" in provided,
+        set_max_concurrent_requests="max_concurrent_requests" in provided,
+    )
+    updated = await container.api_keys.set_key_limits(key_id, patch=patch)
+    if updated is None:
+        raise ApiError(
+            status_code=404,
+            code=ApiErrorCode.KEY_NOT_FOUND,
+            message="API key not found",
+            error_type="invalid_request_error",
+        )
+
+    await record_admin_event_safely(
+        container=container,
+        principal=principal,
+        action="api_key.updated",
+        target_type="api_key",
+        target_id=str(key_id),
+        before=key_snapshot(existing),
+        after=key_snapshot(updated),
+    )
+    return _summary(updated)
+
+
 @router.get("/keys", response_model=ApiKeyListResponse)
 async def list_api_keys(
     _: Annotated[AdminPrincipal, Depends(current_admin)],
@@ -110,22 +173,7 @@ async def list_api_keys(
         limit=limit, offset=offset, tenant_id=tenant_id
     )
     return ApiKeyListResponse(
-        items=[
-            ApiKeySummary(
-                id=record.id,
-                tenant_id=record.tenant_id,
-                name=record.name,
-                key_prefix=record.key_prefix,
-                created_at=record.created_at,
-                expires_at=record.expires_at,
-                revoked_at=record.revoked_at,
-                last_used_at=record.last_used_at,
-                requests_per_minute=record.requests_per_minute,
-                tokens_per_minute=record.tokens_per_minute,
-                max_concurrent_requests=record.max_concurrent_requests,
-            )
-            for record in records
-        ],
+        items=[_summary(record) for record in records],
         total=total,
         limit=limit,
         offset=offset,

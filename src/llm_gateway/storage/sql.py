@@ -21,6 +21,7 @@ from llm_gateway.storage.repositories import (
     AdminRole,
     AdminSession,
     AdminUser,
+    ApiKeyLimitPatch,
     ApiKeyRecord,
     AuditPrefixRecord,
     AuditRequestRecord,
@@ -41,6 +42,7 @@ from llm_gateway.storage.repositories import (
     ModelAccessMode,
     ModelConfig,
     ModelDeployment,
+    ModelPatch,
     ModelPrice,
     ModelUsage,
     MonthlyUsage,
@@ -280,6 +282,26 @@ class SqlAlchemyModelRepository:
                 await session.execute(delete(ModelRow).where(ModelRow.id == model_id)),
             )
             return result.rowcount == 1
+
+    async def update_model(self, model_id: str, *, patch: ModelPatch) -> ModelConfig | None:
+        values: dict[str, object] = {}
+        if patch.set_enabled and patch.enabled is not None:
+            values["enabled"] = patch.enabled
+        if patch.set_requests_per_minute:
+            values["requests_per_minute"] = patch.requests_per_minute
+        if patch.set_tokens_per_minute:
+            values["tokens_per_minute"] = patch.tokens_per_minute
+        async with self._session_factory() as session, session.begin():
+            if not values:
+                row = await session.get(ModelRow, model_id)
+            else:
+                row = await session.scalar(
+                    update(ModelRow)
+                    .where(ModelRow.id == model_id)
+                    .values(**values)
+                    .returning(ModelRow)
+                )
+            return _to_model(row) if row is not None else None
 
 
 def _to_price(row: ModelPriceRow) -> ModelPrice:
@@ -594,6 +616,26 @@ class SqlAlchemyApiKeyRepository:
             )
             if result.rowcount == 0:
                 raise KeyError(f"api key {key_id} not found")
+
+    async def set_key_limits(self, key_id: UUID, *, patch: ApiKeyLimitPatch) -> ApiKeyRecord | None:
+        values: dict[str, object] = {}
+        if patch.set_requests_per_minute:
+            values["requests_per_minute"] = patch.requests_per_minute
+        if patch.set_tokens_per_minute:
+            values["tokens_per_minute"] = patch.tokens_per_minute
+        if patch.set_max_concurrent_requests:
+            values["max_concurrent_requests"] = patch.max_concurrent_requests
+        async with self._session_factory() as session, session.begin():
+            if not values:
+                row = await session.get(ApiKeyRow, key_id)
+            else:
+                row = await session.scalar(
+                    update(ApiKeyRow)
+                    .where(ApiKeyRow.id == key_id)
+                    .values(**values)
+                    .returning(ApiKeyRow)
+                )
+            return _to_key(row) if row is not None else None
 
 
 class SqlAlchemyUsageRepository:

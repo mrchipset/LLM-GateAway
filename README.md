@@ -282,6 +282,7 @@ Invoke-RestMethod -Method Patch `
 - `tokens_per_minute`: a post-paid token bucket; the reported usage is charged after the response, so one request can overshoot and the next returns 429 `token_rate_limited`.
 - `max_concurrent_requests`: in-flight lease cap; exhaustion returns 429 `concurrency_limited`.
 - `audit_retention_days`: `null` inherits `GATEWAY_AUDIT_RETENTION_DAYS`, `0` is a legal hold, a positive value overrides the default.
+- The same limits can be set on a key (`POST` and `PATCH /api/v1/keys/{id}`) and on a model (`POST` and `PATCH /api/v1/models/{id}` for `enabled`, RPM, and TPM).
 - PATCH only writes the fields present in the body; an explicit `null` clears that limit.
 - Quotas are soft: they are checked before the request, so concurrent or in-flight requests can slightly overshoot, and usage write failures can cause drift.
 - Rejected requests (rate-limited or over quota) do not create usage records.
@@ -795,10 +796,10 @@ design.md            LLM-GateAway design guidance
 - Tracing covers the server span and per-attempt upstream spans only: no database spans and no tail-based sampling.
 - Metrics expose counters and histograms but ship without dashboards, alert rules, or OTLP metric export; database pool occupancy is not exported yet.
 - A stream that disconnects before usage arrives leaves no record; write timeouts or failures only log a warning.
-- Model configuration supports create, list, and delete only; changing it requires delete and recreate.
+- Model configuration supports create, list, PATCH (enabled and limits), and delete; provider and upstream_model changes require delete and recreate.
 - `/v1/models` returns at most 1000 entries; the management API uses offset pagination.
 - `last_used_at` is sampled per `GATEWAY_LAST_USED_SAMPLE_SECONDS`; the sample window divides across workers, which is acceptable for a display field.
-- The console can manage deployments, limits, and audit export/retention, but cannot edit an existing model (delete and recreate instead) or an existing key's limits (no backend endpoint). The usage panel is read-only with daily granularity, caps keys and tenants at 100 each, and labels the final bar as today so far. Tenant delete/rename is not available.
+- The console can manage deployments, limits, and audit export/retention, but a model's provider and upstream_model cannot be changed after creation (PATCH accepts only `enabled` and limits); changing them requires delete and recreate. Per-key and per-model limits can be edited in place. The usage panel is read-only with daily granularity, caps keys and tenants at 100 each, and labels the final bar as today so far. Tenant delete/rename is not available.
 - Local `uv` runs require a manual `alembic upgrade head`; Compose runs it through the one-shot `migrate` service, and the application process itself never migrates.
 
 ## Related documents

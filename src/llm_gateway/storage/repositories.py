@@ -544,6 +544,30 @@ class UsageRepository(Protocol):
     ) -> Sequence[UsagePoint]: ...
 
 
+@dataclass(frozen=True, slots=True)
+class ApiKeyLimitPatch:
+    """Partial key-limit update; only fields with a true ``set_*`` flag are written."""
+
+    requests_per_minute: int | None = None
+    tokens_per_minute: int | None = None
+    max_concurrent_requests: int | None = None
+    set_requests_per_minute: bool = False
+    set_tokens_per_minute: bool = False
+    set_max_concurrent_requests: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ModelPatch:
+    """Partial model update; only fields with a true ``set_*`` flag are written."""
+
+    enabled: bool | None = None
+    requests_per_minute: int | None = None
+    tokens_per_minute: int | None = None
+    set_enabled: bool = False
+    set_requests_per_minute: bool = False
+    set_tokens_per_minute: bool = False
+
+
 class ModelRepository(Protocol):
     async def list_models(
         self, *, limit: int, offset: int, enabled_only: bool = False
@@ -554,6 +578,8 @@ class ModelRepository(Protocol):
     async def create_model(self, model: ModelConfig) -> ModelConfig: ...
 
     async def delete_model(self, model_id: str) -> bool: ...
+
+    async def update_model(self, model_id: str, *, patch: ModelPatch) -> ModelConfig | None: ...
 
 
 class ModelPriceRepository(Protocol):
@@ -580,6 +606,10 @@ class ApiKeyRepository(Protocol):
     ) -> tuple[Sequence[ApiKeyRecord], int]: ...
 
     async def revoke_key(self, key_id: UUID, revoked_at: datetime) -> bool: ...
+
+    async def set_key_limits(
+        self, key_id: UUID, *, patch: ApiKeyLimitPatch
+    ) -> ApiKeyRecord | None: ...
 
     async def touch_last_used(self, key_id: UUID, used_at: datetime) -> None: ...
 

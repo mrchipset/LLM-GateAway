@@ -16,6 +16,7 @@ from llm_gateway.schemas.admin import (
     ModelListResponse,
     ModelPriceDetail,
     ModelPriceListResponse,
+    UpdateModelRequest,
 )
 from llm_gateway.services.admin_audit import (
     model_snapshot,
@@ -26,6 +27,7 @@ from llm_gateway.storage.repositories import (
     DuplicateModelError,
     DuplicatePriceError,
     ModelConfig,
+    ModelPatch,
     ModelPrice,
 )
 
@@ -130,6 +132,52 @@ async def list_models(
         limit=limit,
         offset=offset,
     )
+
+
+@router.patch("/models/{model_id}", response_model=ModelDetail)
+async def update_model(
+    model_id: str,
+    payload: UpdateModelRequest,
+    principal: Annotated[AdminPrincipal, Depends(require_write_access)],
+    container: Annotated[Container, Depends(get_container)],
+) -> ModelDetail:
+    existing = await container.models.get_model(model_id)
+    if existing is None:
+        raise ApiError(
+            status_code=404,
+            code=ApiErrorCode.MODEL_NOT_FOUND,
+            message=f"Model '{model_id}' was not found",
+            error_type="invalid_request_error",
+        )
+
+    provided = payload.model_fields_set
+    patch = ModelPatch(
+        enabled=payload.enabled,
+        requests_per_minute=payload.requests_per_minute,
+        tokens_per_minute=payload.tokens_per_minute,
+        set_enabled="enabled" in provided and payload.enabled is not None,
+        set_requests_per_minute="requests_per_minute" in provided,
+        set_tokens_per_minute="tokens_per_minute" in provided,
+    )
+    updated = await container.models.update_model(model_id, patch=patch)
+    if updated is None:
+        raise ApiError(
+            status_code=404,
+            code=ApiErrorCode.MODEL_NOT_FOUND,
+            message=f"Model '{model_id}' was not found",
+            error_type="invalid_request_error",
+        )
+
+    await record_admin_event_safely(
+        container=container,
+        principal=principal,
+        action="model.updated",
+        target_type="model",
+        target_id=model_id,
+        before=model_snapshot(existing),
+        after=model_snapshot(updated),
+    )
+    return _detail(updated)
 
 
 @router.delete("/models/{model_id}", status_code=204)
