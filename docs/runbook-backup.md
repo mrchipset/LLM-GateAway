@@ -89,5 +89,5 @@ pg_dump -h "$PGHOST" -U "$PGUSER" -d "$PGDATABASE" \
 ## 5. 已知限制
 
 - 没有 PITR（WAL 归档）配置；当前是逻辑备份，RPO 等于最近一次成功备份。需要更低 RPO 时，开启 WAL 归档与基础备份。
-- 审计表未按月分区；单表过大时备份/恢复时间会线性增长。分区触发条件与取舍见 `notes/audit-retention.md`。
+- 审计表按 `created_at` 月度分区；恢复时父表与其分区会一起还原，行数核对直接查父表即可。分区轮转见 `scripts/audit_partitions.py`。
 - 本手册不包含对象存储与密钥管理系统的具体命令，按部署方选型执行。

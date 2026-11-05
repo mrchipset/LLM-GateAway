@@ -437,7 +437,7 @@ Request auditing is opt-in twice: set `GATEWAY_AUDIT_ENABLED=true` globally and 
 - The Audit tab shows the session timeline, bounded previews, parameter/usage/response changes, and loads full content on demand. Content is never written to browser storage or URLs.
 - Audit writes are best-effort and isolated; failures log `audit_record_failed` without content and never change the inference response.
 
-Monthly partitioning is not implemented; the trigger and trade-offs are in [`notes/audit-retention.md`](notes/audit-retention.md). See [`docs/audit.md`](docs/audit.md) for enablement, retention, export, redaction, and privacy limits, and [`docs/adr/0001-request-audit.md`](docs/adr/0001-request-audit.md) for the design decision.
+Audit tables are partitioned by month (`audit_requests_YYYY_MM`) with `(request_id, created_at)` primary keys and a DEFAULT partition as a safety net. Run `uv run python scripts/audit_partitions.py --months-ahead 3` from cron to create upcoming months; it reports `blocked` and exits non-zero when DEFAULT rows for a month must be moved first. Retention still deletes rows per tenant because a partition mixes tenants. See [`notes/audit-retention.md`](notes/audit-retention.md) and [`docs/audit.md`](docs/audit.md) for enablement, retention, export, redaction, and privacy limits, and [`docs/adr/0001-request-audit.md`](docs/adr/0001-request-audit.md) for the design decision.
 
 ## Tracing
 

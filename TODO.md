@@ -170,7 +170,7 @@
 ### 实现说明（2026-10-27）
 
 - P1a–P1d 已完成并通过单元、PostgreSQL 集成、UI 与真实浏览器验证。
-- 后续进展（2026-11-05）：保留期清理、导出/删除 API、metrics、PII 正则脱敏、租户软删除已完成；按月分区、审计访问日志、备份恢复演练仍未做。
+- 后续进展（2026-11-05）：保留期清理、导出/删除 API、metrics、PII 正则脱敏、租户软删除、按月分区、审计访问日志、备份恢复演练手册均已完成。
 - 完整启用/隐私/限制说明见 `docs/audit.md`；设计取舍见 `docs/adr/0001-request-audit.md` 与 `notes/audit.md`。
 
 ## P2：可选后续
@@ -251,7 +251,7 @@
   - 范围：保留期（默认 30/90 天，按租户可配）、清理任务（CLI + 一次性任务）、导出（JSONL/CSV）、按租户/时间删除、可配置正则脱敏、清理失败告警；大表按月分区评估。
   - 验收：到期数据被清理且有指标；删除可证明（行数与对象存储均无残留）；脱敏只记录命中数量不记录原文；导出受权限控制且不落浏览器存储。
   - 进度（2026-11-04）：保留期 `GATEWAY_AUDIT_RETENTION_DAYS`（默认 90，0 关闭）+ 租户级 `audit_retention_days`（`null` 继承、`0` legal hold，迁移 `0011`）；`scripts/audit_cleanup.py` 分批清理（requests → orphan sessions），单租户失败隔离、退出码非零；`GET /api/v1/audit/export`（JSONL/CSV，keyset 流式，owner/auditor）与 `DELETE /api/v1/audit`（owner，dry-run + 计数复核 + `audit.deleted` 事件）；`GATEWAY_AUDIT_REDACT_PATTERNS` 在写入前脱敏（哈希/diff 基于脱敏后内容，只记录规则名与命中数）；指标 `gateway_audit_cleanup_rows|cleanup_failures|redactions|export_rows`。设计说明见 `notes/audit-retention.md`。
-  - 剩余：按月分区未做（触发条件见设计说明）。审计读取/导出已入库（2026-11-05：`audit.session_viewed` / `audit.request_viewed` / `audit.exported`，只记操作者、目标与过滤条件）。
+  - 剩余：无。按月分区已于 2026-11-05 完成（迁移 `0018`，主键/级联外键改为 `(request_id, created_at)`，DEFAULT 兜底，`scripts/audit_partitions.py` 轮转）；审计读取/导出已入库（`audit.session_viewed` / `audit.request_viewed` / `audit.exported`，只记操作者、目标与过滤条件）。
 
 - [ ] **G0.8 输入边界与成本护栏**
   - 现状：请求体、messages 长度、`max_tokens` 均无上限；未知字段全量透传上游。

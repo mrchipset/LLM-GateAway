@@ -12,9 +12,11 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     Numeric,
+    PrimaryKeyConstraint,
     String,
     Text,
     Uuid,
@@ -223,7 +225,7 @@ class AuditSessionRow(Base):
 class AuditRequestRow(Base):
     __tablename__ = "audit_requests"
 
-    request_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    request_id: Mapped[str] = mapped_column(String(64), nullable=False)
     session_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True),
         ForeignKey(
@@ -275,6 +277,7 @@ class AuditRequestRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     __table_args__ = (
+        PrimaryKeyConstraint("request_id", "created_at", name="pk_audit_requests_partitioned"),
         Index("ix_audit_requests_session_turn", "session_id", "turn_index"),
         Index("ix_audit_requests_tenant_created", "tenant_id", "created_at"),
         Index("ix_audit_requests_parent_request_id", "parent_request_id"),
@@ -286,15 +289,7 @@ class AuditRequestRow(Base):
 class AuditTurnDiffRow(Base):
     __tablename__ = "audit_turn_diffs"
 
-    request_id: Mapped[str] = mapped_column(
-        String(64),
-        ForeignKey(
-            "audit_requests.request_id",
-            name="fk_audit_turn_diffs_request_id",
-            ondelete="CASCADE",
-        ),
-        primary_key=True,
-    )
+    request_id: Mapped[str] = mapped_column(String(64), nullable=False)
     previous_request_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     change_type: Mapped[str] = mapped_column(String(24), nullable=False)
     common_prefix: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -305,6 +300,16 @@ class AuditTurnDiffRow(Base):
     usage_delta: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     response_change: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        PrimaryKeyConstraint("request_id", "created_at", name="pk_audit_turn_diffs_partitioned"),
+        ForeignKeyConstraint(
+            ["request_id", "created_at"],
+            ["audit_requests.request_id", "audit_requests.created_at"],
+            name="fk_audit_turn_diffs_request_id",
+            ondelete="CASCADE",
+        ),
+    )
 
 
 class UsageRow(Base):

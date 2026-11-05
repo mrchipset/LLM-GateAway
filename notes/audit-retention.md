@@ -68,13 +68,27 @@ reaches a log, metric label, or the database.
 Rejected: redacting at export/read time. The plaintext would still sit on disk, which is what the
 compliance requirement is about.
 
-### Partitioning is deferred with a trigger
+### Partitioning is by month, with a DEFAULT safety net
 
-`audit_requests` has `(tenant_id, created_at)` and the cleanup job deletes per tenant, so the
-existing index covers the scan. Monthly `PARTITION BY RANGE (created_at)` is the right answer
-above roughly 50M rows or when a single cleanup takes longer than its schedule window; until
-then it would add migration and query complexity, including a primary-key change on
-`request_id`.
+`audit_requests` and `audit_turn_diffs` are `PARTITION BY RANGE (created_at)`, one partition per
+month (`audit_requests_YYYY_MM`). PostgreSQL requires the partition key in every unique constraint,
+so both tables use `(request_id, created_at)` as the primary key, and the diff table references the
+request with a composite `(request_id, created_at)` foreign key so `ON DELETE CASCADE` keeps working
+across partitions. `scripts/audit_cleanup.py` and every query keyed by `request_id` therefore treat
+the request id as non-unique on its own; lookups by id add `ORDER BY created_at DESC LIMIT 1`.
+
+A `DEFAULT` partition catches rows for months that have no explicit partition, so a forgotten
+rotation never rejects a write. It is a safety net, not a plan: PostgreSQL refuses to create a
+monthly partition while the DEFAULT partition holds rows for that range. `scripts/audit_partitions.py`
+creates the next months, reports `blocked` when DEFAULT rows are in the way (count per table), and
+exits non-zero so the scheduler alerts.
+
+Migration `0018` rebuilds both tables: it renames the originals, creates the partitioned tables,
+creates partitions for every month that already has data plus the current and next month, copies
+rows, and drops the originals. Downgrade reverses it and restores the single-column primary keys.
+Per-tenant retention still deletes rows (it cannot drop a partition) because a partition contains
+several tenants; the benefit is smaller indexes, cheaper vacuum, and pruning when a cleanup query
+is bounded by `created_at`.
 
 ## Consequences
 
@@ -86,9 +100,16 @@ then it would add migration and query complexity, including a primary-key change
   non-zero so the scheduler can alert.
 - Redaction adds one regex pass per captured payload. With audit off (the default) it costs
   nothing; with audit on it is bounded by `audit_max_content_bytes`.
+- A lookup by `request_id` alone probes every partition's index; the audit APIs always know the
+  session or add a time window, and the composite primary key keeps the per-partition index small.
+- Missing months do not drop writes: they land in `DEFAULT`, which must be drained before the
+  monthly partition can be created. That is visible in the partition job's report.
 
 ## Open gaps
 
-- No admin UI for export or deletion; the API and CLI are the interface.
+- Partition rotation is an external job (`scripts/audit_partitions.py`) plus the cleanup job; the
+  application never runs DDL, so a deployment without a scheduler relies on the DEFAULT partition.
+- No automated DEFAULT-to-monthly row move; the job reports it and exits non-zero, and moving rows
+  is a manual `DELETE ... RETURNING`/`INSERT` or a table rebuild.
 - Login success/failure events still go to logs and metrics only, not to `admin_audit_events`.
 - No per-key retention: retention is per tenant because that is the unit that owns the contract.

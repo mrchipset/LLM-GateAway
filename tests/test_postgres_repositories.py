@@ -211,6 +211,7 @@ def _audit_diff(
     *,
     request_id: str,
     previous_request_id: str | None = None,
+    created_at: datetime | None = None,
 ) -> AuditTurnDiffRecord:
     return AuditTurnDiffRecord(
         request_id=request_id,
@@ -223,7 +224,7 @@ def _audit_diff(
         parameter_changes={"temperature": {"from": None, "to": 0.2}},
         usage_delta={"total_tokens": 15},
         response_change={"content_changed": True},
-        created_at=BASE + timedelta(seconds=index),
+        created_at=created_at if created_at is not None else BASE + timedelta(seconds=index),
     )
 
 
@@ -2384,7 +2385,9 @@ async def test_delete_requests_before_deletes_only_the_tenant_window(
             session=old_session,
             request=request,
             diff=_audit_diff(
-                int(request.request_id.rsplit("-", 1)[1]), request_id=request.request_id
+                int(request.request_id.rsplit("-", 1)[1]),
+                request_id=request.request_id,
+                created_at=request.created_at,
             ),
         )
 
@@ -2796,3 +2799,103 @@ async def test_admin_oidc_subject_lookup(database: Database) -> None:
     assert stored == admin
     assert await database.admins.get_admin_by_oidc_subject("missing") is None
     assert await database.admins.get_admin_by_username(admin.username) == admin
+
+
+async def test_audit_tables_are_partitioned_by_month_with_composite_keys(
+    migrated_schema: None,
+) -> None:
+    engine = create_async_engine(_test_url())
+    try:
+        async with engine.connect() as connection:
+            requests_strategy = await connection.scalar(
+                text(
+                    "SELECT partstrat::text FROM pg_partitioned_table "
+                    "WHERE partrelid = 'audit_requests'::regclass"
+                )
+            )
+            diffs_strategy = await connection.scalar(
+                text(
+                    "SELECT partstrat::text FROM pg_partitioned_table "
+                    "WHERE partrelid = 'audit_turn_diffs'::regclass"
+                )
+            )
+            default_children = (
+                await connection.execute(
+                    text(
+                        "SELECT child.relname FROM pg_inherits "
+                        "JOIN pg_class child ON child.oid = inhrelid "
+                        "WHERE inhparent IN "
+                        "('audit_requests'::regclass, 'audit_turn_diffs'::regclass) "
+                        "AND child.relname LIKE '%_default'"
+                    )
+                )
+            ).scalars()
+            request_key = (
+                await connection.execute(
+                    text(
+                        "SELECT a.attname FROM pg_constraint c "
+                        "JOIN unnest(c.conkey) WITH ORDINALITY AS k(attnum, ord) ON true "
+                        "JOIN pg_attribute a "
+                        "ON a.attrelid = c.conrelid AND a.attnum = k.attnum "
+                        "WHERE c.conrelid = 'audit_requests'::regclass AND c.contype = 'p' "
+                        "ORDER BY k.ord"
+                    )
+                )
+            ).scalars()
+            diff_key = (
+                await connection.execute(
+                    text(
+                        "SELECT a.attname FROM pg_constraint c "
+                        "JOIN unnest(c.conkey) WITH ORDINALITY AS k(attnum, ord) ON true "
+                        "JOIN pg_attribute a "
+                        "ON a.attrelid = c.conrelid AND a.attnum = k.attnum "
+                        "WHERE c.conrelid = 'audit_turn_diffs'::regclass AND c.contype = 'p' "
+                        "ORDER BY k.ord"
+                    )
+                )
+            ).scalars()
+            key_columns = sorted(request_key.all())
+            diff_columns = sorted(diff_key.all())
+            defaults = sorted(default_children.all())
+    finally:
+        await engine.dispose()
+
+    assert requests_strategy == "r", "audit_requests must be range partitioned"
+    assert diffs_strategy == "r", "audit_turn_diffs must be range partitioned"
+    assert defaults == ["audit_requests_default", "audit_turn_diffs_default"]
+    assert key_columns == ["created_at", "request_id"]
+    assert diff_columns == ["created_at", "request_id"]
+
+
+async def test_audit_export_spans_month_partitions(database: Database) -> None:
+    tenant = await database.tenants.create_tenant(_tenant(1))
+    key = _key(1, tenant_id=tenant.id)
+    await database.api_keys.create_key(key)
+    session = _audit_session(0, tenant_id=tenant.id, api_key_id=key.id, request_count=2)
+
+    january = datetime(2026, 1, 15, tzinfo=UTC)
+    november = datetime(2026, 11, 15, tzinfo=UTC)
+    for index, created_at in enumerate((january, november)):
+        await database.audit.record_turn(
+            session=session,
+            request=_audit_request(
+                index,
+                session_id=session.id,
+                tenant_id=tenant.id,
+                api_key_id=key.id,
+                created_at=created_at,
+            ),
+            diff=None,
+        )
+
+    exported = [
+        record.request_id
+        async for record in database.audit.iter_requests_for_export(
+            tenant_id=tenant.id,
+            since=datetime(2026, 1, 1, tzinfo=UTC),
+            until=datetime(2027, 1, 1, tzinfo=UTC),
+            batch_size=1,
+        )
+    ]
+
+    assert exported == ["req-0", "req-1"], "keyset paging must cross partitions"

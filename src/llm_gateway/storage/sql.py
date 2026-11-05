@@ -6,7 +6,7 @@ from decimal import Decimal
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import String, and_, case, delete, func, literal, or_, select, text, update
+from sqlalchemy import String, and_, case, delete, func, literal, or_, select, text, tuple_, update
 from sqlalchemy import cast as sa_cast
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import CursorResult
@@ -1454,12 +1454,22 @@ class SqlAlchemyAuditRepository:
 
     async def get_request(self, *, request_id: str) -> AuditRequestRecord | None:
         async with self._session_factory() as db, db.begin():
-            row = await db.get(AuditRequestRow, request_id)
+            row = await db.scalar(
+                select(AuditRequestRow)
+                .where(AuditRequestRow.request_id == request_id)
+                .order_by(AuditRequestRow.created_at.desc())
+                .limit(1)
+            )
             return _to_audit_request(row) if row is not None else None
 
     async def get_diff(self, *, request_id: str) -> AuditTurnDiffRecord | None:
         async with self._session_factory() as db, db.begin():
-            row = await db.get(AuditTurnDiffRow, request_id)
+            row = await db.scalar(
+                select(AuditTurnDiffRow)
+                .where(AuditTurnDiffRow.request_id == request_id)
+                .order_by(AuditTurnDiffRow.created_at.desc())
+                .limit(1)
+            )
             return _to_audit_diff(row) if row is not None else None
 
     async def delete_requests_before(
@@ -1467,7 +1477,7 @@ class SqlAlchemyAuditRepository:
     ) -> int:
         _validate_page(limit=batch_size, offset=0)
         victims = (
-            select(AuditRequestRow.request_id)
+            select(AuditRequestRow.request_id, AuditRequestRow.created_at)
             .where(
                 AuditRequestRow.tenant_id == tenant_id,
                 AuditRequestRow.created_at < cutoff,
@@ -1477,7 +1487,9 @@ class SqlAlchemyAuditRepository:
         )
         async with self._session_factory() as db, db.begin():
             result = await db.execute(
-                delete(AuditRequestRow).where(AuditRequestRow.request_id.in_(victims))
+                delete(AuditRequestRow).where(
+                    tuple_(AuditRequestRow.request_id, AuditRequestRow.created_at).in_(victims)
+                )
             )
             return _deleted_rows(result)
 

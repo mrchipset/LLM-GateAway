@@ -129,6 +129,17 @@ uv run python scripts/audit_cleanup.py --tenant <uuid> --batch-size 2000 --max-b
 
 脚本按租户顺序执行，单租户失败只记录 `audit_cleanup_failed` 与 `gateway_audit_cleanup_failures_total`，不阻断其他租户；有失败时退出码为 1，便于调度器告警。`--dry-run` 只输出待删行数。
 
+### 按月分区
+
+`audit_requests` 与 `audit_turn_diffs` 按 `created_at` 月度分区（迁移 `0018`），主键与级联外键都是 `(request_id, created_at)`。DEFAULT 分区兜底未知月份；分区轮转由独立任务完成：
+
+```bash
+uv run python scripts/audit_partitions.py --dry-run
+uv run python scripts/audit_partitions.py --months-ahead 3
+```
+
+脚本创建当月及后续 N 个月的分区。若某月的数据已经落在 DEFAULT 分区，PostgreSQL 不允许直接创建该月分区，脚本会标记 `blocked` 并给出阻塞行数、以非零退出码告警，需要先手工把这些行迁到月度分区（或重建表）。保留期清理仍按行删除，因为一个月分区里混有多个租户；分区带来的是更小的索引、更便宜的 vacuum 和按月裁剪的扫描。
+
 ## 脱敏
 
 `GATEWAY_AUDIT_REDACT_PATTERNS` 接受 JSON 数组，例如：
