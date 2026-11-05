@@ -2,9 +2,15 @@ import { useRef, useState } from 'react';
 
 import type { ModelSummary } from '../api/client';
 import type { ModelsQuery } from '../hooks/useModels';
-import { formatCreatedAt, formatUpdatedAt } from '../lib/format';
+import {
+  formatCompactNumber,
+  formatCreatedAt,
+  formatExactNumber,
+  formatUpdatedAt,
+} from '../lib/format';
 import { Button } from './Button';
-import { CheckCircleIcon, RefreshIcon, TagIcon, TrashIcon } from './Icons';
+import { CheckCircleIcon, DeployIcon, RefreshIcon, TagIcon, TrashIcon } from './Icons';
+import { DeploymentDialog } from './DeploymentDialog';
 import { ModelCreateDialog } from './ModelCreateDialog';
 import { ModelDeleteDialog } from './ModelDeleteDialog';
 import { ModelPricingDialog } from './ModelPricingDialog';
@@ -18,6 +24,7 @@ interface ModelsPanelProps {
 
 type DeleteModelHandler = (model: ModelSummary, trigger: HTMLButtonElement) => void;
 type PriceModelHandler = (model: ModelSummary, trigger: HTMLButtonElement) => void;
+type DeploymentsHandler = (model: ModelSummary, trigger: HTMLButtonElement) => void;
 
 export function ModelsPanel({ query }: ModelsPanelProps) {
   const { canWrite } = useAdminSession();
@@ -25,9 +32,11 @@ export function ModelsPanel({ query }: ModelsPanelProps) {
   const [registerOpen, setRegisterOpen] = useState(false);
   const [deletingModel, setDeletingModel] = useState<ModelSummary | null>(null);
   const [pricingModel, setPricingModel] = useState<ModelSummary | null>(null);
+  const [deploymentsModel, setDeploymentsModel] = useState<ModelSummary | null>(null);
   const registerButtonRef = useRef<HTMLButtonElement>(null);
   const deleteTriggerRef = useRef<HTMLElement | null>(null);
   const priceTriggerRef = useRef<HTMLElement | null>(null);
+  const deploymentTriggerRef = useRef<HTMLElement | null>(null);
 
   const count =
     query.status === 'success'
@@ -53,6 +62,12 @@ export function ModelsPanel({ query }: ModelsPanelProps) {
     setNotice(null);
     priceTriggerRef.current = trigger;
     setPricingModel(model);
+  };
+
+  const handleDeployments = (model: ModelSummary, trigger: HTMLButtonElement) => {
+    setNotice(null);
+    deploymentTriggerRef.current = trigger;
+    setDeploymentsModel(model);
   };
 
   return (
@@ -98,6 +113,7 @@ export function ModelsPanel({ query }: ModelsPanelProps) {
           onRegister={openRegister}
           onDelete={handleDelete}
           onPricing={handlePricing}
+          onDeployments={handleDeployments}
         />
       </div>
 
@@ -134,6 +150,14 @@ export function ModelsPanel({ query }: ModelsPanelProps) {
           onClose={() => setPricingModel(null)}
         />
       )}
+
+      {canWrite && deploymentsModel !== null && (
+        <DeploymentDialog
+          model={deploymentsModel}
+          returnFocusRef={deploymentTriggerRef}
+          onClose={() => setDeploymentsModel(null)}
+        />
+      )}
     </Panel>
   );
 }
@@ -144,9 +168,17 @@ interface ModelsContentProps {
   onRegister: () => void;
   onDelete: DeleteModelHandler;
   onPricing: PriceModelHandler;
+  onDeployments: DeploymentsHandler;
 }
 
-function ModelsContent({ query, canWrite, onRegister, onDelete, onPricing }: ModelsContentProps) {
+function ModelsContent({
+  query,
+  canWrite,
+  onRegister,
+  onDelete,
+  onPricing,
+  onDeployments,
+}: ModelsContentProps) {
   if (query.isPending) return <ModelsSkeleton />;
   if (query.status === 'error') {
     return (
@@ -179,6 +211,7 @@ function ModelsContent({ query, canWrite, onRegister, onDelete, onPricing }: Mod
           canWrite={canWrite}
           onDelete={onDelete}
           onPricing={onPricing}
+          onDeployments={onDeployments}
         />
       )}
     </>
@@ -231,11 +264,13 @@ function ModelsTable({
   canWrite,
   onDelete,
   onPricing,
+  onDeployments,
 }: {
   models: ModelSummary[];
   canWrite: boolean;
   onDelete: DeleteModelHandler;
   onPricing: PriceModelHandler;
+  onDeployments: DeploymentsHandler;
 }) {
   return (
     <>
@@ -275,6 +310,7 @@ function ModelsTable({
                 canWrite={canWrite}
                 onDelete={onDelete}
                 onPricing={onPricing}
+                onDeployments={onDeployments}
               />
             ))}
           </tbody>
@@ -288,6 +324,7 @@ function ModelsTable({
             canWrite={canWrite}
             onDelete={onDelete}
             onPricing={onPricing}
+            onDeployments={onDeployments}
           />
         ))}
       </ul>
@@ -295,17 +332,35 @@ function ModelsTable({
   );
 }
 
+function modelLimitSummary(model: ModelSummary): { summary: string; exact: string } | null {
+  const parts: string[] = [];
+  const exact: string[] = [];
+  if (model.requests_per_minute !== null && model.requests_per_minute !== undefined) {
+    parts.push(`${formatCompactNumber(model.requests_per_minute)} req/min`);
+    exact.push(`${formatExactNumber(model.requests_per_minute)} requests per minute`);
+  }
+  if (model.tokens_per_minute !== null && model.tokens_per_minute !== undefined) {
+    parts.push(`${formatCompactNumber(model.tokens_per_minute)} tok/min`);
+    exact.push(`${formatExactNumber(model.tokens_per_minute)} tokens per minute`);
+  }
+  if (parts.length === 0) return null;
+  return { summary: parts.join(' · '), exact: `Model limits: ${exact.join(', ')}` };
+}
+
 function ModelRow({
   model,
   canWrite,
   onDelete,
   onPricing,
+  onDeployments,
 }: {
   model: ModelSummary;
   canWrite: boolean;
   onDelete: DeleteModelHandler;
   onPricing: PriceModelHandler;
+  onDeployments: DeploymentsHandler;
 }) {
+  const limits = modelLimitSummary(model);
   return (
     <tr
       className={`transition-colors hover:bg-surface-sunken/40 ${
@@ -321,6 +376,14 @@ function ModelRow({
       <td className="break-words py-2.5 pr-3 align-top">{model.provider}</td>
       <td className="break-words py-2.5 pr-3 align-top font-mono text-[12px]">
         {model.upstream_model}
+        {limits !== null && (
+          <span
+            className="mt-0.5 block break-words font-mono text-[10px] tabular-nums text-ink-muted"
+            title={limits.exact}
+          >
+            {limits.summary}
+          </span>
+        )}
       </td>
       <td className="py-2.5 pr-3 align-top">
         <ModelStatusBadge enabled={model.enabled} />
@@ -331,6 +394,15 @@ function ModelRow({
       {canWrite && (
         <td className="py-2.5 text-right align-top">
           <div className="flex justify-end gap-0.5">
+            <Button
+              variant="ghost"
+              onClick={(event) => onDeployments(model, event.currentTarget)}
+              aria-label={`Deployments for ${model.id}`}
+              title="Deployments"
+              className="shrink-0 px-2 py-1 text-[12px]"
+            >
+              <DeployIcon className="size-3.5" />
+            </Button>
             <Button
               variant="ghost"
               onClick={(event) => onPricing(model, event.currentTarget)}
@@ -361,12 +433,15 @@ function ModelCard({
   canWrite,
   onDelete,
   onPricing,
+  onDeployments,
 }: {
   model: ModelSummary;
   canWrite: boolean;
   onDelete: DeleteModelHandler;
   onPricing: PriceModelHandler;
+  onDeployments: DeploymentsHandler;
 }) {
+  const limits = modelLimitSummary(model);
   return (
     <li className={`py-3 ${model.enabled ? '' : 'bg-surface-sunken/30'}`}>
       <div className="flex items-start justify-between gap-3">
@@ -388,13 +463,30 @@ function ModelCard({
         <dd className="break-words">{model.provider}</dd>
         <dt className="text-ink-muted">Upstream</dt>
         <dd className="break-words font-mono text-[11.5px]">{model.upstream_model}</dd>
+        {limits !== null && (
+          <>
+            <dt className="text-ink-muted">Limits</dt>
+            <dd className="break-words font-mono text-[11px]" title={limits.exact}>
+              {limits.summary}
+            </dd>
+          </>
+        )}
         <dt className="text-ink-muted">Created</dt>
         <dd className="font-mono text-[11px] tabular-nums">
           <time dateTime={model.created_at}>{formatCreatedAt(model.created_at)}</time>
         </dd>
       </dl>
       {canWrite && (
-        <div className="mt-2 flex justify-end gap-2">
+        <div className="mt-2 flex flex-wrap justify-end gap-2">
+          <Button
+            variant="ghost"
+            onClick={(event) => onDeployments(model, event.currentTarget)}
+            aria-label={`Deployments for ${model.id}`}
+            className="shrink-0 px-2 py-1 text-[12px]"
+          >
+            <DeployIcon className="size-3.5" />
+            <span>Deployments</span>
+          </Button>
           <Button
             variant="ghost"
             onClick={(event) => onPricing(model, event.currentTarget)}

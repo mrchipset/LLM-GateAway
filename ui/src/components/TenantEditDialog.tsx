@@ -2,6 +2,7 @@ import { useId, useRef, useState, type FormEvent, type RefObject } from 'react';
 
 import type { TenantLimitsPatch, TenantSummary } from '../api/client';
 import { useUpdateTenantLimits } from '../hooks/useTenantMutations';
+import { countErrorText, parseCountChange, type CountChangeResult } from '../lib/limits';
 import { Button } from './Button';
 import { CloseIcon } from './Icons';
 import { Modal } from './Modal';
@@ -14,34 +15,16 @@ interface TenantEditDialogProps {
   onSaved: (message: string) => void;
 }
 
-type LimitFieldResult =
-  | { status: 'unchanged' }
-  | { status: 'set'; value: number | null }
-  | { status: 'invalid'; message: string };
-
 interface LimitFieldErrors {
   quota?: string;
   rate?: string;
+  tokens?: string;
+  concurrent?: string;
+  retention?: string;
 }
 
-function limitToInput(value: number | null): string {
-  return value === null ? '' : String(value);
-}
-
-function parseLimitField(raw: string, original: string): LimitFieldResult {
-  const value = raw.trim();
-  if (value === original) return { status: 'unchanged' };
-  if (value === '') return { status: 'set', value: null };
-  if (!/^\d+$/.test(value)) {
-    return { status: 'invalid', message: 'Enter a whole number of 1 or more.' };
-  }
-
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed < 1) {
-    return { status: 'invalid', message: 'Enter a whole number of 1 or more.' };
-  }
-
-  return { status: 'set', value: parsed };
+function limitToInput(value: number | null | undefined): string {
+  return value === null || value === undefined ? '' : String(value);
 }
 
 export function TenantEditDialog({
@@ -52,45 +35,77 @@ export function TenantEditDialog({
 }: TenantEditDialogProps) {
   const originalQuota = limitToInput(tenant.monthly_token_quota);
   const originalRate = limitToInput(tenant.requests_per_minute);
+  const originalTokens = limitToInput(tenant.tokens_per_minute);
+  const originalConcurrent = limitToInput(tenant.max_concurrent_requests);
+  const originalRetention = limitToInput(tenant.audit_retention_days);
   const [quota, setQuota] = useState(originalQuota);
   const [rate, setRate] = useState(originalRate);
+  const [tokens, setTokens] = useState(originalTokens);
+  const [concurrent, setConcurrent] = useState(originalConcurrent);
+  const [retention, setRetention] = useState(originalRetention);
   const [auditEnabled, setAuditEnabled] = useState(tenant.audit_enabled);
   const [fieldErrors, setFieldErrors] = useState<LimitFieldErrors>({});
   const titleId = useId();
   const quotaId = useId();
   const rateId = useId();
+  const tokensId = useId();
+  const concurrentId = useId();
+  const retentionId = useId();
   const auditLabelId = useId();
   const auditHintId = useId();
   const hintId = useId();
+  const retentionHintId = useId();
   const quotaErrorId = useId();
   const rateErrorId = useId();
+  const tokensErrorId = useId();
+  const concurrentErrorId = useId();
+  const retentionErrorId = useId();
   const quotaRef = useRef<HTMLInputElement>(null);
   const updateMutation = useUpdateTenantLimits();
 
   const quotaDirty = quota.trim() !== originalQuota;
   const rateDirty = rate.trim() !== originalRate;
+  const tokensDirty = tokens.trim() !== originalTokens;
+  const concurrentDirty = concurrent.trim() !== originalConcurrent;
+  const retentionDirty = retention.trim() !== originalRetention;
   const auditDirty = auditEnabled !== tenant.audit_enabled;
-  const limitsDirty = quotaDirty || rateDirty;
+  const limitsDirty = quotaDirty || rateDirty || tokensDirty || concurrentDirty || retentionDirty;
   const hasChanges = limitsDirty || auditDirty;
 
   const clearing: string[] = [];
   if (quotaDirty && quota.trim() === '') clearing.push('monthly token quota');
   if (rateDirty && rate.trim() === '') clearing.push('requests per minute');
+  if (tokensDirty && tokens.trim() === '') clearing.push('tokens per minute');
+  if (concurrentDirty && concurrent.trim() === '') clearing.push('concurrency');
+
+  const clearFieldError = (field: keyof LimitFieldErrors) => {
+    setFieldErrors((current) => ({ ...current, [field]: undefined }));
+    if (updateMutation.isError) updateMutation.reset();
+  };
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
-    const quotaResult = parseLimitField(quota, originalQuota);
-    const rateResult = parseLimitField(rate, originalRate);
+    const quotaResult = parseCountChange(quota, originalQuota, 1);
+    const rateResult = parseCountChange(rate, originalRate, 1);
+    const tokensResult = parseCountChange(tokens, originalTokens, 1);
+    const concurrentResult = parseCountChange(concurrent, originalConcurrent, 1);
+    const retentionResult = parseCountChange(retention, originalRetention, 0);
     const nextErrors: LimitFieldErrors = {};
-    if (quotaResult.status === 'invalid') nextErrors.quota = quotaResult.message;
-    if (rateResult.status === 'invalid') nextErrors.rate = rateResult.message;
+    if (quotaResult.status === 'invalid') nextErrors.quota = countErrorText(1);
+    if (rateResult.status === 'invalid') nextErrors.rate = countErrorText(1);
+    if (tokensResult.status === 'invalid') nextErrors.tokens = countErrorText(1);
+    if (concurrentResult.status === 'invalid') nextErrors.concurrent = countErrorText(1);
+    if (retentionResult.status === 'invalid') nextErrors.retention = countErrorText(0);
     setFieldErrors(nextErrors);
-    if (nextErrors.quota !== undefined || nextErrors.rate !== undefined) return;
+    if (Object.values(nextErrors).some((message) => message !== undefined)) return;
 
     const patch: TenantLimitsPatch = {};
-    if (quotaResult.status === 'set') patch.monthly_token_quota = quotaResult.value;
-    if (rateResult.status === 'set') patch.requests_per_minute = rateResult.value;
+    applyPatch(patch, 'monthly_token_quota', quotaResult);
+    applyPatch(patch, 'requests_per_minute', rateResult);
+    applyPatch(patch, 'tokens_per_minute', tokensResult);
+    applyPatch(patch, 'max_concurrent_requests', concurrentResult);
+    applyPatch(patch, 'audit_retention_days', retentionResult);
     if (auditDirty) patch.audit_enabled = auditEnabled;
     if (Object.keys(patch).length === 0) return;
 
@@ -110,6 +125,14 @@ export function TenantEditDialog({
 
   const quotaDescribedBy = fieldErrors.quota === undefined ? hintId : `${hintId} ${quotaErrorId}`;
   const rateDescribedBy = fieldErrors.rate === undefined ? hintId : `${hintId} ${rateErrorId}`;
+  const tokensDescribedBy =
+    fieldErrors.tokens === undefined ? hintId : `${hintId} ${tokensErrorId}`;
+  const concurrentDescribedBy =
+    fieldErrors.concurrent === undefined ? hintId : `${hintId} ${concurrentErrorId}`;
+  const retentionDescribedBy =
+    fieldErrors.retention === undefined
+      ? retentionHintId
+      : `${retentionHintId} ${retentionErrorId}`;
 
   return (
     <Modal
@@ -167,8 +190,7 @@ export function TenantEditDialog({
               value={quota}
               onChange={(event) => {
                 setQuota(event.target.value);
-                setFieldErrors((current) => ({ ...current, quota: undefined }));
-                if (updateMutation.isError) updateMutation.reset();
+                clearFieldError('quota');
               }}
               disabled={updateMutation.isPending}
               placeholder="No limit"
@@ -196,8 +218,7 @@ export function TenantEditDialog({
               value={rate}
               onChange={(event) => {
                 setRate(event.target.value);
-                setFieldErrors((current) => ({ ...current, rate: undefined }));
-                if (updateMutation.isError) updateMutation.reset();
+                clearFieldError('rate');
               }}
               disabled={updateMutation.isPending}
               placeholder="No limit"
@@ -211,11 +232,103 @@ export function TenantEditDialog({
               </p>
             )}
           </div>
+
+          <div>
+            <label htmlFor={tokensId} className="block text-[12px] font-medium text-ink">
+              Tokens per minute
+            </label>
+            <input
+              id={tokensId}
+              type="number"
+              min={1}
+              step={1}
+              inputMode="numeric"
+              value={tokens}
+              onChange={(event) => {
+                setTokens(event.target.value);
+                clearFieldError('tokens');
+              }}
+              disabled={updateMutation.isPending}
+              placeholder="No limit"
+              aria-invalid={fieldErrors.tokens !== undefined}
+              aria-describedby={tokensDescribedBy}
+              className="mt-1 block w-full min-w-0 rounded-md border border-line-strong bg-white px-2.5 py-1.5 font-mono text-[13px] tabular-nums text-ink placeholder:font-sans placeholder:text-ink-muted/70 focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/15 disabled:cursor-not-allowed disabled:bg-surface-sunken disabled:text-ink-muted"
+            />
+            {fieldErrors.tokens !== undefined && (
+              <p id={tokensErrorId} role="alert" className="mt-1 text-xs text-danger">
+                {fieldErrors.tokens}
+              </p>
+            )}
+          </div>
+
+          <div>
+            <label htmlFor={concurrentId} className="block text-[12px] font-medium text-ink">
+              Max concurrent requests
+            </label>
+            <input
+              id={concurrentId}
+              type="number"
+              min={1}
+              step={1}
+              inputMode="numeric"
+              value={concurrent}
+              onChange={(event) => {
+                setConcurrent(event.target.value);
+                clearFieldError('concurrent');
+              }}
+              disabled={updateMutation.isPending}
+              placeholder="No limit"
+              aria-invalid={fieldErrors.concurrent !== undefined}
+              aria-describedby={concurrentDescribedBy}
+              className="mt-1 block w-full min-w-0 rounded-md border border-line-strong bg-white px-2.5 py-1.5 font-mono text-[13px] tabular-nums text-ink placeholder:font-sans placeholder:text-ink-muted/70 focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/15 disabled:cursor-not-allowed disabled:bg-surface-sunken disabled:text-ink-muted"
+            />
+            {fieldErrors.concurrent !== undefined && (
+              <p id={concurrentErrorId} role="alert" className="mt-1 text-xs text-danger">
+                {fieldErrors.concurrent}
+              </p>
+            )}
+          </div>
+        </div>
+
+        <div className="mt-3">
+          <label htmlFor={retentionId} className="block text-[12px] font-medium text-ink">
+            Audit retention (days)
+          </label>
+          <input
+            id={retentionId}
+            type="number"
+            min={0}
+            step={1}
+            inputMode="numeric"
+            value={retention}
+            onChange={(event) => {
+              setRetention(event.target.value);
+              clearFieldError('retention');
+            }}
+            disabled={updateMutation.isPending}
+            placeholder="Inherit default"
+            aria-invalid={fieldErrors.retention !== undefined}
+            aria-describedby={retentionDescribedBy}
+            className="mt-1 block w-full min-w-0 rounded-md border border-line-strong bg-white px-2.5 py-1.5 font-mono text-[13px] tabular-nums text-ink placeholder:font-sans placeholder:text-ink-muted/70 focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/15 disabled:cursor-not-allowed disabled:bg-surface-sunken disabled:text-ink-muted sm:max-w-xs"
+          />
+          <p id={retentionHintId} className="mt-1 text-[11px] leading-4 text-ink-muted">
+            留空表示继承全局默认保留期；0 表示合规保留（永不自动删除）；正数表示保留天数。
+          </p>
+          {fieldErrors.retention !== undefined && (
+            <p id={retentionErrorId} role="alert" className="mt-1 text-xs text-danger">
+              {fieldErrors.retention}
+            </p>
+          )}
         </div>
 
         {clearing.length > 0 && (
           <p className="mt-3 rounded border border-warn/30 bg-warn-soft px-2.5 py-1.5 text-[11.5px] text-warn">
             Will clear: {clearing.join(' and ')}.
+          </p>
+        )}
+        {retentionDirty && retention.trim() === '' && (
+          <p className="mt-3 rounded border border-line bg-surface-sunken/60 px-2.5 py-1.5 text-[11.5px] text-ink-muted">
+            Audit retention will use the global default.
           </p>
         )}
 
@@ -281,4 +394,16 @@ export function TenantEditDialog({
       </form>
     </Modal>
   );
+}
+
+type PatchKey =
+  | 'monthly_token_quota'
+  | 'requests_per_minute'
+  | 'tokens_per_minute'
+  | 'max_concurrent_requests'
+  | 'audit_retention_days';
+
+function applyPatch(patch: TenantLimitsPatch, key: PatchKey, result: CountChangeResult): void {
+  if (result.status !== 'set') return;
+  patch[key] = result.value;
 }

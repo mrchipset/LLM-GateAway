@@ -279,6 +279,9 @@ Invoke-RestMethod -Method Patch `
 
 - `monthly_token_quota`: cumulative upstream-reported `total_tokens` in the UTC calendar month. Once reached, `POST /v1/chat/completions` returns 429 `tenant_quota_exceeded`.
 - `requests_per_minute`: a token bucket (capacity and refill from the limit). Excess requests return 429 `rate_limited` with `Retry-After` (seconds).
+- `tokens_per_minute`: a post-paid token bucket; the reported usage is charged after the response, so one request can overshoot and the next returns 429 `token_rate_limited`.
+- `max_concurrent_requests`: in-flight lease cap; exhaustion returns 429 `concurrency_limited`.
+- `audit_retention_days`: `null` inherits `GATEWAY_AUDIT_RETENTION_DAYS`, `0` is a legal hold, a positive value overrides the default.
 - PATCH only writes the fields present in the body; an explicit `null` clears that limit.
 - Quotas are soft: they are checked before the request, so concurrent or in-flight requests can slightly overshoot, and usage write failures can cause drift.
 - Rejected requests (rate-limited or over quota) do not create usage records.
@@ -699,10 +702,11 @@ The console exposes the sections your role can use:
 
 The Models tab provides:
 
-- Register a model (id, provider, upstream model, enabled) with client-side validation mirroring the API; provider configuration is still a backend concern.
+- Register a model (id, provider, upstream model, enabled, optional RPM/TPM) with client-side validation mirroring the API; provider configuration is still a backend concern.
 - Delete a model with confirmation; deleting it also removes it from every tenant allowlist.
 - Manage the per-model price list: versions newest first, with an append form (prices are per million tokens and a new version applies from its effective date).
-- The registry list with provider, upstream model, status, and creation time.
+- Manage deployments per model: weighted routing, per-deployment credential env names and base URLs, enable/disable, and deletion, with a note that failover and cooldown apply.
+- The registry list with provider, upstream model, status, limits, and creation time.
 
 The usage panel provides:
 
@@ -715,11 +719,12 @@ The usage panel provides:
 
 The Access tab manages tenants and API keys:
 
-- Create tenants and edit the monthly token quota / requests-per-minute limit; empty input clears a limit.
+- Create tenants and edit the monthly token quota, requests-per-minute, tokens-per-minute, max concurrent requests, and audit retention (empty inherits the global retention; `0` is a legal hold); empty input clears a limit.
 - Set each tenant's model access policy (`All models` or an explicit allowlist) in a dedicated dialog. The dialog shows an explicit warning when an empty allowlist would block every model.
 - Manage each tenant's plan (tokens, overage switch) and monthly cost budget, with the current period summary: used / covered / billable tokens, list and billed cost, and budget remaining.
-- Create keys per tenant with an optional expiry. The plaintext is shown once, can be copied, and is never written to storage, the URL, or the query cache; closing an uncopied dialog asks for confirmation.
+- Create keys per tenant with an optional expiry and optional per-key RPM / TPM / concurrency limits. The plaintext is shown once, can be copied, and is never written to storage, the URL, or the query cache; closing an uncopied dialog asks for confirmation. The key list shows configured limits.
 - Revoke keys with confirmation. Revoked and expired keys are labeled, and only non-revoked keys offer the revoke action.
+- Export audit data (owner/auditor) and delete it permanently (owner) from the Audit panel: export streams to a downloaded file, never browser storage; deletion previews the count first and requires a second confirmation.
 
 The Admins section (owner) manages admin accounts: create, change role or display name, deactivate, and reset passwords. Passwords are write-only and a reset revokes that admin's sessions. The Admin audit section (owner/auditor) lists management actions with actor, target, before/after business fields, and request id.
 
@@ -780,11 +785,11 @@ design.md            LLM-GateAway design guidance
 ## Known limitations
 
 - Only OpenAI, DeepSeek (OpenAI-compatible), and the fake provider are implemented; Anthropic, Bedrock, Vertex, and other non-OpenAI protocols are not.
-- Each model maps to a single upstream model; no multi-deployment, weights, fallback, or cooldown.
-- No invoicing, per-key or per-model budgets, or burst shaping (token bucket); quotas and budgets are soft against concurrent requests. There is no pre-call reservation by design: a tenant can overshoot by the usage of requests already in flight when the limit is crossed.
-- Rate limiting uses a fixed 60-second window at tenant level only; the memory backend counts per process.
-- Creating a key requires `tenant_id` (a breaking change for old callers); there is no tenant delete or rename API.
-- Model access is tenant-scoped only: no per-key scoping and no per-model rate limits.
+- Multi-deployment routing exists (weights, failover, cooldown), but deployments cannot change provider or name after creation; per-deployment usage attribution is still provider-scoped.
+- No invoicing, per-key or per-model budgets; quotas and budgets are soft against concurrent requests. There is no pre-call reservation by design: a tenant can overshoot by the usage of requests already in flight when the limit is crossed.
+- Rate limits are token buckets for tenant, key, and model. Per-key/model/TPM/concurrency state is shared only with `GATEWAY_RATE_LIMIT_BACKEND=redis`; the `storage` backend keeps those scopes process-local, and its tenant counter is a fixed window.
+- Creating a key requires `tenant_id` (a breaking change for old callers); there is no tenant delete or rename API, and no endpoint to edit an existing key's limits.
+- Model access is tenant-scoped only: no per-key model scoping. Rate limits are per key and per model, but tenant model access cannot be narrowed to a key.
 - The console authenticates with admin sessions; the master key remains available for scripts and break-glass, and it is not accepted from the browser UI.
 - `usage_records` has no retention or archival job and grows with traffic; cost is computed and stored per request, but there is no invoicing, no currency conversion, and no multi-currency price list.
 - Tracing covers the server span and per-attempt upstream spans only: no database spans and no tail-based sampling.
@@ -792,8 +797,8 @@ design.md            LLM-GateAway design guidance
 - A stream that disconnects before usage arrives leaves no record; write timeouts or failures only log a warning.
 - Model configuration supports create, list, and delete only; changing it requires delete and recreate.
 - `/v1/models` returns at most 1000 entries; the management API uses offset pagination.
-- Every authenticated inference request writes `last_used_at`; high-throughput deployments should sample or batch it.
-- The console cannot edit an existing model (delete and recreate instead), and the audit panel is read-only: no export/delete or retention UI, and the content budget is a global environment variable. The usage panel is read-only with daily granularity, caps keys and tenants at 100 each, and labels the final bar as today so far. Tenant delete/rename is not available.
+- `last_used_at` is sampled per `GATEWAY_LAST_USED_SAMPLE_SECONDS`; the sample window divides across workers, which is acceptable for a display field.
+- The console can manage deployments, limits, and audit export/retention, but cannot edit an existing model (delete and recreate instead) or an existing key's limits (no backend endpoint). The usage panel is read-only with daily granularity, caps keys and tenants at 100 each, and labels the final bar as today so far. Tenant delete/rename is not available.
 - Local `uv` runs require a manual `alembic upgrade head`; Compose runs it through the one-shot `migrate` service, and the application process itself never migrates.
 
 ## Related documents

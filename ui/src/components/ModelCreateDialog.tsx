@@ -2,6 +2,7 @@ import { useId, useRef, useState, type FormEvent, type RefObject } from 'react';
 
 import type { ModelProvider, ModelSummary } from '../api/client';
 import { useCreateModel } from '../hooks/useModelMutations';
+import { countErrorText, parseOptionalCount } from '../lib/limits';
 import {
   MODEL_PROVIDERS,
   MODEL_PROVIDER_LABELS,
@@ -23,18 +24,26 @@ export function ModelCreateDialog({ returnFocusRef, onClose, onCreated }: ModelC
   const [id, setId] = useState('');
   const [provider, setProvider] = useState<ModelProvider>('openai');
   const [upstreamModel, setUpstreamModel] = useState('');
+  const [rate, setRate] = useState('');
+  const [tokens, setTokens] = useState('');
   const [enabled, setEnabled] = useState(true);
   const [fieldErrors, setFieldErrors] = useState<ModelDraftErrors>({});
+  const [limitErrors, setLimitErrors] = useState<{ rate?: string; tokens?: string }>({});
   const titleId = useId();
   const idInput = useId();
   const providerId = useId();
   const upstreamId = useId();
+  const rateId = useId();
+  const tokensId = useId();
   const enabledLabelId = useId();
   const enabledHintId = useId();
   const hintId = useId();
+  const limitsHintId = useId();
   const providerHintId = useId();
   const idErrorId = useId();
   const upstreamErrorId = useId();
+  const rateErrorId = useId();
+  const tokensErrorId = useId();
   const idRef = useRef<HTMLInputElement>(null);
   const createMutation = useCreateModel();
 
@@ -48,22 +57,46 @@ export function ModelCreateDialog({ returnFocusRef, onClose, onCreated }: ModelC
     event.preventDefault();
 
     const nextErrors = validateModelDraft({ id, upstreamModel });
-    setFieldErrors(nextErrors);
-    if (nextErrors.id !== undefined || nextErrors.upstreamModel !== undefined) return;
+    const rateResult = parseOptionalCount(rate, 1);
+    const tokensResult = parseOptionalCount(tokens, 1);
+    const nextLimitErrors: { rate?: string; tokens?: string } = {};
+    if (rateResult.status === 'invalid') nextLimitErrors.rate = countErrorText(1);
+    if (tokensResult.status === 'invalid') nextLimitErrors.tokens = countErrorText(1);
 
-    createMutation.mutate(
-      { id, provider, upstream_model: upstreamModel.trim(), enabled },
-      {
-        onSuccess: (model) => {
-          onCreated(model);
-        },
+    setFieldErrors(nextErrors);
+    setLimitErrors(nextLimitErrors);
+    if (
+      nextErrors.id !== undefined ||
+      nextErrors.upstreamModel !== undefined ||
+      nextLimitErrors.rate !== undefined ||
+      nextLimitErrors.tokens !== undefined
+    ) {
+      return;
+    }
+
+    const input = {
+      id,
+      provider,
+      upstream_model: upstreamModel.trim(),
+      enabled,
+      ...(rateResult.status === 'set' ? { requests_per_minute: rateResult.value } : {}),
+      ...(tokensResult.status === 'set' ? { tokens_per_minute: tokensResult.value } : {}),
+    };
+
+    createMutation.mutate(input, {
+      onSuccess: (model) => {
+        onCreated(model);
       },
-    );
+    });
   };
 
   const idDescribedBy = fieldErrors.id === undefined ? hintId : `${hintId} ${idErrorId}`;
   const upstreamDescribedBy =
     fieldErrors.upstreamModel === undefined ? hintId : `${hintId} ${upstreamErrorId}`;
+  const rateDescribedBy =
+    limitErrors.rate === undefined ? limitsHintId : `${limitsHintId} ${rateErrorId}`;
+  const tokensDescribedBy =
+    limitErrors.tokens === undefined ? limitsHintId : `${limitsHintId} ${tokensErrorId}`;
 
   return (
     <Modal
@@ -190,6 +223,74 @@ export function ModelCreateDialog({ returnFocusRef, onClose, onCreated }: ModelC
               {fieldErrors.upstreamModel}
             </p>
           )}
+        </div>
+
+        <div className="mt-4 border-t border-line pt-3">
+          <h4 className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-ink-muted">
+            Limits (optional)
+          </h4>
+          <p id={limitsHintId} className="mt-1 text-[11.5px] leading-5 text-ink-muted">
+            Caps every tenant that uses this model. Leave a limit blank for no cap.
+          </p>
+          <div className="mt-2 grid gap-3 sm:grid-cols-2">
+            <div>
+              <label htmlFor={rateId} className="block text-[12px] font-medium text-ink">
+                Requests per minute
+              </label>
+              <input
+                id={rateId}
+                type="number"
+                min={1}
+                step={1}
+                inputMode="numeric"
+                value={rate}
+                onChange={(event) => {
+                  setRate(event.target.value);
+                  setLimitErrors((current) => ({ ...current, rate: undefined }));
+                  clearServerError();
+                }}
+                disabled={pending}
+                placeholder="No limit"
+                aria-invalid={limitErrors.rate !== undefined}
+                aria-describedby={rateDescribedBy}
+                className="mt-1 block w-full min-w-0 rounded-md border border-line-strong bg-white px-2.5 py-1.5 font-mono text-[13px] tabular-nums text-ink placeholder:font-sans placeholder:text-ink-muted/70 focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/15 disabled:cursor-not-allowed disabled:bg-surface-sunken disabled:text-ink-muted"
+              />
+              {limitErrors.rate !== undefined && (
+                <p id={rateErrorId} role="alert" className="mt-1 text-xs text-danger">
+                  {limitErrors.rate}
+                </p>
+              )}
+            </div>
+
+            <div>
+              <label htmlFor={tokensId} className="block text-[12px] font-medium text-ink">
+                Tokens per minute
+              </label>
+              <input
+                id={tokensId}
+                type="number"
+                min={1}
+                step={1}
+                inputMode="numeric"
+                value={tokens}
+                onChange={(event) => {
+                  setTokens(event.target.value);
+                  setLimitErrors((current) => ({ ...current, tokens: undefined }));
+                  clearServerError();
+                }}
+                disabled={pending}
+                placeholder="No limit"
+                aria-invalid={limitErrors.tokens !== undefined}
+                aria-describedby={tokensDescribedBy}
+                className="mt-1 block w-full min-w-0 rounded-md border border-line-strong bg-white px-2.5 py-1.5 font-mono text-[13px] tabular-nums text-ink placeholder:font-sans placeholder:text-ink-muted/70 focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/15 disabled:cursor-not-allowed disabled:bg-surface-sunken disabled:text-ink-muted"
+              />
+              {limitErrors.tokens !== undefined && (
+                <p id={tokensErrorId} role="alert" className="mt-1 text-xs text-danger">
+                  {limitErrors.tokens}
+                </p>
+              )}
+            </div>
+          </div>
         </div>
 
         <div className="mt-4 border-t border-line pt-3">

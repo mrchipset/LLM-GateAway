@@ -1,13 +1,22 @@
-import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import {
+  deleteAuditRequests,
+  exportAuditRequests,
   getAuditRequest,
   getAuditSession,
   getAuditSessions,
   listKeys,
+  type AuditDeleteQuery,
+  type AuditExportQuery,
   type AuditSessionQuery,
 } from '../api/client';
-import { queryKeys } from '../lib/queryKeys';
+import {
+  auditRequestPrefix,
+  auditSessionPrefix,
+  auditSessionsPrefix,
+  queryKeys,
+} from '../lib/queryKeys';
 
 export function useAuditSessions(query: AuditSessionQuery, options: { enabled?: boolean } = {}) {
   return useQuery({
@@ -58,6 +67,28 @@ export function useAuditKeyOptions(tenantId: string | null) {
     },
     enabled: tenantId !== null,
     retry: false,
+  });
+}
+
+export function useExportAudit() {
+  return useMutation({
+    mutationFn: (query: AuditExportQuery) => exportAuditRequests(query),
+  });
+}
+
+export function useDeleteAudit() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (query: AuditDeleteQuery) => deleteAuditRequests(query),
+    onSuccess: async (result) => {
+      if (result.dry_run) return;
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: auditSessionsPrefix }),
+        queryClient.invalidateQueries({ queryKey: auditSessionPrefix }),
+        queryClient.invalidateQueries({ queryKey: auditRequestPrefix }),
+      ]);
+    },
   });
 }
 

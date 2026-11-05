@@ -2,6 +2,7 @@ import { useId, useRef, useState, type FormEvent, type RefObject } from 'react';
 
 import type { CreateApiKeyInput, CreatedApiKey, TenantSummary } from '../api/client';
 import type { useCreateKey } from '../hooks/useKeyMutations';
+import { countErrorText, parseOptionalCount } from '../lib/limits';
 import { Button } from './Button';
 import { CloseIcon } from './Icons';
 import { Modal } from './Modal';
@@ -15,6 +16,9 @@ interface FieldErrors {
   tenant?: string;
   name?: string;
   expiry?: string;
+  rate?: string;
+  tokens?: string;
+  concurrent?: string;
 }
 
 interface KeyCreateDialogProps {
@@ -37,15 +41,25 @@ export function KeyCreateDialog({
   const [tenantId, setTenantId] = useState(initialTenantId ?? '');
   const [name, setName] = useState('');
   const [expiry, setExpiry] = useState('');
+  const [rate, setRate] = useState('');
+  const [tokens, setTokens] = useState('');
+  const [concurrent, setConcurrent] = useState('');
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const titleId = useId();
   const tenantIdInput = useId();
   const nameId = useId();
   const expiryId = useId();
   const expiryHintId = useId();
+  const rateId = useId();
+  const tokensId = useId();
+  const concurrentId = useId();
+  const limitsHintId = useId();
   const tenantErrorId = useId();
   const nameErrorId = useId();
   const expiryErrorId = useId();
+  const rateErrorId = useId();
+  const tokensErrorId = useId();
+  const concurrentErrorId = useId();
   const nameRef = useRef<HTMLInputElement>(null);
 
   const pending = createMutation.isPending;
@@ -80,17 +94,23 @@ export function KeyCreateDialog({
       }
     }
 
+    const rateResult = parseOptionalCount(rate, 1);
+    const tokensResult = parseOptionalCount(tokens, 1);
+    const concurrentResult = parseOptionalCount(concurrent, 1);
+    if (rateResult.status === 'invalid') nextErrors.rate = countErrorText(1);
+    if (tokensResult.status === 'invalid') nextErrors.tokens = countErrorText(1);
+    if (concurrentResult.status === 'invalid') nextErrors.concurrent = countErrorText(1);
+
     setFieldErrors(nextErrors);
-    if (
-      nextErrors.tenant !== undefined ||
-      nextErrors.name !== undefined ||
-      nextErrors.expiry !== undefined
-    ) {
+    if (Object.values(nextErrors).some((message) => message !== undefined)) {
       return;
     }
 
     const input: CreateApiKeyInput = { name: trimmedName, tenant_id: tenantId };
     if (expiresAt !== undefined) input.expires_at = expiresAt;
+    if (rateResult.status === 'set') input.requests_per_minute = rateResult.value;
+    if (tokensResult.status === 'set') input.tokens_per_minute = tokensResult.value;
+    if (concurrentResult.status === 'set') input.max_concurrent_requests = concurrentResult.value;
 
     createMutation.mutate(input, {
       onSuccess: (created) => {
@@ -103,6 +123,12 @@ export function KeyCreateDialog({
   const nameDescribedBy = fieldErrors.name === undefined ? undefined : nameErrorId;
   const expiryDescribedBy =
     fieldErrors.expiry === undefined ? expiryHintId : `${expiryHintId} ${expiryErrorId}`;
+  const rateDescribedBy =
+    fieldErrors.rate === undefined ? limitsHintId : `${limitsHintId} ${rateErrorId}`;
+  const tokensDescribedBy =
+    fieldErrors.tokens === undefined ? limitsHintId : `${limitsHintId} ${tokensErrorId}`;
+  const concurrentDescribedBy =
+    fieldErrors.concurrent === undefined ? limitsHintId : `${limitsHintId} ${concurrentErrorId}`;
 
   return (
     <Modal
@@ -228,6 +254,104 @@ export function KeyCreateDialog({
               {fieldErrors.expiry}
             </p>
           )}
+        </div>
+
+        <div className="mt-4 border-t border-line pt-3">
+          <h4 className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-ink-muted">
+            Limits (optional)
+          </h4>
+          <p id={limitsHintId} className="mt-1 text-[11.5px] leading-5 text-ink-muted">
+            Leave a limit blank for no per-key cap; tenant limits still apply. Values must be whole
+            numbers of 1 or more.
+          </p>
+          <div className="mt-2 grid gap-3 sm:grid-cols-3">
+            <div>
+              <label htmlFor={rateId} className="block text-[12px] font-medium text-ink">
+                Requests per minute
+              </label>
+              <input
+                id={rateId}
+                type="number"
+                min={1}
+                step={1}
+                inputMode="numeric"
+                value={rate}
+                onChange={(event) => {
+                  setRate(event.target.value);
+                  setFieldErrors((current) => ({ ...current, rate: undefined }));
+                  clearServerError();
+                }}
+                disabled={pending}
+                placeholder="No cap"
+                aria-invalid={fieldErrors.rate !== undefined}
+                aria-describedby={rateDescribedBy}
+                className="mt-1 block w-full min-w-0 rounded-md border border-line-strong bg-white px-2.5 py-1.5 font-mono text-[13px] tabular-nums text-ink placeholder:font-sans placeholder:text-ink-muted/70 focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/15 disabled:cursor-not-allowed disabled:bg-surface-sunken disabled:text-ink-muted"
+              />
+              {fieldErrors.rate !== undefined && (
+                <p id={rateErrorId} role="alert" className="mt-1 text-xs text-danger">
+                  {fieldErrors.rate}
+                </p>
+              )}
+            </div>
+
+            <div>
+              <label htmlFor={tokensId} className="block text-[12px] font-medium text-ink">
+                Tokens per minute
+              </label>
+              <input
+                id={tokensId}
+                type="number"
+                min={1}
+                step={1}
+                inputMode="numeric"
+                value={tokens}
+                onChange={(event) => {
+                  setTokens(event.target.value);
+                  setFieldErrors((current) => ({ ...current, tokens: undefined }));
+                  clearServerError();
+                }}
+                disabled={pending}
+                placeholder="No cap"
+                aria-invalid={fieldErrors.tokens !== undefined}
+                aria-describedby={tokensDescribedBy}
+                className="mt-1 block w-full min-w-0 rounded-md border border-line-strong bg-white px-2.5 py-1.5 font-mono text-[13px] tabular-nums text-ink placeholder:font-sans placeholder:text-ink-muted/70 focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/15 disabled:cursor-not-allowed disabled:bg-surface-sunken disabled:text-ink-muted"
+              />
+              {fieldErrors.tokens !== undefined && (
+                <p id={tokensErrorId} role="alert" className="mt-1 text-xs text-danger">
+                  {fieldErrors.tokens}
+                </p>
+              )}
+            </div>
+
+            <div>
+              <label htmlFor={concurrentId} className="block text-[12px] font-medium text-ink">
+                Max concurrent
+              </label>
+              <input
+                id={concurrentId}
+                type="number"
+                min={1}
+                step={1}
+                inputMode="numeric"
+                value={concurrent}
+                onChange={(event) => {
+                  setConcurrent(event.target.value);
+                  setFieldErrors((current) => ({ ...current, concurrent: undefined }));
+                  clearServerError();
+                }}
+                disabled={pending}
+                placeholder="No cap"
+                aria-invalid={fieldErrors.concurrent !== undefined}
+                aria-describedby={concurrentDescribedBy}
+                className="mt-1 block w-full min-w-0 rounded-md border border-line-strong bg-white px-2.5 py-1.5 font-mono text-[13px] tabular-nums text-ink placeholder:font-sans placeholder:text-ink-muted/70 focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/15 disabled:cursor-not-allowed disabled:bg-surface-sunken disabled:text-ink-muted"
+              />
+              {fieldErrors.concurrent !== undefined && (
+                <p id={concurrentErrorId} role="alert" className="mt-1 text-xs text-danger">
+                  {fieldErrors.concurrent}
+                </p>
+              )}
+            </div>
+          </div>
         </div>
 
         {createMutation.isError && createMutation.error !== null && (

@@ -9,6 +9,7 @@ import { signIn } from './signIn';
 
 const EXPECTED_ADMIN_PREFIXES = [
   'admin-models',
+  'admin-deployments',
   'admin-model-prices',
   'admin-tenants',
   'admin-tenant-billing',
@@ -26,6 +27,7 @@ const EXPECTED_ADMIN_PREFIXES = [
 
 const LOADED_ADMIN_PREFIXES = EXPECTED_ADMIN_PREFIXES.filter(
   (prefix) =>
+    prefix !== 'admin-deployments' &&
     prefix !== 'admin-model-prices' &&
     prefix !== 'admin-model-access' &&
     prefix !== 'admin-tenant-billing' &&

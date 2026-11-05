@@ -1,5 +1,6 @@
 import type { ApiKeySummary } from '../api/client';
 import {
+  formatCompactNumber,
   formatCreatedAt,
   formatCreatedDate,
   formatCreatedTime,
@@ -21,6 +22,25 @@ function shortTenantId(tenantId: string): string {
 
 function tenantLabel(tenantId: string, tenantNames: ReadonlyMap<string, string>): string {
   return tenantNames.get(tenantId) ?? shortTenantId(tenantId);
+}
+
+function keyLimitText(apiKey: ApiKeySummary): { summary: string; exact: string } | null {
+  const parts: string[] = [];
+  const exact: string[] = [];
+  if (apiKey.requests_per_minute !== null && apiKey.requests_per_minute !== undefined) {
+    parts.push(`${formatCompactNumber(apiKey.requests_per_minute)} req/min`);
+    exact.push(`${formatExactNumber(apiKey.requests_per_minute)} requests per minute`);
+  }
+  if (apiKey.tokens_per_minute !== null && apiKey.tokens_per_minute !== undefined) {
+    parts.push(`${formatCompactNumber(apiKey.tokens_per_minute)} tok/min`);
+    exact.push(`${formatExactNumber(apiKey.tokens_per_minute)} tokens per minute`);
+  }
+  if (apiKey.max_concurrent_requests !== null && apiKey.max_concurrent_requests !== undefined) {
+    parts.push(`${formatCompactNumber(apiKey.max_concurrent_requests)} concurrent`);
+    exact.push(`${formatExactNumber(apiKey.max_concurrent_requests)} concurrent requests`);
+  }
+  if (parts.length === 0) return null;
+  return { summary: parts.join(' · '), exact: `Key limits: ${exact.join(', ')}` };
 }
 
 function StackedTimestamp({ value, className }: { value: string; className: string }) {
@@ -117,6 +137,7 @@ export function KeysTable({ keys, tenantNames, now, canWrite, onRevoke }: KeysTa
               const status = apiKeyStatus(apiKey, now);
               const tenantName = tenantNames.get(apiKey.tenant_id);
               const shortId = shortTenantId(apiKey.tenant_id);
+              const limits = keyLimitText(apiKey);
               return (
                 <tr key={apiKey.id} className="transition-colors hover:bg-surface-sunken/40">
                   <th scope="row" className="py-3 pr-3 align-top">
@@ -129,6 +150,14 @@ export function KeysTable({ keys, tenantNames, now, canWrite, onRevoke }: KeysTa
                     >
                       {apiKey.key_prefix}
                     </span>
+                    {limits !== null && (
+                      <span
+                        className="mt-1 block break-words font-mono text-[10px] tabular-nums text-ink-muted"
+                        title={limits.exact}
+                      >
+                        {limits.summary}
+                      </span>
+                    )}
                   </th>
                   <td className="py-3 pr-3 align-top">
                     {tenantName !== undefined ? (
@@ -193,6 +222,7 @@ export function KeysTable({ keys, tenantNames, now, canWrite, onRevoke }: KeysTa
       <ul aria-label="API key cards" className="divide-y divide-line md:hidden">
         {keys.map((apiKey) => {
           const status = apiKeyStatus(apiKey, now);
+          const limits = keyLimitText(apiKey);
           return (
             <li key={apiKey.id} className="py-3">
               <div className="flex items-start justify-between gap-3">
@@ -232,6 +262,14 @@ export function KeysTable({ keys, tenantNames, now, canWrite, onRevoke }: KeysTa
                     </time>
                   )}
                 </dd>
+                {limits !== null && (
+                  <>
+                    <dt className="text-ink-muted">Limits</dt>
+                    <dd className="break-words font-mono text-[11px]" title={limits.exact}>
+                      {limits.summary}
+                    </dd>
+                  </>
+                )}
               </dl>
               {canWrite && status !== 'Revoked' && (
                 <div className="mt-2 flex justify-end">

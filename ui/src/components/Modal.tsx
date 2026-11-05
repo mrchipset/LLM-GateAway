@@ -6,6 +6,7 @@ interface ModalProps {
   closeDisabled?: boolean;
   initialFocusRef?: RefObject<HTMLElement | null>;
   returnFocusRef?: RefObject<HTMLElement | null>;
+  panelClassName?: string;
   children: ReactNode;
 }
 
@@ -15,6 +16,7 @@ export function Modal({
   closeDisabled = false,
   initialFocusRef,
   returnFocusRef,
+  panelClassName = 'max-w-lg',
   children,
 }: ModalProps) {
   const panelRef = useRef<HTMLDivElement>(null);
@@ -76,7 +78,7 @@ export function Modal({
         aria-modal="true"
         aria-labelledby={labelledBy}
         tabIndex={-1}
-        className="max-h-[calc(100vh-2rem)] w-full max-w-lg overflow-y-auto rounded-lg border border-line bg-surface shadow-[0_18px_50px_rgba(22,24,26,0.18)] focus:outline-none"
+        className={`max-h-[calc(100vh-2rem)] w-full overflow-y-auto rounded-lg border border-line bg-surface shadow-[0_18px_50px_rgba(22,24,26,0.18)] focus:outline-none ${panelClassName}`}
       >
         {children}
       </div>

@@ -13,6 +13,7 @@ export interface RoleCapabilities {
   canWrite: boolean;
   canManageAdmins: boolean;
   canReadAudit: boolean;
+  canDeleteAudit: boolean;
 }
 
 export const CSRF_COOKIE = 'gw_admin_csrf';
@@ -25,6 +26,7 @@ export function roleCapabilities(role: AdminRole): RoleCapabilities {
     canWrite: role === 'owner' || role === 'operator',
     canManageAdmins: role === 'owner',
     canReadAudit: role === 'owner' || role === 'auditor',
+    canDeleteAudit: role === 'owner',
   };
 }
 

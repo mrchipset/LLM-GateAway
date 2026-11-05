@@ -5,18 +5,53 @@ import { formatExactNumber } from '../lib/format';
 
 type TenantLimitFactsVariant = 'chips' | 'compact';
 
+type TenantLimitFields = Pick<
+  TenantSummary,
+  | 'monthly_token_quota'
+  | 'requests_per_minute'
+  | 'tokens_per_minute'
+  | 'max_concurrent_requests'
+  | 'audit_retention_days'
+>;
+
 interface TenantLimitFactsProps {
-  tenant: Pick<TenantSummary, 'monthly_token_quota' | 'requests_per_minute'>;
+  tenant: TenantLimitFields;
   variant?: TenantLimitFactsVariant;
+}
+
+function retentionLabel(value: number | null | undefined): string | null {
+  if (value === undefined) return null;
+  if (value === null) return 'Inherit default';
+  if (value === 0) return 'Legal hold';
+  return `${formatExactNumber(value)} days`;
 }
 
 export function TenantLimitFacts({ tenant, variant = 'chips' }: TenantLimitFactsProps) {
   const quota = tenant.monthly_token_quota;
   const rate = tenant.requests_per_minute;
+  const tokens = tenant.tokens_per_minute ?? null;
+  const concurrent = tenant.max_concurrent_requests ?? null;
+  const retention = retentionLabel(tenant.audit_retention_days);
 
-  if (variant === 'compact') return <CompactLimitFacts quota={quota} rate={rate} />;
+  if (variant === 'compact') {
+    return (
+      <CompactLimitFacts
+        quota={quota}
+        rate={rate}
+        tokens={tokens}
+        concurrent={concurrent}
+        retention={retention}
+      />
+    );
+  }
 
-  if (quota === null && rate === null) {
+  if (
+    quota === null &&
+    rate === null &&
+    tokens === null &&
+    concurrent === null &&
+    retention === null
+  ) {
     return <LimitFact>No limits</LimitFact>;
   }
 
@@ -32,12 +67,29 @@ export function TenantLimitFacts({ tenant, variant = 'chips' }: TenantLimitFacts
       ) : (
         <LimitFact>No rate limit</LimitFact>
       )}
+      {tokens !== null && <LimitFact>{formatExactNumber(tokens)} tokens/min</LimitFact>}
+      {concurrent !== null && <LimitFact>{formatExactNumber(concurrent)} concurrent</LimitFact>}
+      {retention !== null && <LimitFact>Retention: {retention}</LimitFact>}
     </span>
   );
 }
 
-function CompactLimitFacts({ quota, rate }: { quota: number | null; rate: number | null }) {
-  if (quota === null && rate === null) {
+function CompactLimitFacts({
+  quota,
+  rate,
+  tokens,
+  concurrent,
+  retention,
+}: {
+  quota: number | null;
+  rate: number | null;
+  tokens: number | null;
+  concurrent: number | null;
+  retention: string | null;
+}) {
+  const isEmpty =
+    quota === null && rate === null && tokens === null && concurrent === null && retention === null;
+  if (isEmpty) {
     return <span className="text-[11px] text-ink-muted">No limits</span>;
   }
 
@@ -63,6 +115,50 @@ function CompactLimitFacts({ quota, rate }: { quota: number | null; rate: number
         </span>
         <span className="sr-only">{limitTitle(rate, 'requests per minute', 'No rate limit')}</span>
       </dd>
+      {tokens !== null && (
+        <>
+          <dt className="text-ink-muted">Tok/min</dt>
+          <dd
+            className="break-words font-mono text-[10.5px] tabular-nums text-ink"
+            title={limitTitle(tokens, 'tokens per minute', 'No token rate limit')}
+          >
+            <span aria-hidden="true">{formatExactNumber(tokens)}/min</span>
+            <span className="sr-only">
+              {limitTitle(tokens, 'tokens per minute', 'No token rate limit')}
+            </span>
+          </dd>
+        </>
+      )}
+      {concurrent !== null && (
+        <>
+          <dt className="text-ink-muted">Conc.</dt>
+          <dd
+            className="break-words font-mono text-[10.5px] tabular-nums text-ink"
+            title={`${formatExactNumber(concurrent)} concurrent requests`}
+          >
+            <span aria-hidden="true">{formatExactNumber(concurrent)}</span>
+            <span className="sr-only">{formatExactNumber(concurrent)} concurrent requests</span>
+          </dd>
+        </>
+      )}
+      {retention !== null && (
+        <>
+          <dt className="text-ink-muted">Retain</dt>
+          <dd
+            className="break-words font-mono text-[10.5px] tabular-nums text-ink"
+            title={`Audit retention: ${retention}`}
+          >
+            <span aria-hidden="true">
+              {retention === 'Legal hold'
+                ? 'Hold'
+                : retention === 'Inherit default'
+                  ? 'Inherit'
+                  : retention.replace(' days', 'd')}
+            </span>
+            <span className="sr-only">Audit retention: {retention}</span>
+          </dd>
+        </>
+      )}
     </dl>
   );
 }

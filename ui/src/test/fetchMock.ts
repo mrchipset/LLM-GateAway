@@ -13,6 +13,10 @@ export interface Routes {
   '/api/v1/models'?: RouteHandler;
   'POST /api/v1/models'?: RouteHandler;
   'DELETE /api/v1/models/:id'?: RouteHandler;
+  'GET /api/v1/models/:id/deployments'?: RouteHandler;
+  'POST /api/v1/models/:id/deployments'?: RouteHandler;
+  'PATCH /api/v1/deployments/:id'?: RouteHandler;
+  'DELETE /api/v1/deployments/:id'?: RouteHandler;
   'GET /api/v1/models/:id/prices'?: RouteHandler;
   'POST /api/v1/models/:id/prices'?: RouteHandler;
   '/api/v1/tenants'?: RouteHandler;
@@ -30,6 +34,8 @@ export interface Routes {
   '/api/v1/audit/sessions'?: RouteHandler;
   'GET /api/v1/audit/sessions/:id'?: RouteHandler;
   'GET /api/v1/audit/requests/:id'?: RouteHandler;
+  'GET /api/v1/audit/export'?: RouteHandler;
+  'DELETE /api/v1/audit'?: RouteHandler;
   '/api/v1/admins'?: RouteHandler;
   'POST /api/v1/admins'?: RouteHandler;
   'PATCH /api/v1/admins/:id'?: RouteHandler;
@@ -193,6 +199,20 @@ function createDefaultRoutes(
     'DELETE /api/v1/models/:id': () => {
       throw new Error('Unexpected request: DELETE /api/v1/models/:id');
     },
+    'GET /api/v1/models/:id/deployments': (url) =>
+      jsonResponse({
+        model_id: decodeURIComponent(url.pathname.split('/')[4] ?? ''),
+        items: [],
+      }),
+    'POST /api/v1/models/:id/deployments': () => {
+      throw new Error('Unexpected request: POST /api/v1/models/:id/deployments');
+    },
+    'PATCH /api/v1/deployments/:id': () => {
+      throw new Error('Unexpected request: PATCH /api/v1/deployments/:id');
+    },
+    'DELETE /api/v1/deployments/:id': () => {
+      throw new Error('Unexpected request: DELETE /api/v1/deployments/:id');
+    },
     'GET /api/v1/models/:id/prices': () =>
       jsonResponse({ items: [], total: 0, limit: 50, offset: 0 }),
     'POST /api/v1/models/:id/prices': () => {
@@ -286,6 +306,12 @@ function createDefaultRoutes(
         404,
         { 'x-request-id': 'req_audit_request_not_found' },
       ),
+    'GET /api/v1/audit/export': () => {
+      throw new Error('Unexpected request: GET /api/v1/audit/export');
+    },
+    'DELETE /api/v1/audit': () => {
+      throw new Error('Unexpected request: DELETE /api/v1/audit');
+    },
     '/api/v1/admins': (url) =>
       jsonResponse({
         items: [],
@@ -311,6 +337,26 @@ function createDefaultRoutes(
 
 function resolveHandler(routes: Routes, url: URL, init: RequestInit): RouteHandler | undefined {
   const method = (init.method ?? 'GET').toUpperCase();
+
+  if (/^\/api\/v1\/models\/[^/]+\/deployments$/.test(url.pathname)) {
+    const handler =
+      method === 'POST'
+        ? routes['POST /api/v1/models/:id/deployments']
+        : method === 'GET'
+          ? routes['GET /api/v1/models/:id/deployments']
+          : undefined;
+    if (handler !== undefined) return handler;
+  }
+
+  if (method === 'PATCH' && /^\/api\/v1\/deployments\/[^/]+$/.test(url.pathname)) {
+    const handler = routes['PATCH /api/v1/deployments/:id'];
+    if (handler !== undefined) return handler;
+  }
+
+  if (method === 'DELETE' && /^\/api\/v1\/deployments\/[^/]+$/.test(url.pathname)) {
+    const handler = routes['DELETE /api/v1/deployments/:id'];
+    if (handler !== undefined) return handler;
+  }
 
   if (/^\/api\/v1\/models\/[^/]+\/prices$/.test(url.pathname)) {
     const handler =

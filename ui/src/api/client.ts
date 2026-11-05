@@ -26,6 +26,8 @@ export interface ModelSummary {
   upstream_model: string;
   enabled: boolean;
   created_at: string;
+  requests_per_minute?: number | null;
+  tokens_per_minute?: number | null;
 }
 
 export interface ModelListResponse {
@@ -42,6 +44,44 @@ export interface CreateModelInput {
   provider: ModelProvider;
   upstream_model: string;
   enabled: boolean;
+  requests_per_minute?: number;
+  tokens_per_minute?: number;
+}
+
+export interface ModelDeployment {
+  id: string;
+  model_id: string;
+  name: string;
+  provider: string;
+  upstream_model: string;
+  weight: number;
+  enabled: boolean;
+  credential_env: string | null;
+  base_url: string | null;
+  created_at: string;
+}
+
+export interface DeploymentListResponse {
+  model_id: string;
+  items: ModelDeployment[];
+}
+
+export interface CreateDeploymentInput {
+  name: string;
+  provider: ModelProvider;
+  upstream_model: string;
+  weight: number;
+  enabled: boolean;
+  credential_env?: string;
+  base_url?: string;
+}
+
+export interface UpdateDeploymentInput {
+  upstream_model?: string;
+  weight?: number;
+  enabled?: boolean;
+  credential_env?: string | null;
+  base_url?: string | null;
 }
 
 export type ModelAccessMode = 'all' | 'allowlist';
@@ -63,6 +103,9 @@ export interface TenantSummary {
   created_at: string;
   monthly_token_quota: number | null;
   requests_per_minute: number | null;
+  tokens_per_minute?: number | null;
+  max_concurrent_requests?: number | null;
+  audit_retention_days?: number | null;
   audit_enabled: boolean;
   model_access_mode: ModelAccessMode;
   plan_tokens: number | null;
@@ -91,6 +134,9 @@ export interface ApiKeySummary {
   expires_at: string | null;
   revoked_at: string | null;
   last_used_at: string | null;
+  requests_per_minute?: number | null;
+  tokens_per_minute?: number | null;
+  max_concurrent_requests?: number | null;
 }
 
 export interface ApiKeyListResponse {
@@ -115,22 +161,34 @@ export interface CreatedApiKey {
   key_prefix: string;
   created_at: string;
   expires_at: string | null;
+  requests_per_minute?: number | null;
+  tokens_per_minute?: number | null;
+  max_concurrent_requests?: number | null;
 }
 
 export interface CreateApiKeyInput {
   name: string;
   tenant_id: string;
   expires_at?: string;
+  requests_per_minute?: number;
+  tokens_per_minute?: number;
+  max_concurrent_requests?: number;
 }
 
 export interface CreateTenantInput {
   name: string;
   audit_enabled?: boolean;
+  tokens_per_minute?: number;
+  max_concurrent_requests?: number;
+  audit_retention_days?: number;
 }
 
 export interface TenantLimitsPatch {
   monthly_token_quota?: number | null;
   requests_per_minute?: number | null;
+  tokens_per_minute?: number | null;
+  max_concurrent_requests?: number | null;
+  audit_retention_days?: number | null;
   audit_enabled?: boolean;
   plan_tokens?: number | null;
   plan_allow_overage?: boolean;
@@ -329,6 +387,37 @@ export interface AuditSessionQuery {
   offset: number;
 }
 
+export type AuditExportFormat = 'jsonl' | 'csv';
+
+export interface AuditExportQuery {
+  tenantId: string;
+  since: string;
+  until: string;
+  format: AuditExportFormat;
+}
+
+export interface AuditExportFile {
+  blob: Blob;
+  filename: string;
+}
+
+export interface AuditDeleteQuery {
+  tenantId: string;
+  before: string;
+  dryRun?: boolean;
+  batchSize?: number;
+  maxBatches?: number;
+}
+
+export interface AuditDeleteResult {
+  tenant_id: string;
+  before: string;
+  dry_run: boolean;
+  requests_deleted: number;
+  sessions_deleted: number;
+  requests_remaining: number;
+}
+
 export interface UsageCosts {
   covered_tokens: number;
   billable_tokens: number;
@@ -496,6 +585,27 @@ function isModelSummary(value: unknown): value is ModelSummary {
     typeof value.provider === 'string' &&
     typeof value.upstream_model === 'string' &&
     typeof value.enabled === 'boolean' &&
+    typeof value.created_at === 'string' &&
+    isOptionalPositiveInt(value.requests_per_minute) &&
+    isOptionalPositiveInt(value.tokens_per_minute)
+  );
+}
+
+function isDeployment(value: unknown): value is ModelDeployment {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.id === 'string' &&
+    typeof value.model_id === 'string' &&
+    typeof value.name === 'string' &&
+    typeof value.provider === 'string' &&
+    typeof value.upstream_model === 'string' &&
+    typeof value.weight === 'number' &&
+    Number.isInteger(value.weight) &&
+    value.weight >= 1 &&
+    value.weight <= 100 &&
+    typeof value.enabled === 'boolean' &&
+    isNullableString(value.credential_env) &&
+    isNullableString(value.base_url) &&
     typeof value.created_at === 'string'
   );
 }
@@ -506,6 +616,19 @@ function isCount(value: unknown): value is number {
 
 function isNullableCount(value: unknown): value is number | null {
   return value === null || isCount(value);
+}
+
+function isPositiveCount(value: unknown): value is number {
+  return isCount(value) && value >= 1;
+}
+
+/** Older backends may omit limit fields; treat an absent field as "not set". */
+function isOptionalPositiveInt(value: unknown): value is number | null | undefined {
+  return value === undefined || value === null || isPositiveCount(value);
+}
+
+function isOptionalNullableCount(value: unknown): value is number | null | undefined {
+  return value === undefined || value === null || isCount(value);
 }
 
 function isDecimalString(value: unknown): value is string {
@@ -554,6 +677,9 @@ function isTenantSummary(value: unknown): value is TenantSummary {
     typeof value.created_at === 'string' &&
     isNullableCount(value.monthly_token_quota) &&
     isNullableCount(value.requests_per_minute) &&
+    isOptionalPositiveInt(value.tokens_per_minute) &&
+    isOptionalPositiveInt(value.max_concurrent_requests) &&
+    isOptionalNullableCount(value.audit_retention_days) &&
     typeof value.audit_enabled === 'boolean' &&
     isModelAccessMode(value.model_access_mode) &&
     isNullableCount(value.plan_tokens) &&
@@ -590,7 +716,10 @@ function isApiKeySummary(value: unknown): value is ApiKeySummary {
     typeof value.created_at === 'string' &&
     isNullableString(value.expires_at) &&
     isNullableString(value.revoked_at) &&
-    isNullableString(value.last_used_at)
+    isNullableString(value.last_used_at) &&
+    isOptionalPositiveInt(value.requests_per_minute) &&
+    isOptionalPositiveInt(value.tokens_per_minute) &&
+    isOptionalPositiveInt(value.max_concurrent_requests)
   );
 }
 
@@ -603,7 +732,10 @@ function isCreatedApiKey(value: unknown): value is CreatedApiKey {
     typeof value.key === 'string' &&
     typeof value.key_prefix === 'string' &&
     typeof value.created_at === 'string' &&
-    isNullableString(value.expires_at)
+    isNullableString(value.expires_at) &&
+    isOptionalPositiveInt(value.requests_per_minute) &&
+    isOptionalPositiveInt(value.tokens_per_minute) &&
+    isOptionalPositiveInt(value.max_concurrent_requests)
   );
 }
 
@@ -699,6 +831,18 @@ function isAuditSessionSummary(value: unknown): value is AuditSessionSummary {
     typeof value.last_seen_at === 'string' &&
     isCount(value.request_count) &&
     isCount(value.total_tokens)
+  );
+}
+
+function isAuditDeleteResult(value: unknown): value is AuditDeleteResult {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.tenant_id === 'string' &&
+    typeof value.before === 'string' &&
+    typeof value.dry_run === 'boolean' &&
+    isCount(value.requests_deleted) &&
+    isCount(value.sessions_deleted) &&
+    isCount(value.requests_remaining)
   );
 }
 
@@ -1056,19 +1200,23 @@ function parseListPage(
   };
 }
 
-async function send(path: string, init: RequestInit = {}): Promise<Response> {
+async function send(
+  path: string,
+  init: RequestInit = {},
+  timeoutMs = REQUEST_TIMEOUT_MS,
+): Promise<Response> {
   const callerSignal = init.signal ?? undefined;
   let signal: AbortSignal | undefined;
 
   try {
-    signal = withTimeout(callerSignal, REQUEST_TIMEOUT_MS);
+    signal = withTimeout(callerSignal, timeoutMs);
     return await fetch(path, { ...init, credentials: 'include', signal });
   } catch (error) {
     if (callerSignal?.aborted) throw error;
     if (signal?.aborted) {
       throw new ApiRequestError({
         status: 0,
-        message: 'The request timed out after 10 seconds.',
+        message: `The request timed out after ${Math.round(timeoutMs / 1000)} seconds.`,
       });
     }
     throw new ApiRequestError({
@@ -1120,15 +1268,19 @@ function adminHeaders(method: string, json: boolean): Headers {
 
 async function adminResponse(
   path: string,
-  init: { method?: string; body?: unknown; signal?: AbortSignal },
+  init: { method?: string; body?: unknown; signal?: AbortSignal; timeoutMs?: number },
 ): Promise<Response> {
   const method = init.method ?? 'GET';
-  const response = await send(path, {
-    method,
-    signal: init.signal,
-    headers: adminHeaders(method, init.body !== undefined),
-    body: init.body === undefined ? undefined : JSON.stringify(init.body),
-  });
+  const response = await send(
+    path,
+    {
+      method,
+      signal: init.signal,
+      headers: adminHeaders(method, init.body !== undefined),
+      body: init.body === undefined ? undefined : JSON.stringify(init.body),
+    },
+    init.timeoutMs,
+  );
   if (response.status === 401) reportUnauthorized();
   if (!response.ok) throw await toRequestError(response);
   return response;
@@ -1431,6 +1583,56 @@ export async function createModel(
 
 export async function deleteModel(modelId: string, signal?: AbortSignal): Promise<void> {
   await sendAdminDelete(`/api/v1/models/${encodeURIComponent(modelId)}`, signal);
+}
+
+export async function listDeployments(
+  modelId: string,
+  signal?: AbortSignal,
+): Promise<DeploymentListResponse> {
+  const path = `/api/v1/models/${encodeURIComponent(modelId)}/deployments`;
+  const response = await sendAdmin(path, signal);
+  const payload = await readJson(response, path);
+  if (
+    !isRecord(payload) ||
+    typeof payload.model_id !== 'string' ||
+    !Array.isArray(payload.items) ||
+    !payload.items.every(isDeployment)
+  ) {
+    throw unexpectedPayload(response, 'deployment list');
+  }
+  return { model_id: payload.model_id, items: payload.items };
+}
+
+export async function createDeployment(
+  modelId: string,
+  input: CreateDeploymentInput,
+  signal?: AbortSignal,
+): Promise<ModelDeployment> {
+  const path = `/api/v1/models/${encodeURIComponent(modelId)}/deployments`;
+  const response = await sendAdminJson(path, 'POST', input, signal);
+  const payload = await readJson(response, path);
+  if (!isDeployment(payload)) {
+    throw unexpectedPayload(response, 'deployment');
+  }
+  return payload;
+}
+
+export async function updateDeployment(
+  deploymentId: string,
+  input: UpdateDeploymentInput,
+  signal?: AbortSignal,
+): Promise<ModelDeployment> {
+  const path = `/api/v1/deployments/${encodeURIComponent(deploymentId)}`;
+  const response = await sendAdminJson(path, 'PATCH', input, signal);
+  const payload = await readJson(response, path);
+  if (!isDeployment(payload)) {
+    throw unexpectedPayload(response, 'deployment');
+  }
+  return payload;
+}
+
+export async function deleteDeployment(deploymentId: string, signal?: AbortSignal): Promise<void> {
+  await sendAdminDelete(`/api/v1/deployments/${encodeURIComponent(deploymentId)}`, signal);
 }
 
 export async function getTenantModelAccess(
@@ -1745,4 +1947,66 @@ export async function getAuditRequest(
   if (payload.diff !== null && diff === null) throw unexpectedPayload(response, 'audit request');
 
   return { request, diff, truncated: payload.truncated };
+}
+
+const AUDIT_EXPORT_TIMEOUT_MS = 120_000;
+
+function exportFilename(response: Response, format: AuditExportFormat): string {
+  const disposition = response.headers.get('Content-Disposition');
+  const match = disposition?.match(/filename="?([^";]+)"?/i);
+  const filename = match?.[1]?.trim();
+  return filename !== undefined && filename.length > 0 ? filename : `audit-export.${format}`;
+}
+
+export async function exportAuditRequests(
+  query: AuditExportQuery,
+  signal?: AbortSignal,
+): Promise<AuditExportFile> {
+  if (query.tenantId === '') {
+    throw new ApiRequestError({ status: 0, message: 'Select a tenant before exporting.' });
+  }
+  const params = new URLSearchParams({
+    tenant_id: query.tenantId,
+    since: query.since,
+    until: query.until,
+    format: query.format,
+  });
+  const path = `/api/v1/audit/export?${params.toString()}`;
+  const response = await adminResponse(path, { signal, timeoutMs: AUDIT_EXPORT_TIMEOUT_MS });
+
+  let blob: Blob;
+  try {
+    blob = await response.blob();
+  } catch {
+    throw new ApiRequestError({
+      status: response.status,
+      message: 'The backend returned an unreadable audit export.',
+      requestId: response.headers.get('x-request-id'),
+    });
+  }
+  return { blob, filename: exportFilename(response, query.format) };
+}
+
+export async function deleteAuditRequests(
+  query: AuditDeleteQuery,
+  signal?: AbortSignal,
+): Promise<AuditDeleteResult> {
+  if (query.tenantId === '') {
+    throw new ApiRequestError({ status: 0, message: 'Select a tenant before deleting.' });
+  }
+  const params = new URLSearchParams({
+    tenant_id: query.tenantId,
+    before: query.before,
+    dry_run: String(query.dryRun ?? false),
+  });
+  if (query.batchSize !== undefined) params.set('batch_size', String(query.batchSize));
+  if (query.maxBatches !== undefined) params.set('max_batches', String(query.maxBatches));
+
+  const path = `/api/v1/audit?${params.toString()}`;
+  const response = await sendAdminDelete(path, signal);
+  const payload = await readJson(response, path);
+  if (!isAuditDeleteResult(payload)) {
+    throw unexpectedPayload(response, 'audit delete result');
+  }
+  return payload;
 }

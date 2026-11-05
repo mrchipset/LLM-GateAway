@@ -171,6 +171,26 @@ export function BillingIcon({ className }: IconProps) {
   );
 }
 
+export function DeployIcon({ className }: IconProps) {
+  return (
+    <svg {...iconProps} className={className}>
+      <rect x="2.4" y="2.6" width="11.2" height="3.6" rx="1" />
+      <rect x="2.4" y="9.8" width="11.2" height="3.6" rx="1" />
+      <path d="M5.4 4.4h.6M5.4 11.6h.6" />
+    </svg>
+  );
+}
+
+export function DownloadIcon({ className }: IconProps) {
+  return (
+    <svg {...iconProps} className={className}>
+      <path d="M8 2.6v7.2" />
+      <path d="m5.2 7.2 2.8 2.8 2.8-2.8" />
+      <path d="M2.9 12.9h10.2" />
+    </svg>
+  );
+}
+
 export function TagIcon({ className }: IconProps) {
   return (
     <svg {...iconProps} className={className}>

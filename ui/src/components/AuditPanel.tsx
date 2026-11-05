@@ -12,9 +12,10 @@ import {
   type AuditRangeDays,
 } from '../lib/audit';
 import { formatExactNumber, formatUpdatedAt } from '../lib/format';
-import { RefreshIcon } from './Icons';
+import { DownloadIcon, RefreshIcon } from './Icons';
 import { Panel, PanelHeader } from './Panel';
 import { RequestErrorPanel } from './RequestErrorPanel';
+import { AuditExportDialog } from './AuditExportDialog';
 import { AuditSessionDetail } from './AuditSessionDetail';
 import {
   AuditPagination,
@@ -68,6 +69,8 @@ function ConnectedAuditPanel({ active }: { active: boolean }) {
   const [anchor, setAnchor] = useState(() => new Date());
   const [offset, setOffset] = useState(0);
   const [selectedSession, setSelectedSession] = useState<AuditSessionSummary | null>(null);
+  const [exportOpen, setExportOpen] = useState(false);
+  const exportButtonRef = useRef<HTMLButtonElement>(null);
 
   const sessionDirectoryHeadingRef = useRef<HTMLHeadingElement>(null);
   const lastOpenedSessionIdRef = useRef<string | null>(null);
@@ -216,6 +219,15 @@ function ConnectedAuditPanel({ active }: { active: boolean }) {
               {count}
             </span>
           )}
+          <Button
+            ref={exportButtonRef}
+            variant="ghost"
+            onClick={() => setExportOpen(true)}
+            aria-label="Export or delete audit data"
+          >
+            <DownloadIcon className="size-3.5" />
+            <span className="hidden sm:inline">Export / retention</span>
+          </Button>
           <Button
             variant="ghost"
             onClick={handleRefresh}
@@ -477,6 +489,15 @@ function ConnectedAuditPanel({ active }: { active: boolean }) {
           )}
         </div>
       </div>
+
+      {exportOpen && (
+        <AuditExportDialog
+          tenants={tenants}
+          initialTenantId={tenantId === '' ? null : tenantId}
+          returnFocusRef={exportButtonRef}
+          onClose={() => setExportOpen(false)}
+        />
+      )}
     </Panel>
   );
 }
