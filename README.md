@@ -756,10 +756,11 @@ The usage panel provides:
 - Role-aware tabs: Models / Usage / Access, plus Audit, Admins, and Admin audit for the roles allowed to use them
 - Tenant filtering (including "All tenants"); the selected tenant's quota and rate limit are shown read-only. The tenant list is capped at 100 with a truncation note.
 - 7 / 30 / 90-day rolling ranges with `since` floored to UTC midnight; the final bar is the partial "today so far" bucket.
+- Clicking a bar (or pressing Enter/Space on it) scopes totals, by-model, and by-key to that UTC day while the chart keeps the full range; a dismissible chip clears the selection and changing the preset resets it.
 - Totals for requests, input, output, cached, and total tokens (cached counts are displayed as reported and labeled as a subset of input).
 - A UTC-aligned, zero-filled daily total-token bar chart.
 - A per-model breakdown (requests, prompt/completion/cached/total, covered/billable, billed cost) with a client-side CSV export for the current tenant and range; the file contains raw numbers and writes nothing to network or browser storage.
-- Per-key usage details (up to 100 keys).
+- Per-key usage details (up to 100 keys) with the same CSV export pattern.
 
 The Access tab manages tenants and API keys:
 
