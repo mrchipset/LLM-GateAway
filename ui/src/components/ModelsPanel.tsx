@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import type { ModelSummary } from '../api/client';
 import type { ModelsQuery } from '../hooks/useModels';
@@ -37,6 +37,8 @@ export function ModelsPanel({ query }: ModelsPanelProps) {
   const [deploymentsModel, setDeploymentsModel] = useState<ModelSummary | null>(null);
   const [editingModel, setEditingModel] = useState<ModelSummary | null>(null);
   const registerButtonRef = useRef<HTMLButtonElement>(null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const focusHeadingRef = useRef(false);
   const deleteTriggerRef = useRef<HTMLElement | null>(null);
   const priceTriggerRef = useRef<HTMLElement | null>(null);
   const deploymentTriggerRef = useRef<HTMLElement | null>(null);
@@ -55,6 +57,14 @@ export function ModelsPanel({ query }: ModelsPanelProps) {
     setNotice(null);
     setRegisterOpen(true);
   };
+
+  // Deleting a model removes the row that owns the trigger, so returning focus to it
+  // would strand keyboard users on the document body.
+  useEffect(() => {
+    if (!focusHeadingRef.current) return;
+    focusHeadingRef.current = false;
+    headingRef.current?.focus();
+  });
 
   const handleDelete = (model: ModelSummary, trigger: HTMLButtonElement) => {
     setNotice(null);
@@ -82,7 +92,7 @@ export function ModelsPanel({ query }: ModelsPanelProps) {
 
   return (
     <Panel labelledBy="models-heading">
-      <PanelHeader id="models-heading" eyebrow="Registry" title="Models">
+      <PanelHeader id="models-heading" eyebrow="Registry" title="Models" titleRef={headingRef}>
         <div className="flex flex-wrap items-center justify-end gap-2">
           {count !== null && (
             <span className="rounded border border-line bg-surface-sunken px-1.5 py-0.5 font-mono text-[10.5px] tabular-nums text-ink">
@@ -147,6 +157,7 @@ export function ModelsPanel({ query }: ModelsPanelProps) {
           onDeleted={(model) => {
             setDeletingModel(null);
             setNotice(`Model '${model.id}' deleted.`);
+            focusHeadingRef.current = true;
           }}
           onStale={() => {
             void query.refetch();
@@ -345,7 +356,7 @@ function ModelsTable({
           </tbody>
         </table>
       </div>
-      <ul className="divide-y divide-line md:hidden">
+      <ul aria-label="Model cards" className="divide-y divide-line md:hidden">
         {models.map((model) => (
           <ModelCard
             key={model.id}

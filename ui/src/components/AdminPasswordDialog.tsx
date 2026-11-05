@@ -106,7 +106,7 @@ export function AdminPasswordDialog({
         </Button>
       </div>
 
-      <form onSubmit={handleSubmit} className="p-5" noValidate>
+      <form onSubmit={handleSubmit} className="p-5" noValidate aria-busy={pending}>
         <p className="rounded border border-warn/30 bg-warn-soft px-2.5 py-1.5 text-[11.5px] leading-5 text-warn">
           The new password replaces the old one immediately and signs this admin out everywhere. It
           is write-only and never displayed.
@@ -125,6 +125,7 @@ export function AdminPasswordDialog({
               setPassword(event.target.value);
               clearServerError();
             }}
+            disabled={pending}
             autoComplete="new-password"
             aria-invalid={passwordError !== null}
             aria-describedby={
@@ -136,7 +137,7 @@ export function AdminPasswordDialog({
             At least {ADMIN_PASSWORD_MIN_LENGTH} characters.
           </p>
           {passwordError !== null && (
-            <p id={passwordErrorId} className="mt-1 text-[11.5px] text-danger">
+            <p id={passwordErrorId} role="alert" className="mt-1 text-[11.5px] text-danger">
               {passwordError}
             </p>
           )}
@@ -154,13 +155,14 @@ export function AdminPasswordDialog({
               setConfirmation(event.target.value);
               clearServerError();
             }}
+            disabled={pending}
             autoComplete="new-password"
             aria-invalid={confirmationError !== null}
             aria-describedby={confirmationError === null ? undefined : confirmationErrorId}
             className={FIELD_CLASS}
           />
           {confirmationError !== null && (
-            <p id={confirmationErrorId} className="mt-1 text-[11.5px] text-danger">
+            <p id={confirmationErrorId} role="alert" className="mt-1 text-[11.5px] text-danger">
               {confirmationError}
             </p>
           )}

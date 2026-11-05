@@ -35,9 +35,28 @@ export function Modal({
     const target = initialFocusTarget ?? panelRef.current;
     target?.focus();
     return () => {
-      returnFocusTarget?.focus();
+      if (returnFocusTarget?.isConnected) {
+        returnFocusTarget.focus();
+      }
     };
   }, [initialFocusRef, returnFocusRef]);
+
+  // A dialog can remove or replace the control that had focus, for example after a
+  // successful delete or a view switch. Keep keyboard focus inside the dialog instead
+  // of letting it fall back to the document body.
+  useEffect(() => {
+    const panel = panelRef.current;
+    if (panel === null) return;
+    const activeElement = document.activeElement;
+    if (activeElement !== null && panel.contains(activeElement)) return;
+    if (
+      activeElement === null ||
+      activeElement === document.body ||
+      activeElement === document.documentElement
+    ) {
+      panel.focus();
+    }
+  });
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key === 'Escape') {
@@ -78,7 +97,7 @@ export function Modal({
         aria-modal="true"
         aria-labelledby={labelledBy}
         tabIndex={-1}
-        className={`max-h-[calc(100vh-2rem)] w-full overflow-y-auto rounded-lg border border-line bg-surface shadow-[0_18px_50px_rgba(22,24,26,0.18)] focus:outline-none ${panelClassName}`}
+        className={`max-h-[calc(100dvh-2rem)] w-full overflow-y-auto rounded-lg border border-line bg-surface shadow-[0_18px_50px_rgba(22,24,26,0.18)] focus:outline-none ${panelClassName}`}
       >
         {children}
       </div>

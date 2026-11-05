@@ -87,7 +87,7 @@ export function KeyRevokeDialog({
             disabled={pending}
             className="bg-danger text-white hover:bg-danger/90 disabled:bg-line-strong disabled:text-ink-muted"
           >
-            {pending ? 'Revoking...' : 'Revoke key'}
+            {pending ? 'Revoking…' : 'Revoke key'}
           </Button>
         </div>
       </div>

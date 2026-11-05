@@ -102,7 +102,7 @@ export function AdminCreateDialog({ returnFocusRef, onClose, onCreated }: AdminC
         </Button>
       </div>
 
-      <form onSubmit={handleSubmit} className="p-5" noValidate>
+      <form onSubmit={handleSubmit} className="p-5" noValidate aria-busy={pending}>
         <div>
           <label htmlFor={usernameId} className="block text-[13px] font-medium text-ink">
             Username
@@ -116,6 +116,7 @@ export function AdminCreateDialog({ returnFocusRef, onClose, onCreated }: AdminC
               setUsername(event.target.value);
               clearServerError();
             }}
+            disabled={pending}
             autoComplete="off"
             autoCapitalize="none"
             autoCorrect="off"
@@ -129,7 +130,7 @@ export function AdminCreateDialog({ returnFocusRef, onClose, onCreated }: AdminC
             3–64 characters: lowercase letters, numbers, and . _ -
           </p>
           {fieldErrors.username !== undefined && (
-            <p id={usernameErrorId} className="mt-1 text-[11.5px] text-danger">
+            <p id={usernameErrorId} role="alert" className="mt-1 text-[11.5px] text-danger">
               {fieldErrors.username}
             </p>
           )}
@@ -147,6 +148,7 @@ export function AdminCreateDialog({ returnFocusRef, onClose, onCreated }: AdminC
               setDisplayName(event.target.value);
               clearServerError();
             }}
+            disabled={pending}
             autoComplete="off"
             aria-invalid={fieldErrors.displayName !== undefined}
             aria-describedby={
@@ -156,7 +158,7 @@ export function AdminCreateDialog({ returnFocusRef, onClose, onCreated }: AdminC
             className={FIELD_CLASS}
           />
           {fieldErrors.displayName !== undefined && (
-            <p id={displayNameErrorId} className="mt-1 text-[11.5px] text-danger">
+            <p id={displayNameErrorId} role="alert" className="mt-1 text-[11.5px] text-danger">
               {fieldErrors.displayName}
             </p>
           )}
@@ -173,6 +175,7 @@ export function AdminCreateDialog({ returnFocusRef, onClose, onCreated }: AdminC
               setRole(event.target.value as AdminRole);
               clearServerError();
             }}
+            disabled={pending}
             aria-describedby={roleHelpId}
             className={FIELD_CLASS}
           >
@@ -199,6 +202,7 @@ export function AdminCreateDialog({ returnFocusRef, onClose, onCreated }: AdminC
               setPassword(event.target.value);
               clearServerError();
             }}
+            disabled={pending}
             autoComplete="new-password"
             aria-invalid={fieldErrors.password !== undefined}
             aria-describedby={passwordDescribedBy}
@@ -208,7 +212,7 @@ export function AdminCreateDialog({ returnFocusRef, onClose, onCreated }: AdminC
             At least 12 characters. It is never shown again after saving.
           </p>
           {fieldErrors.password !== undefined && (
-            <p id={passwordErrorId} className="mt-1 text-[11.5px] text-danger">
+            <p id={passwordErrorId} role="alert" className="mt-1 text-[11.5px] text-danger">
               {fieldErrors.password}
             </p>
           )}

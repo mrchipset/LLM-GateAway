@@ -30,9 +30,11 @@ export function KeysPanel() {
   const [revokingKey, setRevokingKey] = useState<ApiKeySummary | null>(null);
   const [editingKey, setEditingKey] = useState<ApiKeySummary | null>(null);
   const [statusNow, setStatusNow] = useState<number | null>(null);
+  const focusDirectoryRef = useRef(false);
   const filterId = useId();
   const tenantNoteId = useId();
   const createButtonRef = useRef<HTMLButtonElement>(null);
+  const directoryHeadingRef = useRef<HTMLHeadingElement>(null);
   const revokeTriggerRef = useRef<HTMLElement | null>(null);
   const editTriggerRef = useRef<HTMLElement | null>(null);
   const queryClient = useQueryClient();
@@ -60,6 +62,14 @@ export function KeysPanel() {
     }, STATUS_CLOCK_INTERVAL_MS);
     return () => window.clearInterval(interval);
   }, []);
+
+  // Revoking hides the row actions, including the button that opened the dialog.
+  // Move focus to the directory heading instead of leaving it on the document body.
+  useEffect(() => {
+    if (!focusDirectoryRef.current) return;
+    focusDirectoryRef.current = false;
+    directoryHeadingRef.current?.focus();
+  });
 
   useEffect(() => {
     return () => {
@@ -192,7 +202,11 @@ export function KeysPanel() {
 
         <div className="mt-5">
           <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
-            <h3 className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-ink-muted">
+            <h3
+              ref={directoryHeadingRef}
+              tabIndex={-1}
+              className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-ink-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+            >
               Key directory
             </h3>
             {keyPage.status === 'success' && keyPage.dataUpdatedAt > 0 && (
@@ -245,6 +259,7 @@ export function KeysPanel() {
           onRevoked={() => {
             setRevokingKey(null);
             setNotice('API key revoked.');
+            focusDirectoryRef.current = true;
           }}
         />
       )}

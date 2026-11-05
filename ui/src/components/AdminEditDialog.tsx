@@ -107,7 +107,7 @@ export function AdminEditDialog({ admin, returnFocusRef, onClose, onSaved }: Adm
         </Button>
       </div>
 
-      <form onSubmit={handleSubmit} className="p-5" noValidate>
+      <form onSubmit={handleSubmit} className="p-5" noValidate aria-busy={pending}>
         <div>
           <label htmlFor={displayNameId} className="block text-[13px] font-medium text-ink">
             Display name
@@ -122,12 +122,13 @@ export function AdminEditDialog({ admin, returnFocusRef, onClose, onSaved }: Adm
               clearServerError();
             }}
             autoComplete="off"
+            disabled={pending}
             aria-invalid={displayNameError !== null}
             aria-describedby={displayNameError === null ? undefined : displayNameErrorId}
             className={FIELD_CLASS}
           />
           {displayNameError !== null && (
-            <p id={displayNameErrorId} className="mt-1 text-[11.5px] text-danger">
+            <p id={displayNameErrorId} role="alert" className="mt-1 text-[11.5px] text-danger">
               {displayNameError}
             </p>
           )}
@@ -144,6 +145,7 @@ export function AdminEditDialog({ admin, returnFocusRef, onClose, onSaved }: Adm
               setRole(event.target.value as AdminRole);
               clearServerError();
             }}
+            disabled={pending}
             aria-describedby={roleHelpId}
             className={FIELD_CLASS}
           >
@@ -174,12 +176,13 @@ export function AdminEditDialog({ admin, returnFocusRef, onClose, onSaved }: Adm
               aria-checked={active}
               aria-labelledby={activeLabelId}
               aria-describedby={activeHintId}
+              disabled={pending}
               onClick={() => {
                 setActive((current) => !current);
                 setDeactivateConfirmed(false);
                 clearServerError();
               }}
-              className={`relative mt-0.5 inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${
+              className={`relative mt-0.5 inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-60 ${
                 active ? 'bg-ok' : 'bg-line-strong'
               }`}
             >
@@ -208,6 +211,7 @@ export function AdminEditDialog({ admin, returnFocusRef, onClose, onSaved }: Adm
                   id={confirmId}
                   type="checkbox"
                   checked={deactivateConfirmed}
+                  disabled={pending}
                   onChange={(event) => setDeactivateConfirmed(event.target.checked)}
                   className="mt-0.5 size-3.5 accent-danger"
                 />

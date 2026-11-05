@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 
@@ -323,6 +323,38 @@ describe('admin management', () => {
     expect(screen.getByRole('dialog', { name: 'Edit admin' })).toBeInTheDocument();
   });
 
+  it('locks the edit dialog controls while the update is pending', async () => {
+    let resolvePatch: (response: Response) => void = () => {};
+    const pendingPatch = new Promise<Response>((resolve) => {
+      resolvePatch = resolve;
+    });
+    installAdminsMock({ 'PATCH /api/v1/admins/:id': () => pendingPatch });
+    const user = userEvent.setup();
+    renderApp();
+
+    const table = await openAdmins(user);
+    await user.click(within(table).getByRole('button', { name: 'Edit operator' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Edit admin' });
+
+    await user.selectOptions(within(dialog).getByLabelText('Role'), 'auditor');
+    await user.click(within(dialog).getByRole('button', { name: 'Save changes' }));
+
+    const activeSwitch = within(dialog).getByRole('switch', { name: 'Active' });
+    await waitFor(() => {
+      expect(activeSwitch).toBeDisabled();
+    });
+    expect(within(dialog).getByLabelText('Display name')).toBeDisabled();
+    expect(within(dialog).getByLabelText('Role')).toBeDisabled();
+    expect(within(dialog).getByRole('button', { name: 'Cancel' })).toBeDisabled();
+
+    await act(async () => {
+      resolvePatch(jsonResponse({ ...OPS_ADMIN, role: 'auditor' }));
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+  });
+
   it('resets a password only after confirmation and keeps it out of the DOM', async () => {
     const { fetchMock } = installAdminsMock();
     const user = userEvent.setup();
@@ -335,6 +367,7 @@ describe('admin management', () => {
     await user.type(within(dialog).getByLabelText('New password'), NEW_PASSWORD);
     await user.type(within(dialog).getByLabelText('Confirm password'), 'different-password');
     await user.click(within(dialog).getByRole('button', { name: 'Reset password' }));
+    expect(within(dialog).getByRole('alert')).toHaveTextContent('Passwords do not match.');
     expect(within(dialog).getByText('Passwords do not match.')).toBeInTheDocument();
     expect(patchCalls(fetchMock)).toHaveLength(0);
 

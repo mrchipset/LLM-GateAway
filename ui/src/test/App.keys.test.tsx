@@ -1019,6 +1019,12 @@ describe('API key management', () => {
         within(updatedRow).queryByRole('button', { name: 'Revoke Production' }),
       ).not.toBeInTheDocument();
     });
+
+    await waitFor(() => {
+      expect(document.activeElement).toBe(
+        within(keysRegion()).getByRole('heading', { name: 'Key directory' }),
+      );
+    });
   });
 
   it('keeps the revoke dialog open on a 404 key error', async () => {

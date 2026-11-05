@@ -200,6 +200,28 @@ describe('admin audit', () => {
     expect(auditCalls(fetchMock)).toHaveLength(callsBefore);
   });
 
+  it('marks an inverted time range invalid and moves focus to the field', async () => {
+    installFetchMock({
+      '/api/v1/admin-audit': (url) => auditPage([ROLE_EVENT], url),
+    });
+    const user = userEvent.setup();
+    renderApp();
+
+    const region = await openAdminAudit(user);
+    await within(region).findByRole('table', { name: 'Admin audit events' });
+
+    const since = within(region).getByLabelText('Since');
+    const until = within(region).getByLabelText('Until');
+    fireEvent.change(since, { target: { value: '2026-10-03T10:00' } });
+    fireEvent.change(until, { target: { value: '2026-10-02T10:00' } });
+    await user.click(within(region).getByRole('button', { name: 'Apply filters' }));
+
+    expect(within(region).getByRole('alert')).toHaveTextContent('Since must be before until.');
+    expect(until).toHaveAttribute('aria-invalid', 'true');
+    expect(since).toHaveAttribute('aria-invalid', 'false');
+    expect(document.activeElement).toBe(until);
+  });
+
   it('paginates through events', async () => {
     const events: AdminAuditEvent[] = Array.from({ length: 60 }, (_, index) => ({
       ...ROLE_EVENT,

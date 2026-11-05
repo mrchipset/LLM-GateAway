@@ -334,6 +334,12 @@ describe('model registration', () => {
       expect(within(updatedTable).getByText('legacy-chat')).toBeInTheDocument();
     });
 
+    await waitFor(() => {
+      expect(document.activeElement).toBe(
+        screen.getByRole('heading', { name: 'Models', level: 2 }),
+      );
+    });
+
     const deleteCalls = deleteModelCalls(fetchMock);
     expect(deleteCalls).toHaveLength(1);
     const call = deleteCalls[0];

@@ -65,6 +65,7 @@ export function AdminAuditPanel({ active = true }: { active?: boolean }) {
   const [offset, setOffset] = useState(0);
   const [rangeError, setRangeError] = useState<string | null>(null);
   const [timeError, setTimeError] = useState<string | null>(null);
+  const [invalidTimeFields, setInvalidTimeFields] = useState({ since: false, until: false });
 
   const actionListId = useId();
   const targetTypeId = useId();
@@ -76,6 +77,8 @@ export function AdminAuditPanel({ active = true }: { active?: boolean }) {
   const timeNoteId = useId();
   const timeErrorId = useId();
   const rangeErrorId = useId();
+  const sinceInputRef = useRef<HTMLInputElement>(null);
+  const untilInputRef = useRef<HTMLInputElement>(null);
   const tableHeadingRef = useRef<HTMLHeadingElement>(null);
 
   const queryParams = useMemo<AdminAuditQuery>(() => {
@@ -100,6 +103,11 @@ export function AdminAuditPanel({ active = true }: { active?: boolean }) {
 
   const updateDraft = (field: keyof FilterDraft, value: string) => {
     setDraft((current) => ({ ...current, [field]: value }));
+    if (field === 'since' || field === 'until') {
+      setTimeError(null);
+      setRangeError(null);
+      setInvalidTimeFields({ since: false, until: false });
+    }
   };
 
   const handleApply = (event: FormEvent<HTMLFormElement>) => {
@@ -107,14 +115,19 @@ export function AdminAuditPanel({ active = true }: { active?: boolean }) {
 
     const since = draft.since.trim() === '' ? null : toIso(draft.since);
     const until = draft.until.trim() === '' ? null : toIso(draft.until);
-    const invalidTime =
-      (draft.since.trim() !== '' && since === null) ||
-      (draft.until.trim() !== '' && until === null);
+    const sinceUnparsed = draft.since.trim() !== '' && since === null;
+    const untilUnparsed = draft.until.trim() !== '' && until === null;
+    const invalidTime = sinceUnparsed || untilUnparsed;
     const invalidRange = since !== null && until !== null && since >= until;
 
     setTimeError(invalidTime ? 'Enter a valid date and time.' : null);
     setRangeError(invalidRange ? 'Since must be before until.' : null);
-    if (invalidTime || invalidRange) return;
+    setInvalidTimeFields({ since: sinceUnparsed, until: untilUnparsed });
+    if (invalidTime || invalidRange) {
+      const target = sinceUnparsed ? sinceInputRef.current : untilInputRef.current;
+      target?.focus();
+      return;
+    }
 
     setFilters(draft);
     setOffset(0);
@@ -126,6 +139,7 @@ export function AdminAuditPanel({ active = true }: { active?: boolean }) {
     setFilters(EMPTY_FILTERS);
     setRangeError(null);
     setTimeError(null);
+    setInvalidTimeFields({ since: false, until: false });
     setOffset(0);
   };
 
@@ -258,10 +272,12 @@ export function AdminAuditPanel({ active = true }: { active?: boolean }) {
                 Since
               </label>
               <input
+                ref={sinceInputRef}
                 id={sinceId}
                 type="datetime-local"
                 value={draft.since}
                 onChange={(event) => updateDraft('since', event.target.value)}
+                aria-invalid={invalidTimeFields.since}
                 aria-describedby={timeError === null ? timeNoteId : `${timeNoteId} ${timeErrorId}`}
                 className={FIELD_CLASS}
               />
@@ -275,10 +291,12 @@ export function AdminAuditPanel({ active = true }: { active?: boolean }) {
                 Until
               </label>
               <input
+                ref={untilInputRef}
                 id={untilId}
                 type="datetime-local"
                 value={draft.until}
                 onChange={(event) => updateDraft('until', event.target.value)}
+                aria-invalid={invalidTimeFields.until || rangeError !== null}
                 aria-describedby={
                   rangeError === null ? timeNoteId : `${timeNoteId} ${rangeErrorId}`
                 }
@@ -293,12 +311,12 @@ export function AdminAuditPanel({ active = true }: { active?: boolean }) {
                 Times follow your browser timezone and are sent as UTC.
               </p>
               {timeError !== null && (
-                <p id={timeErrorId} className="mt-1 text-[11px] text-danger">
+                <p id={timeErrorId} role="alert" className="mt-1 text-[11px] text-danger">
                   {timeError}
                 </p>
               )}
               {rangeError !== null && (
-                <p id={rangeErrorId} className="mt-1 text-[11px] text-danger">
+                <p id={rangeErrorId} role="alert" className="mt-1 text-[11px] text-danger">
                   {rangeError}
                 </p>
               )}
@@ -324,7 +342,7 @@ export function AdminAuditPanel({ active = true }: { active?: boolean }) {
         <h3
           ref={tableHeadingRef}
           tabIndex={-1}
-          className="mt-4 font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-ink-muted focus:outline-none"
+          className="mt-4 font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-ink-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
         >
           Event directory
         </h3>

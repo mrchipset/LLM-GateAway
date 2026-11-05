@@ -1,4 +1,4 @@
-import { screen, within } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 
@@ -252,6 +252,21 @@ describe('deployment editor', () => {
     expect(deploymentCalls(fetchMock, 'DELETE')).toHaveLength(1);
     expect(within(dialog).queryByText('primary')).not.toBeInTheDocument();
     expect(within(dialog).getByText('1 deployment')).toBeInTheDocument();
+  });
+
+  it('keeps keyboard focus inside the dialog after a deployment is deleted', async () => {
+    installDeploymentMock([PRIMARY, BACKUP]);
+    const user = userEvent.setup();
+    renderApp();
+
+    const dialog = await openDeployments(user);
+    await user.click(within(dialog).getByRole('button', { name: 'Delete deployment backup' }));
+    await user.click(within(dialog).getByRole('button', { name: 'Delete deployment' }));
+
+    expect(await within(dialog).findByText("Deployment 'backup' deleted.")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(document.activeElement).toBe(dialog);
+    });
   });
 
   it('hides deployment controls from an auditor', async () => {

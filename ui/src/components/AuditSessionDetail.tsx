@@ -80,7 +80,7 @@ export function AuditSessionDetail({ session, tenantName, onBack }: AuditSession
           <h3
             ref={headingRef}
             tabIndex={-1}
-            className="mt-1 text-[16px] font-semibold leading-snug tracking-[-0.01em] text-ink focus:outline-none"
+            className="mt-1 text-[16px] font-semibold leading-snug tracking-[-0.01em] text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
           >
             {title}
           </h3>

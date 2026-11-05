@@ -446,7 +446,7 @@ function ConnectedAuditPanel({ active }: { active: boolean }) {
             <h3
               ref={sessionDirectoryHeadingRef}
               tabIndex={-1}
-              className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-ink-muted focus:outline-none"
+              className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-ink-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
             >
               Session directory
             </h3>

@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import type { ReactNode, Ref } from 'react';
 
 interface PanelProps {
   labelledBy: string;
@@ -20,10 +20,11 @@ interface PanelHeaderProps {
   id: string;
   eyebrow: string;
   title: string;
+  titleRef?: Ref<HTMLHeadingElement>;
   children?: ReactNode;
 }
 
-export function PanelHeader({ id, eyebrow, title, children }: PanelHeaderProps) {
+export function PanelHeader({ id, eyebrow, title, titleRef, children }: PanelHeaderProps) {
   return (
     <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-line px-5 py-3.5">
       <div>
@@ -31,8 +32,10 @@ export function PanelHeader({ id, eyebrow, title, children }: PanelHeaderProps) 
           {eyebrow}
         </p>
         <h2
+          ref={titleRef}
           id={id}
-          className="mt-0.5 text-[15px] font-semibold leading-tight tracking-[-0.01em] text-ink"
+          tabIndex={titleRef === undefined ? undefined : -1}
+          className="mt-0.5 text-[15px] font-semibold leading-tight tracking-[-0.01em] text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
         >
           {title}
         </h2>
