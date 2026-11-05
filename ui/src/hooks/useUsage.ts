@@ -6,7 +6,7 @@ import { USAGE_BY_KEY_LIMIT } from '../lib/usage';
 
 export function useUsageSummary(window: UsageWindow) {
   return useQuery({
-    queryKey: queryKeys.usageSummary(window.tenantId, window.since),
+    queryKey: queryKeys.usageSummary(window.tenantId, window.since, window.until ?? null),
     queryFn: ({ signal }) => getUsageSummary(window, signal),
     retry: false,
   });
@@ -14,7 +14,7 @@ export function useUsageSummary(window: UsageWindow) {
 
 export function useUsageSeries(window: UsageWindow) {
   return useQuery({
-    queryKey: queryKeys.usageSeries(window.tenantId, window.since),
+    queryKey: queryKeys.usageSeries(window.tenantId, window.since, window.until ?? null),
     queryFn: ({ signal }) => getUsageSeries(window, signal),
     retry: false,
   });
@@ -22,7 +22,7 @@ export function useUsageSeries(window: UsageWindow) {
 
 export function useUsageByKey(window: UsageWindow, limit = USAGE_BY_KEY_LIMIT) {
   return useQuery({
-    queryKey: queryKeys.usageByKey(window.tenantId, window.since, limit),
+    queryKey: queryKeys.usageByKey(window.tenantId, window.since, window.until ?? null, limit),
     queryFn: ({ signal }) => getUsageByKey(window, signal, limit),
     retry: false,
   });

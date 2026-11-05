@@ -28,12 +28,12 @@ export const queryKeys = {
   tenantPage: (limit: number, offset: number) => [...tenantsPrefix, { limit, offset }] as const,
   tenantBilling: (tenantId: string) => [...tenantBillingPrefix, tenantId] as const,
   modelAccess: (tenantId: string) => [...modelAccessPrefix, tenantId] as const,
-  usageSummary: (tenantId: string | null, since: string) =>
-    [...usageSummaryPrefix, tenantId, since] as const,
-  usageSeries: (tenantId: string | null, since: string) =>
-    [...usageSeriesPrefix, tenantId, since] as const,
-  usageByKey: (tenantId: string | null, since: string, limit: number) =>
-    [...usageByKeyPrefix, tenantId, since, limit] as const,
+  usageSummary: (tenantId: string | null, since: string, until: string | null) =>
+    [...usageSummaryPrefix, tenantId, since, until] as const,
+  usageSeries: (tenantId: string | null, since: string, until: string | null) =>
+    [...usageSeriesPrefix, tenantId, since, until] as const,
+  usageByKey: (tenantId: string | null, since: string, until: string | null, limit: number) =>
+    [...usageByKeyPrefix, tenantId, since, until, limit] as const,
   keys: keysPrefix,
   keyPage: (tenantId: string | null, limit: number, offset: number) =>
     [...keysPrefix, { tenantId, limit, offset }] as const,

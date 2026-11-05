@@ -414,11 +414,15 @@ describe('usage panel', () => {
       name: 'Daily total tokens from Oct 1, 2026 to Oct 3, 2026, UTC',
     });
     const bars = within(chart).getAllByRole('listitem');
+    const barButtons = within(chart).getAllByRole('button');
 
     expect(bars).toHaveLength(SERIES.points.length);
-    expect(bars[0]).toHaveAccessibleName('Oct 1, 2026 UTC: 100 total tokens across 2 requests');
-    expect(bars[1]).toHaveAccessibleName('Oct 2, 2026 UTC: 0 total tokens across 0 requests');
-    expect(bars[2]).toHaveAccessibleName('Oct 3, 2026 UTC: 50 total tokens across 1 request');
+    expect(barButtons).toHaveLength(SERIES.points.length);
+    expect(barButtons[0]).toHaveAccessibleName(
+      'Oct 1, 2026 UTC: 100 total tokens across 2 requests',
+    );
+    expect(barButtons[1]).toHaveAccessibleName('Oct 2, 2026 UTC: 0 total tokens across 0 requests');
+    expect(barButtons[2]).toHaveAccessibleName('Oct 3, 2026 UTC: 50 total tokens across 1 request');
     expect(screen.getByText('Last bar covers today so far (UTC).')).toBeInTheDocument();
   });
 
@@ -563,7 +567,10 @@ describe('usage panel', () => {
       await screen.findByRole('table', { name: 'Usage by model' });
       const callsBefore = fetchMock.mock.calls.length;
 
-      await user.click(screen.getByRole('button', { name: 'Export CSV' }));
+      const modelSection = screen.getByRole('region', { name: 'Usage by model' });
+      const exportButton = within(modelSection).getByRole('button', { name: 'Export CSV' });
+      await waitFor(() => expect(exportButton).toBeEnabled());
+      await user.click(exportButton);
 
       expect(fetchMock.mock.calls).toHaveLength(callsBefore);
       expect(download.createObjectURL).toHaveBeenCalledOnce();
@@ -599,7 +606,10 @@ describe('usage panel', () => {
 
     expect(await screen.findByText('No usage in this window.')).toBeInTheDocument();
     expect(screen.queryByRole('table', { name: 'Usage by model' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Export CSV' })).not.toBeInTheDocument();
+    const modelSection = screen.getByRole('region', { name: 'Usage by model' });
+    expect(
+      within(modelSection).queryByRole('button', { name: 'Export CSV' }),
+    ).not.toBeInTheDocument();
   });
 
   it('shows the HTTP status, message, code, and request id when by-key usage fails', async () => {
@@ -801,6 +811,218 @@ describe('usage panel', () => {
 
     const usageRegion = screen.getByRole('region', { name: 'Usage' });
     expect(await within(usageRegion).findByText('Showing 2 of 150 tenants')).toBeInTheDocument();
+  });
+
+  it('drills into a UTC day for totals and keys while the chart keeps the full range', async () => {
+    const fetchMock = installUsageMock();
+    const user = userEvent.setup();
+    renderApp();
+
+    await openUsage(user);
+
+    const bar = await screen.findByRole('button', {
+      name: 'Oct 1, 2026 UTC: 100 total tokens across 2 requests',
+    });
+    await user.click(bar);
+
+    await waitFor(() => {
+      for (const path of ['/api/v1/usage/summary', '/api/v1/usage/by-key']) {
+        const params = lastParams(fetchMock, path);
+        expect(params?.get('since'), `${path} since`).toBe('2026-10-01T00:00:00.000Z');
+        expect(params?.get('until'), `${path} until`).toBe('2026-10-02T00:00:00.000Z');
+      }
+    });
+
+    const series = lastParams(fetchMock, '/api/v1/usage/series');
+    expect(series?.get('since')).toBe('2026-09-25T00:00:00.000Z');
+    expect(series?.has('until')).toBe(false);
+
+    expect(
+      screen.getByRole('button', { name: 'Clear selected day 2026-10-01 (UTC)' }),
+    ).toBeInTheDocument();
+    expect(screen.getByText('Showing 2026-10-01 (UTC)')).toBeInTheDocument();
+    expect(bar).toHaveAttribute('aria-pressed', 'true');
+    expect(bar).toHaveAttribute('aria-current', 'date');
+  });
+
+  it('clears the day filter and restores the full range window', async () => {
+    const fetchMock = installUsageMock();
+    const user = userEvent.setup();
+    renderApp();
+
+    await openUsage(user);
+
+    await user.click(
+      await screen.findByRole('button', {
+        name: 'Oct 1, 2026 UTC: 100 total tokens across 2 requests',
+      }),
+    );
+    await waitFor(() => {
+      expect(lastParams(fetchMock, '/api/v1/usage/summary')?.get('until')).toBe(
+        '2026-10-02T00:00:00.000Z',
+      );
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Clear selected day 2026-10-01 (UTC)' }));
+
+    await waitFor(() => {
+      for (const path of ['/api/v1/usage/summary', '/api/v1/usage/by-key']) {
+        const params = lastParams(fetchMock, path);
+        expect(params?.get('since'), `${path} since`).toBe('2026-09-25T00:00:00.000Z');
+        expect(params?.has('until'), `${path} should omit until`).toBe(false);
+      }
+    });
+
+    expect(screen.queryByRole('button', { name: /Clear selected day/ })).not.toBeInTheDocument();
+  });
+
+  it('clears the selected day when the range preset changes', async () => {
+    const fetchMock = installUsageMock();
+    const user = userEvent.setup();
+    renderApp();
+
+    await openUsage(user);
+
+    await user.click(
+      await screen.findByRole('button', {
+        name: 'Oct 1, 2026 UTC: 100 total tokens across 2 requests',
+      }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByRole('button', { name: 'Clear selected day 2026-10-01 (UTC)' }),
+      ).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole('button', { name: '7 days' }));
+
+    await waitFor(() => {
+      const params = lastParams(fetchMock, '/api/v1/usage/summary');
+      expect(params?.get('since')).toBe('2026-10-18T00:00:00.000Z');
+      expect(params?.has('until')).toBe(false);
+    });
+    expect(screen.queryByRole('button', { name: /Clear selected day/ })).not.toBeInTheDocument();
+  });
+
+  it('selects a day with Enter and Space from the keyboard', async () => {
+    const fetchMock = installUsageMock();
+    const user = userEvent.setup();
+    renderApp();
+
+    await openUsage(user);
+
+    const bar = await screen.findByRole('button', {
+      name: 'Oct 1, 2026 UTC: 100 total tokens across 2 requests',
+    });
+
+    bar.focus();
+    expect(bar).toHaveFocus();
+    await user.keyboard('{Enter}');
+    await waitFor(() => {
+      expect(lastParams(fetchMock, '/api/v1/usage/summary')?.get('until')).toBe(
+        '2026-10-02T00:00:00.000Z',
+      );
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Clear selected day 2026-10-01 (UTC)' }));
+    await waitFor(() => {
+      expect(lastParams(fetchMock, '/api/v1/usage/summary')?.has('until')).toBe(false);
+    });
+
+    bar.focus();
+    await user.keyboard(' ');
+    await waitFor(() => {
+      expect(lastParams(fetchMock, '/api/v1/usage/summary')?.get('until')).toBe(
+        '2026-10-02T00:00:00.000Z',
+      );
+    });
+    expect(
+      screen.getByRole('button', { name: 'Clear selected day 2026-10-01 (UTC)' }),
+    ).toBeInTheDocument();
+  });
+
+  it('exports by-model and by-key CSVs using the selected day window', async () => {
+    const download = stubDownload();
+    try {
+      installUsageMock();
+      const user = userEvent.setup();
+      renderApp();
+
+      await openUsage(user);
+      await user.click(
+        await screen.findByRole('button', {
+          name: 'Oct 1, 2026 UTC: 100 total tokens across 2 requests',
+        }),
+      );
+
+      const modelSection = screen.getByRole('region', { name: 'Usage by model' });
+      const modelExport = within(modelSection).getByRole('button', { name: 'Export CSV' });
+      await waitFor(() => expect(modelExport).toBeEnabled());
+      await user.click(modelExport);
+      expect(download.clicked()).toEqual({
+        href: 'blob:usage-download',
+        download: 'usage-by-model-all-2026-10-01-2026-10-02.csv',
+      });
+
+      const keySection = screen.getByRole('region', { name: 'Usage by key' });
+      const keyExport = within(keySection).getByRole('button', { name: 'Export CSV' });
+      await waitFor(() => expect(keyExport).toBeEnabled());
+      await user.click(keyExport);
+      expect(download.clicked()).toEqual({
+        href: 'blob:usage-download',
+        download: 'usage-by-key-all-2026-10-01-2026-10-02.csv',
+      });
+    } finally {
+      download.restore();
+    }
+  });
+
+  it('exports the by-key breakdown with raw numbers and the shared CSV shape', async () => {
+    const download = stubDownload();
+    try {
+      installUsageMock();
+      const user = userEvent.setup();
+      renderApp();
+
+      await openUsage(user);
+      await screen.findByRole('table', { name: 'Usage by API key' });
+
+      const keySection = screen.getByRole('region', { name: 'Usage by key' });
+      const exportButton = within(keySection).getByRole('button', { name: 'Export CSV' });
+      await waitFor(() => expect(exportButton).toBeEnabled());
+      await user.click(exportButton);
+
+      expect(download.clicked()).toEqual({
+        href: 'blob:usage-download',
+        download: 'usage-by-key-all-2026-09-25-2026-10-25.csv',
+      });
+      expect(await download.blob()?.text()).toBe(
+        [
+          'Key name,Key prefix,Requests,Prompt,Completion,Cached,Total,Covered,Billable,Billed cost',
+          'Production key,sk-live-1234,30,900000,200000,90000,1100000,800000,300000,0.300000',
+          'sk-test-5678,sk-test-5678,10,300000,100000,10000,400000,100000,300000,0.120000',
+          '33333333…,,0,0,0,0,0,0,0,0.000000',
+        ].join('\n'),
+      );
+    } finally {
+      download.restore();
+    }
+  });
+
+  it('hides the by-key export control when there are no keys', async () => {
+    installUsageMock({
+      '/api/v1/usage/by-key': () => jsonResponse({ limit: 100, items: [] }),
+    });
+    const user = userEvent.setup();
+    renderApp();
+
+    await openUsage(user);
+
+    expect(await screen.findByText('No usage in this range')).toBeInTheDocument();
+    const keySection = screen.getByRole('region', { name: 'Usage by key' });
+    expect(
+      within(keySection).queryByRole('button', { name: 'Export CSV' }),
+    ).not.toBeInTheDocument();
   });
 
   it('removes usage data on sign out, returns to login, and keeps storage empty', async () => {

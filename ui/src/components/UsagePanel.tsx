@@ -7,6 +7,8 @@ import { downloadBlob } from '../lib/download';
 import { formatCompactNumber, formatExactNumber, formatUpdatedAt } from '../lib/format';
 import {
   USAGE_RANGE_PRESETS,
+  usageByKeyCsv,
+  usageByKeyFilename,
   usageByModelCsv,
   usageByModelFilename,
   type UsageRangeDays,
@@ -24,10 +26,13 @@ import { UsageStats, UsageStatsSkeleton } from './UsageStats';
 interface UsagePanelProps {
   tenantId: string;
   rangeDays: UsageRangeDays;
-  windowSince: string;
-  windowUntil: string;
+  effectiveSince: string;
+  effectiveUntil: string;
+  selectedDay: string | null;
   onTenantChange: (tenantId: string) => void;
   onRangeChange: (days: UsageRangeDays) => void;
+  onSelectDay: (day: string) => void;
+  onClearDay: () => void;
   onRefresh: () => void;
   tenantsQuery: TenantsQuery;
   summaryQuery: UsageSummaryQuery;
@@ -38,10 +43,13 @@ interface UsagePanelProps {
 export function UsagePanel({
   tenantId,
   rangeDays,
-  windowSince,
-  windowUntil,
+  effectiveSince,
+  effectiveUntil,
+  selectedDay,
   onTenantChange,
   onRangeChange,
+  onSelectDay,
+  onClearDay,
   onRefresh,
   tenantsQuery,
   summaryQuery,
@@ -73,10 +81,13 @@ export function UsagePanel({
         <UsageContent
           tenantId={tenantId}
           rangeDays={rangeDays}
-          windowSince={windowSince}
-          windowUntil={windowUntil}
+          effectiveSince={effectiveSince}
+          effectiveUntil={effectiveUntil}
+          selectedDay={selectedDay}
           onTenantChange={onTenantChange}
           onRangeChange={onRangeChange}
+          onSelectDay={onSelectDay}
+          onClearDay={onClearDay}
           tenantsQuery={tenantsQuery}
           summaryQuery={summaryQuery}
           seriesQuery={seriesQuery}
@@ -92,10 +103,13 @@ type UsageContentProps = Omit<UsagePanelProps, 'onRefresh'>;
 function UsageContent({
   tenantId,
   rangeDays,
-  windowSince,
-  windowUntil,
+  effectiveSince,
+  effectiveUntil,
+  selectedDay,
   onTenantChange,
   onRangeChange,
+  onSelectDay,
+  onClearDay,
   tenantsQuery,
   summaryQuery,
   seriesQuery,
@@ -120,6 +134,8 @@ function UsageContent({
   );
   const byModelItems = summaryQuery.data?.by_model ?? [];
   const canExportByModel = summaryQuery.status === 'success' && byModelItems.length > 0;
+  const byKeyItems = byKeyQuery.data?.items ?? [];
+  const canExportByKey = byKeyQuery.status === 'success' && byKeyItems.length > 0;
 
   const handleExportByModel = () => {
     if (!canExportByModel) return;
@@ -127,8 +143,20 @@ function UsageContent({
     const csv = usageByModelCsv(byModelItems);
     const filename = usageByModelFilename(
       tenantId === '' ? null : tenantId,
-      windowSince,
-      windowUntil,
+      effectiveSince,
+      effectiveUntil,
+    );
+    downloadBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), filename);
+  };
+
+  const handleExportByKey = () => {
+    if (!canExportByKey) return;
+
+    const csv = usageByKeyCsv(byKeyItems);
+    const filename = usageByKeyFilename(
+      tenantId === '' ? null : tenantId,
+      effectiveSince,
+      effectiveUntil,
     );
     downloadBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), filename);
   };
@@ -138,8 +166,10 @@ function UsageContent({
       <UsageControls
         tenantId={tenantId}
         rangeDays={rangeDays}
+        selectedDay={selectedDay}
         onTenantChange={onTenantChange}
         onRangeChange={onRangeChange}
+        onClearDay={onClearDay}
         tenantsQuery={tenantsQuery}
         selectedTenant={selectedTenant}
         updatedAt={updatedAt}
@@ -190,7 +220,11 @@ function UsageContent({
             ) : seriesQuery.data.points.length === 0 ? (
               <EmptyRange />
             ) : (
-              <UsageChart points={seriesQuery.data.points} />
+              <UsageChart
+                points={seriesQuery.data.points}
+                selectedDay={selectedDay}
+                onSelectDay={onSelectDay}
+              />
             )}
           </div>
         </section>
@@ -239,10 +273,20 @@ function UsageContent({
           <SectionHeading
             id={byKeyHeadingId}
             aside={
-              byKeyQuery.status === 'success' && byKeyQuery.data.items.length > 0 ? (
-                <span>
-                  {byKeyQuery.data.items.length}{' '}
-                  {byKeyQuery.data.items.length === 1 ? 'key' : 'keys'}
+              canExportByKey ? (
+                <span className="inline-flex items-center gap-2">
+                  <span>
+                    {formatExactNumber(byKeyItems.length)}{' '}
+                    {byKeyItems.length === 1 ? 'key' : 'keys'}
+                  </span>
+                  <Button
+                    variant="ghost"
+                    onClick={handleExportByKey}
+                    disabled={byKeyQuery.isFetching}
+                    className="-mr-1 px-1.5 py-0.5 text-[10.5px]"
+                  >
+                    Export CSV
+                  </Button>
                 </span>
               ) : null
             }
@@ -272,8 +316,10 @@ function UsageContent({
 interface UsageControlsProps {
   tenantId: string;
   rangeDays: UsageRangeDays;
+  selectedDay: string | null;
   onTenantChange: (tenantId: string) => void;
   onRangeChange: (days: UsageRangeDays) => void;
+  onClearDay: () => void;
   tenantsQuery: TenantsQuery;
   selectedTenant: TenantSummary | null;
   updatedAt: number;
@@ -284,8 +330,10 @@ interface UsageControlsProps {
 function UsageControls({
   tenantId,
   rangeDays,
+  selectedDay,
   onTenantChange,
   onRangeChange,
+  onClearDay,
   tenantsQuery,
   selectedTenant,
   updatedAt,
@@ -369,6 +417,21 @@ function UsageControls({
               })}
             </div>
           </div>
+
+          {selectedDay !== null && (
+            <button
+              type="button"
+              onClick={onClearDay}
+              aria-label={`Clear selected day ${selectedDay} (UTC)`}
+              className="inline-flex items-center gap-1.5 rounded-md border border-accent/40 bg-accent/5 px-2.5 py-1.5 font-mono text-[10.5px] tabular-nums text-ink transition-colors hover:border-accent/60 hover:bg-accent/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+            >
+              <span>Showing {selectedDay} (UTC)</span>
+              <span aria-hidden="true" className="text-ink-muted">
+                ·
+              </span>
+              <span className="font-medium text-accent">Clear</span>
+            </button>
+          )}
         </div>
 
         <div className="flex items-baseline gap-2 lg:flex-col lg:items-end lg:gap-0.5">

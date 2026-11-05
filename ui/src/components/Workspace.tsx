@@ -4,7 +4,12 @@ import { useModels } from '../hooks/useModels';
 import { useTenants } from '../hooks/useTenants';
 import { useUsageByKey, useUsageSeries, useUsageSummary } from '../hooks/useUsage';
 import { formatUpdatedAt } from '../lib/format';
-import { DEFAULT_USAGE_RANGE_DAYS, usageRangeSinceIso, type UsageRangeDays } from '../lib/usage';
+import {
+  DEFAULT_USAGE_RANGE_DAYS,
+  usageDayWindow,
+  usageRangeSinceIso,
+  type UsageRangeDays,
+} from '../lib/usage';
 import {
   AccessIcon,
   AdminAuditIcon,
@@ -35,6 +40,7 @@ export function Workspace() {
   const [tab, setTab] = useState<WorkspaceTab>('models');
   const [tenantId, setTenantId] = useState('');
   const [rangeDays, setRangeDays] = useState<UsageRangeDays>(DEFAULT_USAGE_RANGE_DAYS);
+  const [selectedDay, setSelectedDay] = useState<string | null>(null);
   const [anchor, setAnchor] = useState(() => new Date());
   const tabRefs = useRef<Partial<Record<WorkspaceTab, HTMLButtonElement | null>>>({});
 
@@ -50,16 +56,29 @@ export function Workspace() {
   ];
 
   const since = useMemo(() => usageRangeSinceIso(rangeDays, anchor), [rangeDays, anchor]);
-  const usageWindow = useMemo(
+  const until = anchor.toISOString();
+  const dayWindow = useMemo(
+    () => (selectedDay === null ? null : usageDayWindow(selectedDay)),
+    [selectedDay],
+  );
+  const seriesWindow = useMemo(
     () => ({ tenantId: tenantId === '' ? null : tenantId, since }),
     [tenantId, since],
+  );
+  const summaryWindow = useMemo(
+    () => ({
+      tenantId: tenantId === '' ? null : tenantId,
+      since: dayWindow?.since ?? since,
+      ...(dayWindow !== null ? { until: dayWindow.until } : {}),
+    }),
+    [tenantId, since, dayWindow],
   );
 
   const modelsQuery = useModels();
   const tenantsQuery = useTenants();
-  const summaryQuery = useUsageSummary(usageWindow);
-  const seriesQuery = useUsageSeries(usageWindow);
-  const byKeyQuery = useUsageByKey(usageWindow);
+  const summaryQuery = useUsageSummary(summaryWindow);
+  const seriesQuery = useUsageSeries(seriesWindow);
+  const byKeyQuery = useUsageByKey(summaryWindow);
 
   const usageUpdatedAt = Math.max(
     summaryQuery.dataUpdatedAt,
@@ -77,12 +96,23 @@ export function Workspace() {
 
   const announcement =
     !usageHasError && usageSettled && usageUpdatedAt > 0
-      ? `Usage updated at ${formatUpdatedAt(usageUpdatedAt)} for the last ${rangeDays} days.`
+      ? selectedDay !== null
+        ? `Usage updated at ${formatUpdatedAt(usageUpdatedAt)} for ${selectedDay} (UTC).`
+        : `Usage updated at ${formatUpdatedAt(usageUpdatedAt)} for the last ${rangeDays} days.`
       : '';
 
   const handleRangeChange = (days: UsageRangeDays) => {
     setRangeDays(days);
+    setSelectedDay(null);
     setAnchor(new Date());
+  };
+
+  const handleSelectDay = (day: string) => {
+    setSelectedDay(day);
+  };
+
+  const handleClearDay = () => {
+    setSelectedDay(null);
   };
 
   const handleRefresh = () => {
@@ -90,7 +120,7 @@ export function Workspace() {
     const nextSince = usageRangeSinceIso(rangeDays, nextAnchor);
     setAnchor(nextAnchor);
 
-    if (nextSince === since) {
+    if (nextSince === since || selectedDay !== null) {
       void Promise.all([
         summaryQuery.refetch(),
         seriesQuery.refetch(),
@@ -197,10 +227,13 @@ export function Workspace() {
         <UsagePanel
           tenantId={tenantId}
           rangeDays={rangeDays}
-          windowSince={since}
-          windowUntil={anchor.toISOString()}
+          effectiveSince={dayWindow?.since ?? since}
+          effectiveUntil={dayWindow?.until ?? until}
+          selectedDay={selectedDay}
           onTenantChange={setTenantId}
           onRangeChange={handleRangeChange}
+          onSelectDay={handleSelectDay}
+          onClearDay={handleClearDay}
           onRefresh={handleRefresh}
           tenantsQuery={tenantsQuery}
           summaryQuery={summaryQuery}

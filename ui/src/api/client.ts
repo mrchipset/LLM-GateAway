@@ -489,6 +489,7 @@ export interface UsageByKeyResponse {
 export interface UsageWindow {
   tenantId: string | null;
   since: string;
+  until?: string;
 }
 
 export interface LoginInput {
@@ -1492,6 +1493,9 @@ function usageWindowQuery(window: UsageWindow): URLSearchParams {
     params.set('tenant_id', window.tenantId);
   }
   params.set('since', window.since);
+  if (window.until !== undefined && window.until !== '') {
+    params.set('until', window.until);
+  }
   return params;
 }
 

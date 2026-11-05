@@ -1,20 +1,11 @@
 import type { KeyUsageSummary } from '../api/client';
 import { formatCost } from '../lib/format';
+import { usageKeyLabel } from '../lib/usage';
 import { CompactNumber } from './CompactNumber';
 
 interface UsageByKeyTableProps {
   items: KeyUsageSummary[];
   limit: number;
-}
-
-function keyLabel(item: KeyUsageSummary): string {
-  const name = item.name?.trim();
-  if (name !== undefined && name.length > 0) return name;
-
-  const prefix = item.key_prefix?.trim();
-  if (prefix !== undefined && prefix.length > 0) return prefix;
-
-  return `${item.api_key_id.slice(0, 8)}…`;
 }
 
 function KeyName({ item }: { item: KeyUsageSummary }) {
@@ -29,7 +20,7 @@ function KeyName({ item }: { item: KeyUsageSummary }) {
         className="break-words font-mono text-[12.5px] font-medium text-ink"
         title={item.api_key_id}
       >
-        {keyLabel(item)}
+        {usageKeyLabel(item)}
       </p>
       {showPrefix && (
         <p className="mt-0.5 font-mono text-[10.5px] break-all text-ink-muted">{prefix}</p>
