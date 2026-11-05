@@ -200,6 +200,48 @@ class ChatStream:
             )
 
 
+def _enforce_capabilities(
+    request: ChatCompletionRequest,
+    config: ModelConfig,
+    *,
+    stream: bool,
+) -> None:
+    """Reject requests the configured model cannot serve, before any upstream call."""
+    requested = (
+        request.max_tokens if request.max_tokens is not None else request.max_completion_tokens
+    )
+    if (
+        requested is not None
+        and config.max_output_tokens is not None
+        and requested > config.max_output_tokens
+    ):
+        raise _error(
+            status_code=400,
+            code=ApiErrorCode.REQUEST_LIMIT_EXCEEDED,
+            message=(
+                f"Model '{config.id}' supports at most {config.max_output_tokens} output tokens"
+            ),
+            error_type="invalid_request_error",
+            param="max_tokens",
+        )
+    if request.tools and not config.supports_tools:
+        raise _error(
+            status_code=400,
+            code=ApiErrorCode.REQUEST_LIMIT_EXCEEDED,
+            message=f"Model '{config.id}' does not support tools",
+            error_type="invalid_request_error",
+            param="tools",
+        )
+    if stream and not config.supports_streaming:
+        raise _error(
+            status_code=400,
+            code=ApiErrorCode.REQUEST_LIMIT_EXCEEDED,
+            message=f"Model '{config.id}' does not support streaming",
+            error_type="invalid_request_error",
+            param="stream",
+        )
+
+
 class ChatService:
     def __init__(
         self,
@@ -260,6 +302,7 @@ class ChatService:
         self, request: ChatCompletionRequest, *, tenant_id: UUID
     ) -> ChatCompletionResult:
         resolved = await self.resolve_model(request.model, tenant_id=tenant_id)
+        _enforce_capabilities(request, resolved.config, stream=False)
         try:
             if self._router is not None:
                 route = await self._router.complete(
@@ -296,6 +339,7 @@ class ChatService:
 
     async def open_stream(self, request: ChatCompletionRequest, *, tenant_id: UUID) -> ChatStream:
         resolved = await self.resolve_model(request.model, tenant_id=tenant_id)
+        _enforce_capabilities(request, resolved.config, stream=True)
         stream_options = request.stream_options or {}
         client_wants_usage = bool(stream_options.get("include_usage"))
         upstream_request = request.model_copy(

@@ -199,6 +199,40 @@ Notes:
 - With `stream_options.include_usage=true`, DeepSeek attaches usage to the final content chunk and does not emit a separate usage-only chunk; the gateway forwards it as-is.
 - Reasoning models can be slow to the first token; raise `GATEWAY_REQUEST_TIMEOUT_SECONDS` if needed.
 
+## Azure OpenAI
+
+Azure routes by deployment name and authenticates with `api-key` instead of a bearer token, so it has its own adapter. The model's `upstream_model` must be the Azure **deployment name**.
+
+```dotenv
+GATEWAY_AZURE_OPENAI_API_KEY=...
+GATEWAY_AZURE_OPENAI_BASE_URL=https://your-resource.openai.azure.com
+GATEWAY_AZURE_API_VERSION=2024-10-21
+```
+
+With a resource-level base URL the gateway builds `.../openai/deployments/<deployment>/chat/completions?api-version=...`. A deployment's own `base_url` overrides the resource URL, and `credential_env` can point at a different variable when one gateway serves several Azure accounts.
+
+## Anthropic
+
+Anthropic's Messages API is not OpenAI-compatible; the adapter translates requests and responses, including streaming:
+
+```dotenv
+GATEWAY_ANTHROPIC_API_KEY=sk-ant-...
+GATEWAY_ANTHROPIC_BASE_URL=https://api.anthropic.com
+GATEWAY_ANTHROPIC_VERSION=2023-06-01
+GATEWAY_ANTHROPIC_DEFAULT_MAX_TOKENS=1024
+```
+
+Register the model with `provider: anthropic` and the Messages model id as `upstream_model` (for example `claude-sonnet-4-5`). Translation notes:
+
+- System/developer messages become the top-level `system` prompt; `max_tokens` is required by Anthropic and falls back to `GATEWAY_ANTHROPIC_DEFAULT_MAX_TOKENS` when the client omits it.
+- OpenAI `tools`/`tool_choice` and assistant `tool_calls` map to `tool_use` / `tool_result` blocks; `stop` maps to `stop_sequences`.
+- Usage maps `input_tokens`/`output_tokens` to prompt/completion tokens, and `cache_read_input_tokens` to `prompt_tokens_details.cached_tokens`.
+- Streaming maps text and `input_json_delta` events to OpenAI deltas, and emits a final usage chunk even when the client did not request one.
+
+## Model capabilities
+
+Models can declare `context_window`, `max_output_tokens`, `supports_tools`, and `supports_streaming` at registration (the console form is not wired for these yet; use the API). The gateway rejects a request with 400 `request_limit_exceeded` before calling upstream when `max_tokens` exceeds `max_output_tokens`, when tools are disabled, or when streaming is disabled. The context window is recorded for capacity planning but not tokenized precisely; prompt limits remain character-based.
+
 ## Token usage
 
 Every successful request records one usage row (tenant, API key, model, provider) with input, output, total, and cache-hit tokens. Streaming requests are recorded too: the gateway asks the upstream for usage, but only forwards the usage chunk to the client when the client explicitly sets `stream_options.include_usage=true`.
@@ -500,6 +534,13 @@ Invoke-RestMethod -Uri http://127.0.0.1:4000/api/v1/tenants -WebSession $session
 | `GATEWAY_OPENAI_API_KEY` | When empty, the OpenAI provider is not registered |
 | `GATEWAY_OPENAI_BASE_URL` | Defaults to `https://api.openai.com/v1` |
 | `GATEWAY_DEEPSEEK_API_KEY` | When empty, the DeepSeek provider is not registered |
+| `GATEWAY_AZURE_OPENAI_API_KEY` | Azure OpenAI key; Azure models always route through a deployment |
+| `GATEWAY_AZURE_OPENAI_BASE_URL` | Azure resource endpoint, e.g. `https://resource.openai.azure.com` |
+| `GATEWAY_AZURE_API_VERSION` | Azure `api-version` query parameter, default `2024-10-21` |
+| `GATEWAY_ANTHROPIC_API_KEY` | When empty, the Anthropic provider is not registered |
+| `GATEWAY_ANTHROPIC_BASE_URL` | Messages API base, default `https://api.anthropic.com` |
+| `GATEWAY_ANTHROPIC_VERSION` | `anthropic-version` header, default `2023-06-01` |
+| `GATEWAY_ANTHROPIC_DEFAULT_MAX_TOKENS` | Fallback `max_tokens` because Messages requires one, default 1024 |
 | `GATEWAY_DEEPSEEK_BASE_URL` | Defaults to `https://api.deepseek.com` |
 | `GATEWAY_FAKE_PROVIDER_ENABLED` | Development/test only; production forbids it |
 | `GATEWAY_REQUEST_TIMEOUT_SECONDS` | Total upstream request timeout, default 60 |
@@ -786,7 +827,8 @@ design.md            LLM-GateAway design guidance
 
 ## Known limitations
 
-- Only OpenAI, DeepSeek (OpenAI-compatible), and the fake provider are implemented; Anthropic, Bedrock, Vertex, and other non-OpenAI protocols are not.
+- OpenAI, DeepSeek, Azure OpenAI, Anthropic (Messages), and the fake provider are implemented. Bedrock and Vertex are not: they need AWS SigV4 / Google OAuth and SDK-level request shapes.
+- Model capabilities (`context_window`, `max_output_tokens`, `supports_tools`, `supports_streaming`) are enforced at request time, but the console create form does not expose them yet; set them through the API. The context window is not tokenized precisely.
 - Multi-deployment routing exists (weights, failover, cooldown), but deployments cannot change provider or name after creation; per-deployment usage attribution is still provider-scoped.
 - No invoicing, per-key or per-model budgets; quotas and budgets are soft against concurrent requests. There is no pre-call reservation by design: a tenant can overshoot by the usage of requests already in flight when the limit is crossed.
 - Rate limits are token buckets for tenant, key, and model. Per-key/model/TPM/concurrency state is shared only with `GATEWAY_RATE_LIMIT_BACKEND=redis`; the `storage` backend keeps those scopes process-local, and its tenant counter is a fixed window.

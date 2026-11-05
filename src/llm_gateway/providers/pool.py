@@ -15,6 +15,8 @@ import os
 import httpx
 
 from llm_gateway.config import Settings
+from llm_gateway.providers.anthropic import AnthropicProvider
+from llm_gateway.providers.azure import AzureOpenAIProvider
 from llm_gateway.providers.base import ChatProvider, ProviderName, ProviderNotConfiguredError
 from llm_gateway.providers.openai import OpenAIProvider
 from llm_gateway.providers.registry import ProviderRegistry
@@ -42,37 +44,71 @@ class ProviderPool:
         self._settings = settings
         self._providers = providers
         self._tracer = tracer
-        self._clients: dict[tuple[str, str | None, str | None], OpenAIProvider] = {}
+        self._clients: dict[tuple[str, str | None, str | None, str | None], ChatProvider] = {}
 
     def get(self, deployment: ModelDeployment) -> ChatProvider:
         if deployment.provider is ProviderName.FAKE:
             return self._providers.get(ProviderName.FAKE)
 
+        is_azure = deployment.provider is ProviderName.AZURE
         has_override = deployment.credential_env is not None or deployment.base_url is not None
-        if not has_override:
+        if not has_override and not is_azure:
             return self._providers.get(deployment.provider)
 
-        key = (deployment.provider.value, deployment.credential_env, deployment.base_url)
+        key = (
+            deployment.provider.value,
+            deployment.credential_env,
+            deployment.base_url,
+            deployment.upstream_model if is_azure else None,
+        )
         cached = self._clients.get(key)
         if cached is not None:
             return cached
 
         api_key = self._resolve_key(deployment)
         base_url = self._resolve_base_url(deployment)
-        provider = OpenAIProvider(
+        provider = self._build(deployment, api_key=api_key, base_url=base_url)
+        self._clients[key] = provider
+        return provider
+
+    def _build(self, deployment: ModelDeployment, *, api_key: str, base_url: str) -> ChatProvider:
+        timeout = httpx.Timeout(
+            self._settings.request_timeout_seconds,
+            connect=self._settings.connect_timeout_seconds,
+        )
+        retry_policy = RetryPolicy(max_attempts=self._settings.max_retries + 1)
+        idle_timeout = self._settings.stream_idle_timeout_seconds
+        if deployment.provider is ProviderName.ANTHROPIC:
+            return AnthropicProvider(
+                api_key=api_key,
+                base_url=base_url,
+                version=self._settings.anthropic_version,
+                default_max_tokens=self._settings.anthropic_default_max_tokens,
+                timeout=timeout,
+                retry_policy=retry_policy,
+                tracer=self._tracer,  # pyright: ignore[reportArgumentType]
+                stream_idle_timeout_seconds=idle_timeout,
+            )
+        if deployment.provider is ProviderName.AZURE:
+            return AzureOpenAIProvider(
+                api_key=api_key,
+                base_url=base_url,
+                deployment=deployment.upstream_model,
+                api_version=self._settings.azure_api_version,
+                timeout=timeout,
+                retry_policy=retry_policy,
+                tracer=self._tracer,  # pyright: ignore[reportArgumentType]
+                stream_idle_timeout_seconds=idle_timeout,
+            )
+        return OpenAIProvider(
             name=deployment.provider,
             api_key=api_key,
             base_url=base_url,
-            timeout=httpx.Timeout(
-                self._settings.request_timeout_seconds,
-                connect=self._settings.connect_timeout_seconds,
-            ),
-            retry_policy=RetryPolicy(max_attempts=self._settings.max_retries + 1),
+            timeout=timeout,
+            retry_policy=retry_policy,
             tracer=self._tracer,  # pyright: ignore[reportArgumentType]
-            stream_idle_timeout_seconds=self._settings.stream_idle_timeout_seconds,
+            stream_idle_timeout_seconds=idle_timeout,
         )
-        self._clients[key] = provider
-        return provider
 
     def _resolve_key(self, deployment: ModelDeployment) -> str:
         if deployment.credential_env is not None:
@@ -85,6 +121,10 @@ class ProviderPool:
             return self._settings.openai_api_key.get_secret_value()
         if deployment.provider is ProviderName.DEEPSEEK and self._settings.deepseek_api_key:
             return self._settings.deepseek_api_key.get_secret_value()
+        if deployment.provider is ProviderName.AZURE and self._settings.azure_openai_api_key:
+            return self._settings.azure_openai_api_key.get_secret_value()
+        if deployment.provider is ProviderName.ANTHROPIC and self._settings.anthropic_api_key:
+            return self._settings.anthropic_api_key.get_secret_value()
         raise ProviderNotConfiguredError(deployment.provider)
 
     def _resolve_base_url(self, deployment: ModelDeployment) -> str:
@@ -94,6 +134,10 @@ class ProviderPool:
             return self._settings.openai_base_url
         if deployment.provider is ProviderName.DEEPSEEK:
             return self._settings.deepseek_base_url
+        if deployment.provider is ProviderName.AZURE and self._settings.azure_openai_base_url:
+            return self._settings.azure_openai_base_url
+        if deployment.provider is ProviderName.ANTHROPIC:
+            return self._settings.anthropic_base_url
         raise ProviderNotConfiguredError(deployment.provider)
 
     async def aclose(self) -> None:

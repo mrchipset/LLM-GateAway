@@ -156,6 +156,10 @@ def _to_model(row: ModelRow) -> ModelConfig:
         enabled=row.enabled,
         requests_per_minute=row.requests_per_minute,
         tokens_per_minute=row.tokens_per_minute,
+        context_window=row.context_window,
+        max_output_tokens=row.max_output_tokens,
+        supports_tools=row.supports_tools,
+        supports_streaming=row.supports_streaming,
     )
 
 
@@ -265,6 +269,10 @@ class SqlAlchemyModelRepository:
             created_at=model.created_at,
             requests_per_minute=model.requests_per_minute,
             tokens_per_minute=model.tokens_per_minute,
+            context_window=model.context_window,
+            max_output_tokens=model.max_output_tokens,
+            supports_tools=model.supports_tools,
+            supports_streaming=model.supports_streaming,
         )
         try:
             async with self._session_factory() as session, session.begin():

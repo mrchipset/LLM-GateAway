@@ -53,6 +53,13 @@ class Settings(BaseSettings):
     openai_base_url: str = "https://api.openai.com/v1"
     deepseek_api_key: SecretStr | None = None
     deepseek_base_url: str = "https://api.deepseek.com"
+    azure_openai_api_key: SecretStr | None = None
+    azure_openai_base_url: str | None = None
+    azure_api_version: str = "2024-10-21"
+    anthropic_api_key: SecretStr | None = None
+    anthropic_base_url: str = "https://api.anthropic.com"
+    anthropic_version: str = "2023-06-01"
+    anthropic_default_max_tokens: int = Field(default=1024, ge=1, le=32768)
     fake_provider_enabled: bool = False
     request_timeout_seconds: float = Field(default=60.0, gt=0)
     connect_timeout_seconds: float = Field(default=10.0, gt=0)

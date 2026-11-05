@@ -162,6 +162,10 @@ class ModelConfig:
     enabled: bool = True
     requests_per_minute: int | None = None
     tokens_per_minute: int | None = None
+    context_window: int | None = None
+    max_output_tokens: int | None = None
+    supports_tools: bool = True
+    supports_streaming: bool = True
 
     def __post_init__(self) -> None:
         _require_non_blank(self.id, "id")
@@ -169,6 +173,12 @@ class ModelConfig:
         _require_aware(self.created_at, "created_at")
         _require_optional_positive_int(self.requests_per_minute, "requests_per_minute")
         _require_optional_positive_int(self.tokens_per_minute, "tokens_per_minute")
+        _require_optional_positive_int(self.context_window, "context_window")
+        _require_optional_positive_int(self.max_output_tokens, "max_output_tokens")
+        if not isinstance(self.supports_tools, bool):
+            raise ValueError("supports_tools must be a boolean")
+        if not isinstance(self.supports_streaming, bool):
+            raise ValueError("supports_streaming must be a boolean")
 
 
 @dataclass(frozen=True, slots=True)

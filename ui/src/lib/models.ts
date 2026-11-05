@@ -1,10 +1,18 @@
 import type { ModelProvider } from '../api/client';
 
-export const MODEL_PROVIDERS: readonly ModelProvider[] = ['openai', 'deepseek', 'fake'];
+export const MODEL_PROVIDERS: readonly ModelProvider[] = [
+  'openai',
+  'deepseek',
+  'azure',
+  'anthropic',
+  'fake',
+];
 
 export const MODEL_PROVIDER_LABELS: Record<ModelProvider, string> = {
   openai: 'OpenAI',
   deepseek: 'DeepSeek',
+  azure: 'Azure OpenAI',
+  anthropic: 'Anthropic',
   fake: 'Fake (offline testing)',
 };
 

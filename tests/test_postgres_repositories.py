@@ -2680,3 +2680,23 @@ async def test_update_model_and_key_limits_round_trip(database: Database) -> Non
     assert key_cleared.requests_per_minute is None
     assert key_cleared.tokens_per_minute == 8
     assert await database.api_keys.set_key_limits(uuid4(), patch=ApiKeyLimitPatch()) is None
+
+
+async def test_model_capabilities_round_trip(database: Database) -> None:
+    model = replace(
+        _model(1),
+        context_window=128000,
+        max_output_tokens=4096,
+        supports_tools=False,
+        supports_streaming=False,
+    )
+
+    await database.models.create_model(model)
+
+    stored = await database.models.get_model(model.id)
+    assert stored == model
+    assert stored is not None
+    assert stored.context_window == 128000
+    assert stored.max_output_tokens == 4096
+    assert stored.supports_tools is False
+    assert stored.supports_streaming is False

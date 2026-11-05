@@ -37,7 +37,7 @@ export interface ModelListResponse {
   offset: number;
 }
 
-export type ModelProvider = 'openai' | 'deepseek' | 'fake';
+export type ModelProvider = 'openai' | 'deepseek' | 'azure' | 'anthropic' | 'fake';
 
 export interface CreateModelInput {
   id: string;

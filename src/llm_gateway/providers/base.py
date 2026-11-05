@@ -14,6 +14,8 @@ from llm_gateway.schemas.chat import (
 class ProviderName(StrEnum):
     OPENAI = "openai"
     DEEPSEEK = "deepseek"
+    AZURE = "azure"
+    ANTHROPIC = "anthropic"
     FAKE = "fake"
 
 

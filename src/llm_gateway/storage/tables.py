@@ -407,6 +407,10 @@ class ModelRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     requests_per_minute: Mapped[int | None] = mapped_column(Integer, nullable=True)
     tokens_per_minute: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    context_window: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    max_output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    supports_tools: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=true())
+    supports_streaming: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=true())
 
     __table_args__ = (
         CheckConstraint(
@@ -416,6 +420,14 @@ class ModelRow(Base):
         CheckConstraint(
             "tokens_per_minute IS NULL OR tokens_per_minute >= 1",
             name="ck_models_tokens_per_minute_positive",
+        ),
+        CheckConstraint(
+            "context_window IS NULL OR context_window >= 1",
+            name="ck_models_context_window_positive",
+        ),
+        CheckConstraint(
+            "max_output_tokens IS NULL OR max_output_tokens >= 1",
+            name="ck_models_max_output_tokens_positive",
         ),
     )
 

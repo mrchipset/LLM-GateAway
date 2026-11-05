@@ -7,6 +7,7 @@ from pydantic import SecretStr
 
 from llm_gateway.clock import Clock
 from llm_gateway.config import Settings
+from llm_gateway.providers.anthropic import AnthropicProvider
 from llm_gateway.providers.base import ChatProvider, ProviderName
 from llm_gateway.providers.fake import FakeProvider
 from llm_gateway.providers.openai import OpenAIProvider
@@ -63,6 +64,21 @@ def build_providers(
             base_url=settings.deepseek_base_url,
             settings=settings,
             tracer=tracer,
+        )
+
+    if settings.anthropic_api_key is not None:
+        providers[ProviderName.ANTHROPIC] = AnthropicProvider(
+            api_key=settings.anthropic_api_key.get_secret_value(),
+            base_url=settings.anthropic_base_url,
+            version=settings.anthropic_version,
+            default_max_tokens=settings.anthropic_default_max_tokens,
+            timeout=httpx.Timeout(
+                settings.request_timeout_seconds,
+                connect=settings.connect_timeout_seconds,
+            ),
+            retry_policy=RetryPolicy(max_attempts=settings.max_retries + 1),
+            tracer=tracer,
+            stream_idle_timeout_seconds=settings.stream_idle_timeout_seconds,
         )
 
     if settings.fake_provider_enabled:

@@ -265,6 +265,10 @@ class CreateModelRequest(BaseModel):
     enabled: bool = True
     requests_per_minute: int | None = Field(default=None, ge=1)
     tokens_per_minute: int | None = Field(default=None, ge=1)
+    context_window: int | None = Field(default=None, ge=1)
+    max_output_tokens: int | None = Field(default=None, ge=1)
+    supports_tools: bool = True
+    supports_streaming: bool = True
 
     @field_validator("upstream_model", mode="before")
     @classmethod
@@ -284,6 +288,10 @@ class ModelDetail(BaseModel):
     created_at: datetime
     requests_per_minute: int | None = None
     tokens_per_minute: int | None = None
+    context_window: int | None = None
+    max_output_tokens: int | None = None
+    supports_tools: bool = True
+    supports_streaming: bool = True
 
 
 class UpdateModelRequest(BaseModel):

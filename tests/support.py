@@ -46,6 +46,10 @@ async def seed_model(
     enabled: bool = True,
     requests_per_minute: int | None = None,
     tokens_per_minute: int | None = None,
+    context_window: int | None = None,
+    max_output_tokens: int | None = None,
+    supports_tools: bool = True,
+    supports_streaming: bool = True,
 ) -> ModelConfig:
     model = ModelConfig(
         id=model_id,
@@ -55,6 +59,10 @@ async def seed_model(
         enabled=enabled,
         requests_per_minute=requests_per_minute,
         tokens_per_minute=tokens_per_minute,
+        context_window=context_window,
+        max_output_tokens=max_output_tokens,
+        supports_tools=supports_tools,
+        supports_streaming=supports_streaming,
     )
     await container.models.create_model(model)
     return model

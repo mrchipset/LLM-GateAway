@@ -323,6 +323,8 @@
 ### G2 规模化与生态
 
 - [ ] **G2.1 Provider 广度**：Azure OpenAI、Anthropic Messages、Bedrock、Vertex，以及模型能力表（上下文窗口、模态、工具调用、流式 usage 语义）；provider 差异只允许存在于 adapter 内。
+  - 进度（2026-11-05）：Azure OpenAI（deployment 路径 + `api-key` 头 + `api-version`）与 Anthropic Messages（请求/响应/流式全量转换，含 tools、usage、缓存 token、空闲超时与重试边界）已落地；`models` 新增 `context_window`/`max_output_tokens`/`supports_tools`/`supports_streaming`（迁移 `0015`），请求前以 400 `request_limit_exceeded` 拦截超限/不支持的工具或流式。provider 差异仍只在 adapter 内。设计说明见 `notes/providers.md`。
+  - 未做：Bedrock（SigV4/Converse）、Vertex（OAuth/generateContent）需要云 SDK 与新的凭证模型；Anthropic thinking blocks 与 prompt-cache breakpoints 未映射；控制台尚未暴露能力字段。
 - [ ] **G2.2 端点广度**：embeddings、responses、messages、images、audio、rerank；每个端点都要有流式/错误/计费语义，不允许“能转发就算支持”。
 - [ ] **G2.3 Guardrails**：内容安全、PII、prompt injection，pre/post/stream 三阶段钩子；先做 2–3 个实现并稳定接口，不复制生态式堆量。
 - [ ] **G2.4 凭证管理**：secret manager（Vault/KMS/云厂商）、上游凭证轮换与双活、按租户 BYOK；应用内不落明文，轮换过程可观测且不中断流量。
