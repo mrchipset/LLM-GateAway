@@ -108,9 +108,7 @@ export function ModelEditDialog({ model, returnFocusRef, onClose, onSaved }: Mod
   };
 
   const upstreamDescribedBy =
-    fieldErrors.upstream === undefined
-      ? routingHintId
-      : `${routingHintId} ${upstreamErrorId}`;
+    fieldErrors.upstream === undefined ? routingHintId : `${routingHintId} ${upstreamErrorId}`;
   const rateDescribedBy = fieldErrors.rate === undefined ? hintId : `${hintId} ${rateErrorId}`;
   const tokensDescribedBy =
     fieldErrors.tokens === undefined ? hintId : `${hintId} ${tokensErrorId}`;
@@ -157,8 +155,9 @@ export function ModelEditDialog({ model, returnFocusRef, onClose, onSaved }: Mod
           Routing
         </h4>
         <p id={routingHintId} className="mt-1 text-[11.5px] leading-5 text-ink-muted">
-          修改 Provider 或上游模型前，需先删除该模型的全部部署。部署会覆盖这两项默认值，部署还在时保存会返回
-          409，修改不会生效。
+          {
+            '修改 Provider 或上游模型前，需先删除该模型的全部部署：部署会覆盖这两项默认值，未删除时保存会返回 409，修改不会生效。'
+          }
         </p>
         <div className="mt-2 grid gap-3 sm:grid-cols-2">
           <div>
@@ -334,8 +333,9 @@ export function ModelEditDialog({ model, returnFocusRef, onClose, onSaved }: Mod
             <RequestErrorPanel error={updateMutation.error} title="Could not update model" />
             {routingConflict && (
               <p className="mt-2 rounded border border-warn/30 bg-warn-soft px-2.5 py-1.5 text-[11.5px] leading-5 text-warn">
-                该模型仍有部署。请先在「Deployments」对话框中删除全部部署，再保存 Provider
-                或上游模型的修改。
+                {
+                  '该模型仍有部署。请先在「Deployments」对话框中删除全部部署，再保存 Provider 或上游模型的修改。'
+                }
               </p>
             )}
           </div>

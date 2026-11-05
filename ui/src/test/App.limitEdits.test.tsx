@@ -77,6 +77,13 @@ function modelPage(models: ModelSummary[]): Response {
   return jsonResponse({ items: models, total: models.length, limit: 100, offset: 0 });
 }
 
+async function openModelEdit(user: ReturnType<typeof userEvent.setup>) {
+  await signIn(user);
+  const table = await screen.findByRole('table', { name: 'Registered models' });
+  await user.click(within(table).getByRole('button', { name: 'Edit chat-prod' }));
+  return screen.findByRole('dialog', { name: 'Edit model' });
+}
+
 async function openKeyEdit(user: ReturnType<typeof userEvent.setup>) {
   await signIn(user);
   await user.click(await screen.findByRole('tab', { name: 'Access' }));
@@ -158,8 +165,8 @@ describe('console limit editing', () => {
     await user.click(within(table).getByRole('button', { name: 'Edit chat-prod' }));
 
     const dialog = await screen.findByRole('dialog', { name: 'Edit model' });
-    expect(within(dialog).getByText('OpenAI')).toBeInTheDocument();
-    expect(within(dialog).getByText('gpt-4o-mini-2024-07-18')).toBeInTheDocument();
+    expect(within(dialog).getByLabelText('Provider')).toHaveValue('openai');
+    expect(within(dialog).getByLabelText('Upstream model')).toHaveValue('gpt-4o-mini-2024-07-18');
     expect(within(dialog).getByLabelText('Requests per minute')).toHaveValue(60);
     expect(within(dialog).getByLabelText('Tokens per minute')).toHaveValue(5_000);
 
@@ -186,7 +193,129 @@ describe('console limit editing', () => {
     expect(within(row).getByText('5K tok/min')).toBeInTheDocument();
     expect(within(row).queryByText(/req\/min/)).not.toBeInTheDocument();
   });
+});
 
+describe('model routing edits', () => {
+  it('patches provider and upstream model together and trims the upstream name', async () => {
+    let models = [{ ...MODEL }];
+    const patchBodies: UpdateModelInput[] = [];
+    installFetchMock({
+      '/api/v1/models': () => modelPage(models),
+      'PATCH /api/v1/models/:id': (_url, init) => {
+        const body = JSON.parse(String(init.body)) as UpdateModelInput;
+        patchBodies.push(body);
+        models = models.map((model) => (model.id === MODEL.id ? { ...model, ...body } : model));
+        return jsonResponse(models[0]);
+      },
+    });
+    const user = userEvent.setup();
+    renderApp();
+
+    const dialog = await openModelEdit(user);
+    await user.selectOptions(within(dialog).getByLabelText('Provider'), 'deepseek');
+    const upstream = within(dialog).getByLabelText('Upstream model');
+    await user.clear(upstream);
+    await user.type(upstream, '  deepseek-chat-v3  ');
+    await user.click(within(dialog).getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+    expect(patchBodies).toEqual([{ provider: 'deepseek', upstream_model: 'deepseek-chat-v3' }]);
+    expect(await screen.findByText("Model 'chat-prod' updated.")).toBeInTheDocument();
+  });
+
+  it('sends only the upstream model when the provider is untouched', async () => {
+    let models = [{ ...MODEL }];
+    const patchBodies: UpdateModelInput[] = [];
+    installFetchMock({
+      '/api/v1/models': () => modelPage(models),
+      'PATCH /api/v1/models/:id': (_url, init) => {
+        const body = JSON.parse(String(init.body)) as UpdateModelInput;
+        patchBodies.push(body);
+        models = models.map((model) => (model.id === MODEL.id ? { ...model, ...body } : model));
+        return jsonResponse(models[0]);
+      },
+    });
+    const user = userEvent.setup();
+    renderApp();
+
+    const dialog = await openModelEdit(user);
+    const upstream = within(dialog).getByLabelText('Upstream model');
+    await user.clear(upstream);
+    await user.type(upstream, 'gpt-4o-2024-11-20');
+    await user.click(within(dialog).getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+    expect(patchBodies).toEqual([{ upstream_model: 'gpt-4o-2024-11-20' }]);
+    expect(Object.keys(patchBodies[0] ?? {})).toEqual(['upstream_model']);
+  });
+
+  it('blocks a blank upstream model before sending', async () => {
+    const patchBodies: UpdateModelInput[] = [];
+    installFetchMock({
+      '/api/v1/models': () => modelPage([MODEL]),
+      'PATCH /api/v1/models/:id': (_url, init) => {
+        patchBodies.push(JSON.parse(String(init.body)) as UpdateModelInput);
+        return jsonResponse(MODEL);
+      },
+    });
+    const user = userEvent.setup();
+    renderApp();
+
+    const dialog = await openModelEdit(user);
+    await user.clear(within(dialog).getByLabelText('Upstream model'));
+    await user.click(within(dialog).getByRole('button', { name: 'Save changes' }));
+
+    expect(await within(dialog).findByText('Enter the upstream model name.')).toBeInTheDocument();
+    expect(patchBodies).toHaveLength(0);
+    expect(screen.getByRole('dialog', { name: 'Edit model' })).toBeInTheDocument();
+  });
+
+  it('keeps the dialog open and explains the deployment conflict on 409', async () => {
+    installFetchMock({
+      '/api/v1/models': () => modelPage([MODEL]),
+      'PATCH /api/v1/models/:id': () =>
+        jsonResponse(
+          {
+            error: {
+              message:
+                "Delete the model's deployments before changing provider or upstream_model; deployments override these defaults",
+              type: 'conflict_error',
+              param: null,
+              code: 'model_has_deployments',
+              request_id: 'req_model_has_deployments',
+            },
+          },
+          409,
+          { 'x-request-id': 'req_model_has_deployments' },
+        ),
+    });
+    const user = userEvent.setup();
+    renderApp();
+
+    const dialog = await openModelEdit(user);
+    await user.selectOptions(within(dialog).getByLabelText('Provider'), 'anthropic');
+    await user.click(within(dialog).getByRole('button', { name: 'Save changes' }));
+
+    expect(await within(dialog).findByText('Could not update model')).toBeInTheDocument();
+    expect(within(dialog).getByText('HTTP 409')).toBeInTheDocument();
+    expect(within(dialog).getByText('model_has_deployments')).toBeInTheDocument();
+    expect(within(dialog).getByText('req_model_has_deployments')).toBeInTheDocument();
+    expect(
+      within(dialog).getByText(
+        '该模型仍有部署。请先在「Deployments」对话框中删除全部部署，再保存 Provider 或上游模型的修改。',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Edit model' })).toBeInTheDocument();
+    expect(within(dialog).getByLabelText('Provider')).toHaveValue('anthropic');
+    expect(within(dialog).getByRole('button', { name: 'Save changes' })).toBeEnabled();
+  });
+});
+
+describe('read-only console actions', () => {
   it('hides key and model edit actions from a read-only role', async () => {
     installFetchMock(
       {

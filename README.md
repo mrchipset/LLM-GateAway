@@ -745,7 +745,7 @@ The console exposes the sections your role can use:
 The Models tab provides:
 
 - Register a model (id, provider, upstream model, enabled, optional RPM/TPM) with client-side validation mirroring the API; provider configuration is still a backend concern.
-- Edit a model's enabled flag and limits in place; provider and upstream model stay read-only.
+- Edit a model's enabled flag, provider, upstream model, and limits in place. Provider/upstream changes require the model to have no deployments (409 otherwise, explained inline).
 - Delete a model with confirmation; deleting it also removes it from every tenant allowlist.
 - Manage the per-model price list: versions newest first, with an append form (prices are per million tokens and a new version applies from its effective date).
 - Manage deployments per model: weighted routing, per-deployment credential env names and base URLs, enable/disable, and deletion, with a note that failover and cooldown apply.
