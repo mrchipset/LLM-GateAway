@@ -42,6 +42,8 @@ def _detail(model: ModelConfig) -> ModelDetail:
         upstream_model=model.upstream_model,
         enabled=model.enabled,
         created_at=model.created_at,
+        requests_per_minute=model.requests_per_minute,
+        tokens_per_minute=model.tokens_per_minute,
     )
 
 
@@ -89,6 +91,8 @@ async def create_model(
         upstream_model=payload.upstream_model,
         created_at=container.clock.now(),
         enabled=payload.enabled,
+        requests_per_minute=payload.requests_per_minute,
+        tokens_per_minute=payload.tokens_per_minute,
     )
     try:
         created = await container.models.create_model(model)

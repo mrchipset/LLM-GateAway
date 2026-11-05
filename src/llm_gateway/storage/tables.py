@@ -6,6 +6,7 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -53,7 +54,7 @@ class TenantRow(Base):
         nullable=True,
     )
     audit_retention_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
-
+    tokens_per_minute: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     __table_args__ = (
         Index("ix_tenants_name", "name", unique=True),
         CheckConstraint(
@@ -79,6 +80,10 @@ class TenantRow(Base):
         CheckConstraint(
             "audit_retention_days IS NULL OR audit_retention_days >= 0",
             name="ck_tenants_audit_retention_days_non_negative",
+        ),
+        CheckConstraint(
+            "tokens_per_minute IS NULL OR tokens_per_minute >= 1",
+            name="ck_tenants_tokens_per_minute_positive",
         ),
     )
 
@@ -140,10 +145,20 @@ class ApiKeyRow(Base):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    requests_per_minute: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tokens_per_minute: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
     __table_args__ = (
         Index("ix_api_keys_key_hash", "key_hash", unique=True),
         Index("ix_api_keys_tenant_id", "tenant_id"),
+        CheckConstraint(
+            "requests_per_minute IS NULL OR requests_per_minute >= 1",
+            name="ck_api_keys_requests_per_minute_positive",
+        ),
+        CheckConstraint(
+            "tokens_per_minute IS NULL OR tokens_per_minute >= 1",
+            name="ck_api_keys_tokens_per_minute_positive",
+        ),
     )
 
 
@@ -342,6 +357,19 @@ class ModelRow(Base):
     upstream_model: Mapped[str] = mapped_column(String(256), nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=true())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    requests_per_minute: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tokens_per_minute: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "requests_per_minute IS NULL OR requests_per_minute >= 1",
+            name="ck_models_requests_per_minute_positive",
+        ),
+        CheckConstraint(
+            "tokens_per_minute IS NULL OR tokens_per_minute >= 1",
+            name="ck_models_tokens_per_minute_positive",
+        ),
+    )
 
 
 class ModelPriceRow(Base):

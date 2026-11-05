@@ -143,6 +143,8 @@ async def test_create_api_key_returns_plaintext_once_and_stores_only_hash(
         "expires_at",
         "revoked_at",
         "last_used_at",
+        "requests_per_minute",
+        "tokens_per_minute",
     }
 
     record = await container.api_keys.get_key(UUID(body["id"]))
@@ -580,6 +582,7 @@ async def test_create_tenant_returns_detail_and_rejects_duplicates(
         "created_at",
         "monthly_token_quota",
         "requests_per_minute",
+        "tokens_per_minute",
         "audit_enabled",
         "model_access_mode",
         "plan_tokens",

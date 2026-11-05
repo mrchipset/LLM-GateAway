@@ -145,6 +145,8 @@ class InMemoryTenantRepository:
                 changes["monthly_cost_budget"] = patch.monthly_cost_budget
             if patch.set_audit_retention_days:
                 changes["audit_retention_days"] = patch.audit_retention_days
+            if patch.set_tokens_per_minute:
+                changes["tokens_per_minute"] = patch.tokens_per_minute
             if not changes:
                 return tenant
             updated = replace(tenant, **changes)  # pyright: ignore[reportArgumentType]

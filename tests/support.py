@@ -44,6 +44,8 @@ async def seed_model(
     upstream_model: str | None = None,
     created_at: datetime | None = None,
     enabled: bool = True,
+    requests_per_minute: int | None = None,
+    tokens_per_minute: int | None = None,
 ) -> ModelConfig:
     model = ModelConfig(
         id=model_id,
@@ -51,6 +53,8 @@ async def seed_model(
         upstream_model=upstream_model if upstream_model is not None else f"upstream-{model_id}",
         created_at=created_at if created_at is not None else container.clock.now(),
         enabled=enabled,
+        requests_per_minute=requests_per_minute,
+        tokens_per_minute=tokens_per_minute,
     )
     await container.models.create_model(model)
     return model
@@ -64,6 +68,7 @@ async def seed_tenant(
     created_at: datetime | None = None,
     monthly_token_quota: int | None = None,
     requests_per_minute: int | None = None,
+    tokens_per_minute: int | None = None,
     audit_enabled: bool = False,
     plan_tokens: int | None = None,
     plan_allow_overage: bool = False,
@@ -75,6 +80,7 @@ async def seed_tenant(
         created_at=created_at if created_at is not None else container.clock.now(),
         monthly_token_quota=monthly_token_quota,
         requests_per_minute=requests_per_minute,
+        tokens_per_minute=tokens_per_minute,
         audit_enabled=audit_enabled,
         plan_tokens=plan_tokens,
         plan_allow_overage=plan_allow_overage,
@@ -96,6 +102,8 @@ async def seed_api_key(
     *,
     tenant_id: UUID | None = None,
     name: str = "test key",
+    requests_per_minute: int | None = None,
+    tokens_per_minute: int | None = None,
 ) -> str:
     resolved_tenant_id = (
         tenant_id if tenant_id is not None else (await _ensure_test_tenant(container)).id
@@ -105,6 +113,8 @@ async def seed_api_key(
         tenant_id=resolved_tenant_id,
         name=name,
         now=container.clock.now(),
+        requests_per_minute=requests_per_minute,
+        tokens_per_minute=tokens_per_minute,
     )
     await container.api_keys.create_key(record)
     return secret

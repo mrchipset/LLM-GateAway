@@ -18,6 +18,8 @@ class CreateApiKeyRequest(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     tenant_id: UUID
     expires_at: datetime | None = None
+    requests_per_minute: int | None = Field(default=None, ge=1)
+    tokens_per_minute: int | None = Field(default=None, ge=1)
 
     @field_validator("name", mode="before")
     @classmethod
@@ -46,6 +48,8 @@ class CreatedApiKeyResponse(BaseModel):
     key_prefix: str
     created_at: datetime
     expires_at: datetime | None = None
+    requests_per_minute: int | None = None
+    tokens_per_minute: int | None = None
 
 
 class ApiKeySummary(BaseModel):
@@ -61,6 +65,8 @@ class ApiKeySummary(BaseModel):
     expires_at: datetime | None = None
     revoked_at: datetime | None = None
     last_used_at: datetime | None = None
+    requests_per_minute: int | None = None
+    tokens_per_minute: int | None = None
 
 
 class ApiKeyListResponse(BaseModel):
@@ -81,6 +87,7 @@ class CreateTenantRequest(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     monthly_token_quota: int | None = Field(default=None, ge=1)
     requests_per_minute: int | None = Field(default=None, ge=1)
+    tokens_per_minute: int | None = Field(default=None, ge=1)
     audit_enabled: bool = False
     audit_retention_days: int | None = Field(default=None, ge=0)
 
@@ -102,6 +109,7 @@ class UpdateTenantLimitsRequest(BaseModel):
 
     monthly_token_quota: int | None = Field(default=None, ge=1)
     requests_per_minute: int | None = Field(default=None, ge=1)
+    tokens_per_minute: int | None = Field(default=None, ge=1)
     audit_enabled: bool | None = None
     plan_tokens: int | None = Field(default=None, ge=1)
     plan_allow_overage: bool | None = None
@@ -117,6 +125,7 @@ class TenantDetail(BaseModel):
     created_at: datetime
     monthly_token_quota: int | None = None
     requests_per_minute: int | None = None
+    tokens_per_minute: int | None = None
     audit_enabled: bool = False
     model_access_mode: ModelAccessMode = ModelAccessMode.ALL
     plan_tokens: int | None = None
@@ -238,6 +247,8 @@ class CreateModelRequest(BaseModel):
     provider: ProviderName
     upstream_model: str = Field(min_length=1, max_length=256)
     enabled: bool = True
+    requests_per_minute: int | None = Field(default=None, ge=1)
+    tokens_per_minute: int | None = Field(default=None, ge=1)
 
     @field_validator("upstream_model", mode="before")
     @classmethod
@@ -255,6 +266,8 @@ class ModelDetail(BaseModel):
     upstream_model: str
     enabled: bool
     created_at: datetime
+    requests_per_minute: int | None = None
+    tokens_per_minute: int | None = None
 
 
 class ModelListResponse(BaseModel):

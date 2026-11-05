@@ -273,8 +273,8 @@
   - 现状：固定 60 秒窗口、仅租户级；计数落在 PostgreSQL 单行，同租户请求互相争抢；Redis 仍是 Reserved。
   - 范围：Redis 令牌桶（per-key / per-tenant / per-model）、TPM 与并发上限、RPM 与 TPM 同时生效、`Retry-After` 语义明确；限流不可用时降级策略显式（fail-open 必须告警）。
   - 验收：多副本下限流口径一致；边界不出现 2 倍突发；Redis 不可用时行为符合配置且可观测。
-  - 进度（2026-11-05）：租户级已完成并切换为**令牌桶**（容量=每分钟限额，按秒连续补充），`GATEWAY_RATE_LIMIT_BACKEND=redis` 时由一段 Lua 脚本原子完成补充与取用，多副本共享同一桶；边界不再出现 2 倍突发。`GATEWAY_RATE_LIMIT_FAIL_OPEN`（默认 true）控制 Redis 超时/报错时的降级：fail-open 放行并累加 `gateway_rate_limit_degraded{reason}` 与 `rate_limit_unavailable` 告警；fail-closed 返回 503 `rate_limiter_unavailable` + `Retry-After: 1`，并增加 `rate_limiter` readiness 检查。Redis 调用受 `GATEWAY_RATE_LIMIT_REDIS_TIMEOUT_SECONDS`（默认 0.2s）约束；时钟回拨只减少补充量，不会多发票。设计说明见 `notes/rate-limiting.md`。
-  - 未做（下一阶段）：per-key / per-model 桶（需要 `api_keys`/`models` 的限额列）、TPM（需结算后累加 + 请求前检查同一窗口）、并发租约（需超时与崩溃回收）、共享部署健康/cooldown（仍为进程内）。
+  - 进度（2026-11-05）：租户级已完成并切换为**令牌桶**（容量=每分钟限额，按秒连续补充），`GATEWAY_RATE_LIMIT_BACKEND=redis` 时由一段 Lua 脚本原子完成补充与取用，多副本共享同一桶；边界不再出现 2 倍突发。**按 key、按模型**的 RPM 桶与三层 **TPM** 已落地（迁移 `0012`；TPM 为结算后扣减，超支最多一个请求的用量，下一次请求 429 `token_rate_limited`）。`GATEWAY_RATE_LIMIT_FAIL_OPEN`（默认 true）控制 Redis 超时/报错时的降级：fail-open 放行并累加 `gateway_rate_limit_degraded{reason}` 与 `rate_limit_unavailable` 告警；fail-closed 返回 503 `rate_limiter_unavailable` + `Retry-After: 1`，并增加 `rate_limiter` readiness 检查。Redis 调用受 `GATEWAY_RATE_LIMIT_REDIS_TIMEOUT_SECONDS`（默认 0.2s）约束；时钟回拨只减少补充量，不会多发票。设计说明见 `notes/rate-limiting.md`。
+  - 未做（下一阶段）：并发租约（需超时与崩溃回收，G0.8 的并发上限一并解决）、共享部署健康/cooldown（仍为进程内）。
 
 - [ ] **G1.3 热路径读写放大治理**（压测已确认整月用量聚合是第一瓶颈，优先做）
   - 现状：每请求包含 key 查询、`last_used_at` 写入、租户查询、整月用量聚合、限流单行 upsert、usage 插入，全部同步打 PostgreSQL，无缓存。

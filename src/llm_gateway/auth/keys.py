@@ -26,6 +26,8 @@ def generate_api_key(
     name: str,
     now: datetime,
     expires_at: datetime | None = None,
+    requests_per_minute: int | None = None,
+    tokens_per_minute: int | None = None,
 ) -> tuple[str, ApiKeyRecord]:
     """Create a plaintext secret plus the record that persists only its hash."""
     if not name.strip():
@@ -40,6 +42,8 @@ def generate_api_key(
         key_prefix=secret[:API_KEY_DISPLAY_LENGTH],
         created_at=now,
         expires_at=expires_at,
+        requests_per_minute=requests_per_minute,
+        tokens_per_minute=tokens_per_minute,
     )
     return secret, record
 

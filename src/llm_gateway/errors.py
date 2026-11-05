@@ -35,6 +35,7 @@ class ApiErrorCode(StrEnum):
     METHOD_NOT_ALLOWED = "method_not_allowed"
     PERMISSION_DENIED = "permission_denied"
     RATE_LIMITED = "rate_limited"
+    TOKEN_RATE_LIMITED = "token_rate_limited"  # noqa: S105 - stable error code, not a credential
     RATE_LIMITER_UNAVAILABLE = "rate_limiter_unavailable"
     TENANT_QUOTA_EXCEEDED = "tenant_quota_exceeded"
     PLAN_ALLOWANCE_EXHAUSTED = "plan_allowance_exhausted"

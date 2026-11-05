@@ -31,10 +31,15 @@ from llm_gateway.services.audit import (
 from llm_gateway.services.billing import BillingAllowance, BillingService
 from llm_gateway.services.chat import ChatService, ChatStream, map_provider_error
 from llm_gateway.services.guards import enforce_chat_request_limits, limits_from_settings
-from llm_gateway.services.limits import InferenceAccess, enforce_inference_limits
+from llm_gateway.services.limits import (
+    InferenceAccess,
+    enforce_inference_limits,
+    enforce_model_limits,
+)
 from llm_gateway.services.routing import DeploymentUse
 from llm_gateway.services.usage import (
     USAGE_WRITE_TIMEOUT_SECONDS,
+    TokenLimits,
     UsageContext,
     UsageRecorder,
     record_usage_safely,
@@ -65,7 +70,11 @@ def get_chat_service(container: Annotated[Container, Depends(get_container)]) ->
 def get_usage_recorder(
     container: Annotated[Container, Depends(get_container)],
 ) -> UsageRecorder:
-    return UsageRecorder(repository=container.usage, clock=container.clock)
+    return UsageRecorder(
+        repository=container.usage,
+        clock=container.clock,
+        rate_limiter=container.rate_limiter,
+    )
 
 
 def get_audit_service(
@@ -252,6 +261,16 @@ async def create_chat_completion(
             model_id=payload.model,
             now=container.clock.now(),
         )
+    model_tokens_per_minute = await enforce_model_limits(
+        container,
+        model_id=payload.model,
+        now=container.clock.now(),
+    )
+    token_limits = TokenLimits(
+        tenant_tokens_per_minute=access.tenant.tokens_per_minute,
+        key_tokens_per_minute=access.api_key.record.tokens_per_minute,
+        model_tokens_per_minute=model_tokens_per_minute,
+    )
     audit_turn = await begin_audit_safely(
         service=audit_service,
         tenant_id=access.api_key.record.tenant_id,
@@ -284,6 +303,7 @@ async def create_chat_completion(
                 model_id=result.model.id,
                 provider=result.model.provider,
                 allowance=allowance,
+                token_limits=token_limits,
             ),
             usage=result.response.usage,
         )
@@ -325,6 +345,7 @@ async def create_chat_completion(
                 model_id=stream.model_id,
                 provider=stream.provider,
                 allowance=allowance,
+                token_limits=token_limits,
             ),
             audit_turn=audit_turn,
             audit_service=audit_service,

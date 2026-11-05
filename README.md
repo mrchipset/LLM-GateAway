@@ -278,12 +278,12 @@ Invoke-RestMethod -Method Patch `
 ```
 
 - `monthly_token_quota`: cumulative upstream-reported `total_tokens` in the UTC calendar month. Once reached, `POST /v1/chat/completions` returns 429 `tenant_quota_exceeded`.
-- `requests_per_minute`: fixed 60-second window. Excess requests return 429 `rate_limited` with `Retry-After` (seconds, 1鈥?0).
+- `requests_per_minute`: a token bucket (capacity and refill from the limit). Excess requests return 429 `rate_limited` with `Retry-After` (seconds).
 - PATCH only writes the fields present in the body; an explicit `null` clears that limit.
 - Quotas are soft: they are checked before the request, so concurrent or in-flight requests can slightly overshoot, and usage write failures can cause drift.
 - Rejected requests (rate-limited or over quota) do not create usage records.
 - Rate limiting applies only to `POST /v1/chat/completions`; `/v1/models`, health checks, and the management API are not tenant-limited.
-- The PostgreSQL backend uses a single-row atomic counter and supports multiple workers; the memory backend is for local development and tests only.
+- The `storage` backend keeps the tenant counter in PostgreSQL (shared across workers, fixed window), but per-key/model buckets and TPM are process-local. Configure `GATEWAY_RATE_LIMIT_BACKEND=redis` when those limits must hold across replicas.
 
 ## Cost, plans, and budgets
 
@@ -559,15 +559,24 @@ therefore cannot admit a second full batch at a window boundary the way a fixed-
 does.
 
 - `Retry-After` is the time until one token exists, rounded up to seconds.
-- `storage` keeps the previous behavior (a single-row counter in PostgreSQL, or in-memory), which
-  is only consistent inside one process. Keep `GATEWAY_WORKERS=1` on that backend.
+- Limits can be set per tenant (`PATCH /api/v1/tenants/{id}`), per API key (`POST /api/v1/keys`),
+  and per model (`POST /api/v1/models`): `requests_per_minute` and `tokens_per_minute`. Each
+  scope has its own bucket, so a key limit is enforced in addition to its tenant's.
+- **TPM is post-paid.** Tokens are only known after the provider reports usage, so a request is
+  admitted while the bucket is above zero and its actual tokens are charged on settlement. One
+  request can therefore overshoot the limit by its own usage; the next request is rejected with
+  429 `token_rate_limited`. This mirrors the no-reservation billing decision.
+- Per-key and per-model limits are shared when the backend is `redis`; on `storage` they fall back
+  to a process-local bucket, which is why multi-worker deployments should use Redis.
+- `storage` keeps the tenant counter in PostgreSQL: one atomic row, shared by workers, but a fixed
+  window and a write per request. Per-key/model buckets and TPM fall back to a process-local
+  bucket there; use Redis for those across replicas.
 - If Redis is unreachable for longer than `GATEWAY_RATE_LIMIT_REDIS_TIMEOUT_SECONDS`, the request
   is admitted and `gateway_rate_limit_degraded` increments (fail-open, the default). With
   `GATEWAY_RATE_LIMIT_FAIL_OPEN=false` the request gets 503 `rate_limiter_unavailable` and
   `/readyz` also fails while Redis is down, so an orchestrator stops routing to the instance.
-- Limits are still tenant-level. Per-key limits, per-model limits, TPM, and in-flight concurrency
-  are the next stage; the token bucket already exposes `limit` as both capacity and refill rate so
-  those can reuse it.
+- Limits are enforced per tenant, per API key, and per model. In-flight concurrency caps are the
+  remaining piece; the same bucket primitive will back them with a lease instead of a token.
 - With Compose, start both profiles and switch the backend:
   `docker compose --profile redis --profile app up -d` plus `GATEWAY_RATE_LIMIT_BACKEND=redis`.
 

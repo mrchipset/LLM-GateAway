@@ -151,6 +151,8 @@ def _to_model(row: ModelRow) -> ModelConfig:
         upstream_model=row.upstream_model,
         created_at=row.created_at,
         enabled=row.enabled,
+        requests_per_minute=row.requests_per_minute,
+        tokens_per_minute=row.tokens_per_minute,
     )
 
 
@@ -175,6 +177,7 @@ def _to_tenant(row: TenantRow) -> Tenant:
             Decimal(row.monthly_cost_budget) if row.monthly_cost_budget is not None else None
         ),
         audit_retention_days=row.audit_retention_days,
+        tokens_per_minute=row.tokens_per_minute,
     )
 
 
@@ -197,6 +200,8 @@ def _to_key(row: ApiKeyRow) -> ApiKeyRecord:
         expires_at=row.expires_at,
         revoked_at=row.revoked_at,
         last_used_at=row.last_used_at,
+        requests_per_minute=row.requests_per_minute,
+        tokens_per_minute=row.tokens_per_minute,
     )
 
 
@@ -235,6 +240,8 @@ class SqlAlchemyModelRepository:
             upstream_model=model.upstream_model,
             enabled=model.enabled,
             created_at=model.created_at,
+            requests_per_minute=model.requests_per_minute,
+            tokens_per_minute=model.tokens_per_minute,
         )
         try:
             async with self._session_factory() as session, session.begin():
@@ -349,6 +356,7 @@ class SqlAlchemyTenantRepository:
             plan_allow_overage=tenant.plan_allow_overage,
             monthly_cost_budget=tenant.monthly_cost_budget,
             audit_retention_days=tenant.audit_retention_days,
+            tokens_per_minute=tenant.tokens_per_minute,
         )
         try:
             async with self._session_factory() as session, session.begin():
@@ -400,6 +408,8 @@ class SqlAlchemyTenantRepository:
             values["monthly_cost_budget"] = patch.monthly_cost_budget
         if patch.set_audit_retention_days:
             values["audit_retention_days"] = patch.audit_retention_days
+        if patch.set_tokens_per_minute:
+            values["tokens_per_minute"] = patch.tokens_per_minute
         async with self._session_factory() as session, session.begin():
             if not values:
                 row = await session.get(TenantRow, tenant_id)
@@ -485,6 +495,8 @@ class SqlAlchemyApiKeyRepository:
             expires_at=record.expires_at,
             revoked_at=record.revoked_at,
             last_used_at=record.last_used_at,
+            requests_per_minute=record.requests_per_minute,
+            tokens_per_minute=record.tokens_per_minute,
         )
         try:
             async with self._session_factory() as session, session.begin():

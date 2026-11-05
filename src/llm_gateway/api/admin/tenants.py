@@ -43,6 +43,7 @@ def _detail(tenant: Tenant) -> TenantDetail:
         created_at=tenant.created_at,
         monthly_token_quota=tenant.monthly_token_quota,
         requests_per_minute=tenant.requests_per_minute,
+        tokens_per_minute=tenant.tokens_per_minute,
         audit_enabled=tenant.audit_enabled,
         model_access_mode=tenant.model_access_mode,
         plan_tokens=tenant.plan_tokens,
@@ -74,6 +75,7 @@ async def create_tenant(
         created_at=container.clock.now(),
         monthly_token_quota=payload.monthly_token_quota,
         requests_per_minute=payload.requests_per_minute,
+        tokens_per_minute=payload.tokens_per_minute,
         audit_enabled=payload.audit_enabled,
         audit_retention_days=payload.audit_retention_days,
     )
@@ -110,6 +112,7 @@ async def update_tenant_limits(
     patch = TenantLimitPatch(
         monthly_token_quota=payload.monthly_token_quota,
         requests_per_minute=payload.requests_per_minute,
+        tokens_per_minute=payload.tokens_per_minute,
         audit_enabled=payload.audit_enabled,
         plan_tokens=payload.plan_tokens,
         plan_allow_overage=payload.plan_allow_overage,
@@ -117,6 +120,7 @@ async def update_tenant_limits(
         audit_retention_days=payload.audit_retention_days,
         set_monthly_token_quota="monthly_token_quota" in provided,
         set_requests_per_minute="requests_per_minute" in provided,
+        set_tokens_per_minute="tokens_per_minute" in provided,
         set_audit_enabled=payload.audit_enabled is not None,
         set_plan_tokens="plan_tokens" in provided,
         set_plan_allow_overage=payload.plan_allow_overage is not None,

@@ -65,14 +65,26 @@ connection cannot consume the request timeout.
 
 ### Scope is staged
 
-This stage replaces the tenant-level counter with a shared bucket and makes degradation explicit.
-Still missing, in order:
+Tenant-level buckets shipped first. This stage adds:
 
-1. per-key and per-model buckets (no `api_keys`/`models` limit columns yet);
-2. TPM: tokens are only known after the response, so it needs a post-settlement add plus a
-   pre-request check against the same window;
-3. in-flight concurrency: needs a lease with a timeout and a way to expire a crashed process;
-4. shared deployment health (cooldown), which is still process-local.
+- per-key buckets (`api_keys.requests_per_minute`), enforced after the tenant bucket;
+- per-model buckets (`models.requests_per_minute`), enforced in the route once the payload names
+  the model, so one hot model cannot exhaust the whole upstream account;
+- TPM for tenant, key, and model (`tokens_per_minute`), settled from reported usage.
+
+TPM is deliberately post-paid. Token counts arrive with the response, and reserving an estimate
+before the call would repeat the pre-call reservation that billing rejected. The bucket therefore
+starts at `limit`, a request is admitted while tokens remain, and the reported usage is charged
+afterwards. The overshoot is bounded by one request's usage; the next request sees a negative
+bucket and is rejected with 429 `token_rate_limited` until refill covers it.
+
+Still missing:
+
+1. in-flight concurrency (needs a lease with expiry so a crashed process cannot leak a slot);
+2. shared deployment health (cooldown), which is still process-local.
+
+Per-key/model buckets use the same `(scope, key)` namespace; the `storage` backend keeps them in
+a process-local bucket, while Redis shares them across replicas.
 
 ## Consequences
 

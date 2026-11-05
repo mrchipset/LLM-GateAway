@@ -55,10 +55,43 @@ class MissingTenantRepository:
 class SpyRateLimiter:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
+        self.consumed: list[dict[str, Any]] = []
+
+    async def take(
+        self,
+        *,
+        scope: str,
+        key: str,
+        limit: int,
+        now: datetime,
+        cost: int = 1,
+    ) -> RateLimitResult:
+        self.calls.append({"scope": scope, "key": key, "limit": limit, "now": now, "cost": cost})
+        return RateLimitResult(allowed=True, remaining=limit, retry_after_seconds=0)
+
+    async def consume(
+        self,
+        *,
+        scope: str,
+        key: str,
+        limit: int,
+        now: datetime,
+        cost: int,
+    ) -> None:
+        self.consumed.append({"scope": scope, "key": key, "limit": limit, "cost": cost})
+
+    async def available(
+        self,
+        *,
+        scope: str,
+        key: str,
+        limit: int,
+        now: datetime,
+    ) -> float:
+        return float(limit)
 
     async def hit(self, *, tenant_id: UUID, limit: int, now: datetime) -> RateLimitResult:
-        self.calls.append({"tenant_id": tenant_id, "limit": limit, "now": now})
-        return RateLimitResult(allowed=True, remaining=limit, retry_after_seconds=0)
+        return await self.take(scope="tenant", key=str(tenant_id), limit=limit, now=now)
 
 
 def test_month_window_december_rolls_into_next_year() -> None:
@@ -111,6 +144,38 @@ async def test_missing_tenant_is_a_403_without_touching_limits(
 class UnavailableRateLimiter:
     def __init__(self, reason: str = "timeout") -> None:
         self.reason = reason
+
+    async def take(
+        self,
+        *,
+        scope: str,
+        key: str,
+        limit: int,
+        now: datetime,
+        cost: int = 1,
+    ) -> RateLimitResult:
+        raise RateLimiterUnavailable(self.reason)
+
+    async def consume(
+        self,
+        *,
+        scope: str,
+        key: str,
+        limit: int,
+        now: datetime,
+        cost: int,
+    ) -> None:
+        raise RateLimiterUnavailable(self.reason)
+
+    async def available(
+        self,
+        *,
+        scope: str,
+        key: str,
+        limit: int,
+        now: datetime,
+    ) -> float:
+        raise RateLimiterUnavailable(self.reason)
 
     async def hit(self, *, tenant_id: UUID, limit: int, now: datetime) -> RateLimitResult:
         raise RateLimiterUnavailable(self.reason)

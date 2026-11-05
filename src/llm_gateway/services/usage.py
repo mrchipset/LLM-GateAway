@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from datetime import datetime
 from uuid import UUID, uuid4
 
 from llm_gateway.clock import Clock
@@ -10,12 +11,22 @@ from llm_gateway.metrics import current_metrics
 from llm_gateway.providers.base import ProviderName
 from llm_gateway.schemas.chat import Usage
 from llm_gateway.services.billing import BillingAllowance, compute_usage_cost
+from llm_gateway.storage.rate_limits import BucketScope, RateLimiter, RateLimiterUnavailable
 from llm_gateway.storage.repositories import UsageRecord, UsageRepository
 from llm_gateway.telemetry import current_trace_id
 
 logger = get_logger(__name__)
 
 USAGE_WRITE_TIMEOUT_SECONDS = 2.0
+
+
+@dataclass(frozen=True, slots=True)
+class TokenLimits:
+    """Configured TPM limits to settle after the response reports usage."""
+
+    tenant_tokens_per_minute: int | None = None
+    key_tokens_per_minute: int | None = None
+    model_tokens_per_minute: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,12 +78,20 @@ class UsageContext:
     model_id: str
     provider: ProviderName
     allowance: BillingAllowance | None = None
+    token_limits: TokenLimits | None = None
 
 
 class UsageRecorder:
-    def __init__(self, *, repository: UsageRepository, clock: Clock) -> None:
+    def __init__(
+        self,
+        *,
+        repository: UsageRepository,
+        clock: Clock,
+        rate_limiter: RateLimiter | None = None,
+    ) -> None:
         self._repository = repository
         self._clock = clock
+        self._rate_limiter = rate_limiter
 
     async def record(self, *, context: UsageContext, usage: Usage) -> None:
         counts = extract_token_counts(usage)
@@ -104,6 +123,49 @@ class UsageRecorder:
             billed_cost=cost.billed_cost,
         )
         await self._repository.record(record)
+        await self._settle_tokens(
+            context=context,
+            tokens=counts.prompt_tokens + counts.completion_tokens,
+            now=record.created_at,
+        )
+
+    async def _settle_tokens(
+        self,
+        *,
+        context: UsageContext,
+        tokens: int,
+        now: datetime,
+    ) -> None:
+        """Charge reported tokens against TPM buckets; never fail the request."""
+        limits = context.token_limits
+        if limits is None or self._rate_limiter is None or tokens <= 0:
+            return
+        charges: tuple[tuple[BucketScope, str, int | None], ...] = (
+            ("tenant", f"{context.tenant_id}:tpm", limits.tenant_tokens_per_minute),
+            ("key", f"{context.api_key_id}:tpm", limits.key_tokens_per_minute),
+            ("model", f"{context.model_id}:tpm", limits.model_tokens_per_minute),
+        )
+        for scope, key, limit in charges:
+            if limit is None:
+                continue
+            try:
+                await self._rate_limiter.consume(
+                    scope=scope,
+                    key=key,
+                    limit=limit,
+                    now=now,
+                    cost=tokens,
+                )
+            except RateLimiterUnavailable as exc:
+                current_metrics().rate_limit_degraded.add(1, {"reason": exc.reason})
+                logger.warning(
+                    "token_rate_limit_settlement_failed",
+                    extra={
+                        "scope": scope,
+                        "tenant_id": str(context.tenant_id),
+                        "reason": exc.reason,
+                    },
+                )
 
 
 async def record_usage_safely(

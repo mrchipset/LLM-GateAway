@@ -4,7 +4,7 @@ import asyncio
 import math
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Protocol
+from typing import Literal, Protocol
 from uuid import UUID
 
 from redis.asyncio import Redis
@@ -19,13 +19,15 @@ from llm_gateway.storage.sql import _is_foreign_key_violation
 from llm_gateway.storage.tables import TenantRateLimitRow
 
 _WINDOW_SECONDS = 60
-_BURST_WINDOW_SECONDS = 60.0
-_REDIS_TAKE_SCRIPT = """
+_BUCKET_WINDOW_SECONDS = 60.0
+BucketScope = Literal["tenant", "key", "model"]
+_REDIS_SCRIPT = """
 local key = KEYS[1]
 local capacity = tonumber(ARGV[1])
 local refill_per_ms = tonumber(ARGV[2])
 local now_ms = tonumber(ARGV[3])
 local cost = tonumber(ARGV[4])
+local op = tonumber(ARGV[5])
 
 local data = redis.call('HMGET', key, 'tokens', 'ts')
 local tokens = tonumber(data[1])
@@ -42,7 +44,12 @@ tokens = math.min(capacity, tokens + (now_ms - stored_ms) * refill_per_ms)
 
 local allowed = 0
 local wait_ms = 0
-if tokens >= cost then
+if op == 0 then
+  allowed = 1
+elseif op == 2 then
+  tokens = tokens - cost
+  allowed = 1
+elseif tokens >= cost then
   tokens = tokens - cost
   allowed = 1
 else
@@ -71,7 +78,44 @@ class RateLimiterUnavailable(Exception):
 
 
 class RateLimiter(Protocol):
-    async def hit(self, *, tenant_id: UUID, limit: int, now: datetime) -> RateLimitResult: ...
+    async def hit(self, *, tenant_id: UUID, limit: int, now: datetime) -> RateLimitResult:
+        """Tenant RPM convenience; kept for callers that predate scoped buckets."""
+        ...
+
+    async def take(
+        self,
+        *,
+        scope: BucketScope,
+        key: str,
+        limit: int,
+        now: datetime,
+        cost: int = 1,
+    ) -> RateLimitResult:
+        """Refill and take ``cost`` tokens, or report how long until they exist."""
+        ...
+
+    async def consume(
+        self,
+        *,
+        scope: BucketScope,
+        key: str,
+        limit: int,
+        now: datetime,
+        cost: int,
+    ) -> None:
+        """Refill and take ``cost`` tokens even if it drives the bucket negative."""
+        ...
+
+    async def available(
+        self,
+        *,
+        scope: BucketScope,
+        key: str,
+        limit: int,
+        now: datetime,
+    ) -> float:
+        """Refill and return the current token count without taking anything."""
+        ...
 
 
 def _validate_hit(*, limit: int, now: datetime) -> None:
@@ -102,35 +146,88 @@ class InMemoryRateLimiter:
 
     ``limit`` is the burst capacity and the per-minute refill rate, so two
     consecutive fixed windows cannot each admit a full batch (the 2x burst a
-    fixed-window counter allows). The bucket is keyed by tenant only.
+    fixed-window counter allows). Buckets are keyed by ``(scope, key)``.
     """
 
     def __init__(self) -> None:
-        self._buckets: dict[UUID, tuple[float, float]] = {}
+        self._buckets: dict[tuple[str, str], tuple[float, float]] = {}
         self._lock = asyncio.Lock()
 
-    async def hit(self, *, tenant_id: UUID, limit: int, now: datetime) -> RateLimitResult:
+    async def take(
+        self,
+        *,
+        scope: BucketScope,
+        key: str,
+        limit: int,
+        now: datetime,
+        cost: int = 1,
+    ) -> RateLimitResult:
         _validate_hit(limit=limit, now=now)
-        rate = limit / _BURST_WINDOW_SECONDS
-        current = now.timestamp()
+        if cost < 1:
+            raise ValueError("cost must be >= 1")
         async with self._lock:
-            tokens, stored = self._buckets.get(tenant_id, (float(limit), current))
-            if current < stored:
-                current = stored
-            tokens = min(float(limit), tokens + (current - stored) * rate)
-            if tokens >= 1.0:
-                tokens -= 1.0
-                allowed = True
-                wait = 0.0
+            tokens, wait = self._refill(scope, key, limit, now)
+            if tokens >= cost:
+                tokens -= cost
+                allowed, wait = True, 0.0
             else:
                 allowed = False
-                wait = (1.0 - tokens) / rate
-            self._buckets[tenant_id] = (tokens, current)
+            self._buckets[(scope, key)] = (tokens, now.timestamp())
         return RateLimitResult(
             allowed=allowed,
-            remaining=math.floor(tokens),
+            remaining=max(math.floor(tokens), 0),
             retry_after_seconds=wait,
         )
+
+    async def consume(
+        self,
+        *,
+        scope: BucketScope,
+        key: str,
+        limit: int,
+        now: datetime,
+        cost: int,
+    ) -> None:
+        _validate_hit(limit=limit, now=now)
+        if cost < 0:
+            raise ValueError("cost must be >= 0")
+        async with self._lock:
+            tokens, _ = self._refill(scope, key, limit, now)
+            self._buckets[(scope, key)] = (tokens - cost, now.timestamp())
+
+    async def available(
+        self,
+        *,
+        scope: BucketScope,
+        key: str,
+        limit: int,
+        now: datetime,
+    ) -> float:
+        _validate_hit(limit=limit, now=now)
+        async with self._lock:
+            tokens, _ = self._refill(scope, key, limit, now)
+            self._buckets[(scope, key)] = (tokens, now.timestamp())
+        return tokens
+
+    def _refill(
+        self,
+        scope: str,
+        key: str,
+        limit: int,
+        now: datetime,
+    ) -> tuple[float, float]:
+        rate = limit / _BUCKET_WINDOW_SECONDS
+        current = now.timestamp()
+        tokens, stored = self._buckets.get((scope, key), (float(limit), current))
+        if current < stored:
+            current = stored
+        refilled = min(float(limit), tokens + (current - stored) * rate)
+        wait = 0.0 if refilled >= 1.0 else (1.0 - refilled) / rate
+        return refilled, wait
+
+    async def hit(self, *, tenant_id: UUID, limit: int, now: datetime) -> RateLimitResult:
+        """Tenant RPM convenience used by the service layer before scopes existed."""
+        return await self.take(scope="tenant", key=str(tenant_id), limit=limit, now=now)
 
 
 class RedisRateLimiter:
@@ -154,35 +251,91 @@ class RedisRateLimiter:
         self._client = client
         self._key_prefix = key_prefix
         self._timeout_seconds = timeout_seconds
-        self._script = client.register_script(_REDIS_TAKE_SCRIPT)
+        self._script = client.register_script(_REDIS_SCRIPT)
 
-    async def hit(self, *, tenant_id: UUID, limit: int, now: datetime) -> RateLimitResult:
+    async def take(
+        self,
+        *,
+        scope: BucketScope,
+        key: str,
+        limit: int,
+        now: datetime,
+        cost: int = 1,
+    ) -> RateLimitResult:
         _validate_hit(limit=limit, now=now)
-        key = f"{self._key_prefix}:tenant:{tenant_id}"
-        now_ms = int(now.timestamp() * 1000)
-        try:
-            async with asyncio.timeout(self._timeout_seconds):
-                raw = await self._script(
-                    keys=[key],
-                    args=[limit, limit / (_BURST_WINDOW_SECONDS * 1000), now_ms, 1],
-                )
-        except TimeoutError as exc:
-            raise RateLimiterUnavailable("timeout") from exc
-        except (RedisError, OSError) as exc:
-            raise RateLimiterUnavailable("error") from exc
-        allowed, remaining, wait_ms = (int(value) for value in raw)
+        if cost < 1:
+            raise ValueError("cost must be >= 1")
+        allowed, remaining, wait_ms = await self._run(scope, key, limit, now, cost, op=1)
         return RateLimitResult(
             allowed=bool(allowed),
             remaining=max(remaining, 0),
             retry_after_seconds=max(wait_ms, 0) / 1000.0,
         )
 
+    async def consume(
+        self,
+        *,
+        scope: BucketScope,
+        key: str,
+        limit: int,
+        now: datetime,
+        cost: int,
+    ) -> None:
+        _validate_hit(limit=limit, now=now)
+        if cost < 0:
+            raise ValueError("cost must be >= 0")
+        await self._run(scope, key, limit, now, cost, op=2)
+
+    async def available(
+        self,
+        *,
+        scope: BucketScope,
+        key: str,
+        limit: int,
+        now: datetime,
+    ) -> float:
+        _validate_hit(limit=limit, now=now)
+        _, remaining, _ = await self._run(scope, key, limit, now, 1, op=0)
+        return float(remaining)
+
+    async def hit(self, *, tenant_id: UUID, limit: int, now: datetime) -> RateLimitResult:
+        return await self.take(scope="tenant", key=str(tenant_id), limit=limit, now=now)
+
+    async def _run(
+        self,
+        scope: str,
+        key: str,
+        limit: int,
+        now: datetime,
+        cost: int,
+        *,
+        op: int,
+    ) -> tuple[int, int, int]:
+        bucket = f"{self._key_prefix}:{scope}:{key}"
+        refill_per_ms = limit / (_BUCKET_WINDOW_SECONDS * 1000)
+        try:
+            async with asyncio.timeout(self._timeout_seconds):
+                raw = await self._script(
+                    keys=[bucket],
+                    args=[limit, refill_per_ms, int(now.timestamp() * 1000), cost, op],
+                )
+        except TimeoutError as exc:
+            raise RateLimiterUnavailable("timeout") from exc
+        except (RedisError, OSError) as exc:
+            raise RateLimiterUnavailable("error") from exc
+        return int(raw[0]), int(raw[1]), int(raw[2])
+
 
 class SqlAlchemyRateLimiter:
-    """PostgreSQL fixed-window counter backed by one atomic upsert statement."""
+    """PostgreSQL fixed-window counter backed by one atomic upsert statement.
+
+    Single-process only: each process keeps its own window, so this is the
+    ``storage`` backend used when Redis is not configured.
+    """
 
     def __init__(self, *, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._session_factory = session_factory
+        self._local = InMemoryRateLimiter()
 
     async def hit(self, *, tenant_id: UUID, limit: int, now: datetime) -> RateLimitResult:
         _validate_hit(limit=limit, now=now)
@@ -223,3 +376,37 @@ class SqlAlchemyRateLimiter:
             window_start=stored_window_start,
             now=now,
         )
+
+    async def take(
+        self,
+        *,
+        scope: BucketScope,
+        key: str,
+        limit: int,
+        now: datetime,
+        cost: int = 1,
+    ) -> RateLimitResult:
+        if scope == "tenant":
+            return await self.hit(tenant_id=UUID(key), limit=limit, now=now)
+        return await self._local.take(scope=scope, key=key, limit=limit, now=now, cost=cost)
+
+    async def consume(
+        self,
+        *,
+        scope: BucketScope,
+        key: str,
+        limit: int,
+        now: datetime,
+        cost: int,
+    ) -> None:
+        await self._local.consume(scope=scope, key=key, limit=limit, now=now, cost=cost)
+
+    async def available(
+        self,
+        *,
+        scope: BucketScope,
+        key: str,
+        limit: int,
+        now: datetime,
+    ) -> float:
+        return await self._local.available(scope=scope, key=key, limit=limit, now=now)
