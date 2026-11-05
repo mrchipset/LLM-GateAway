@@ -269,13 +269,13 @@
   - 进度（2026-11-04）：`model_deployments`（迁移 `0010`，无 deployment 的模型隐式单路由，零迁移）；凭证只存环境变量名 + 可选 `base_url`，密钥不落库；权重无放回抽样、失败转移（可重试/5xx/429/401/403/坏响应）、进程内 cooldown（阈值 3、30s，永不排除最后一个候选）；响应头 `x-llm-gateway-deployment` / `x-llm-gateway-fallback`；指标 `gateway_route_attempts|fallbacks|cooldowns` 与 `route.attempt` span；管理 API 增删改查 + 审计。
   - 未做：跨进程共享健康（归 G1.2，与 Redis 一起）、按延迟/成本动态路由、per-deployment 用量归因（当前 provider 维度 + `deployment` 指标标签）。
 
-- [ ] **G1.2 限流与配额离开请求热路径**
+- [x] **G1.2 限流与配额离开请求热路径**
   - 现状：固定 60 秒窗口、仅租户级；计数落在 PostgreSQL 单行，同租户请求互相争抢；Redis 仍是 Reserved。
   - 范围：Redis 令牌桶（per-key / per-tenant / per-model）、TPM 与并发上限、RPM 与 TPM 同时生效、`Retry-After` 语义明确；限流不可用时降级策略显式（fail-open 必须告警）。
   - 验收：多副本下限流口径一致；边界不出现 2 倍突发；Redis 不可用时行为符合配置且可观测。
   - 进度（2026-11-05）：租户级已完成并切换为**令牌桶**（容量=每分钟限额，按秒连续补充），`GATEWAY_RATE_LIMIT_BACKEND=redis` 时由一段 Lua 脚本原子完成补充与取用，多副本共享同一桶；边界不再出现 2 倍突发。**按 key、按模型**的 RPM 桶与三层 **TPM** 已落地（迁移 `0012`；TPM 为结算后扣减，超支最多一个请求的用量，下一次请求 429 `token_rate_limited`）。`GATEWAY_RATE_LIMIT_FAIL_OPEN`（默认 true）控制 Redis 超时/报错时的降级：fail-open 放行并累加 `gateway_rate_limit_degraded{reason}` 与 `rate_limit_unavailable` 告警；fail-closed 返回 503 `rate_limiter_unavailable` + `Retry-After: 1`，并增加 `rate_limiter` readiness 检查。Redis 调用受 `GATEWAY_RATE_LIMIT_REDIS_TIMEOUT_SECONDS`（默认 0.2s）约束；时钟回拨只减少补充量，不会多发票。设计说明见 `notes/rate-limiting.md`。
   - 进度（2026-11-05，并发）：租户与 key 的 `max_concurrent_requests`（迁移 `0013`）用带 TTL 的租约实现，流式在 SSE 生成器的 shield finally 中释放；租约 TTL 由 `GATEWAY_CONCURRENCY_LEASE_SECONDS`（默认 600）控制，用于崩溃回收；超限 429 `concurrency_limited`，限流后端不可用时沿用 fail-open/fail-closed 策略。
-  - 未做（最后一项）：共享部署健康/cooldown（仍为进程内）。
+  - 进度（2026-11-05，共享 cooldown）：`DeploymentHealth` 改为异步协议；Redis 后端下失败计数与 cooldown 截止时间共享（`storage/cooldowns.py`），失败计数按一个 cooldown 窗口过期；Redis 异常降级为“可用”并累加 `gateway_cooldown_degraded`。G1.2 全部完成，`storage` 后端的新增 scope 仍为进程内，Redis 后端可安全多 worker。
 
 - [ ] **G1.3 热路径读写放大治理**（压测已确认整月用量聚合是第一瓶颈，优先做）
   - 现状：每请求包含 key 查询、`last_used_at` 写入、租户查询、整月用量聚合、限流单行 upsert、usage 插入，全部同步打 PostgreSQL，无缓存。

@@ -14,7 +14,12 @@ from llm_gateway.metrics import configure_metrics, shutdown_metrics
 from llm_gateway.providers.factory import build_providers
 from llm_gateway.providers.pool import ProviderPool
 from llm_gateway.providers.registry import ProviderRegistry
-from llm_gateway.services.routing import DeploymentHealth, ModelRouter
+from llm_gateway.services.routing import ModelRouter
+from llm_gateway.storage.cooldowns import (
+    DeploymentHealth,
+    InMemoryDeploymentHealth,
+    RedisDeploymentHealth,
+)
 from llm_gateway.storage.db import Database
 from llm_gateway.storage.memory import (
     InMemoryAdminAuditRepository,
@@ -182,17 +187,6 @@ def build_container(settings: Settings, *, telemetry: Telemetry | None = None) -
             telemetry=resolved_telemetry,
         )
 
-    container.router = ModelRouter(
-        deployments=container.deployments,
-        pool=pool,
-        health=DeploymentHealth(
-            threshold=settings.route_failure_threshold,
-            cooldown_seconds=settings.route_cooldown_seconds,
-        ),
-        clock=clock,
-        tracer=resolved_telemetry.tracer,
-        max_attempts=settings.route_max_attempts,
-    )
     if settings.rate_limit_backend is RateLimitBackend.REDIS:
         if settings.redis_url is None:  # guarded by Settings validation
             raise ValueError("redis_url is required when rate_limit_backend is redis")
@@ -212,4 +206,26 @@ def build_container(settings: Settings, *, telemetry: Telemetry | None = None) -
                 *container.readiness_checks,
                 ReadinessCheck(name="rate_limiter", check=_ping_redis),
             )
+
+    health: DeploymentHealth
+    if container.redis_client is not None:
+        health = RedisDeploymentHealth(
+            client=container.redis_client,
+            threshold=settings.route_failure_threshold,
+            cooldown_seconds=settings.route_cooldown_seconds,
+            timeout_seconds=settings.rate_limit_redis_timeout_seconds,
+        )
+    else:
+        health = InMemoryDeploymentHealth(
+            threshold=settings.route_failure_threshold,
+            cooldown_seconds=settings.route_cooldown_seconds,
+        )
+    container.router = ModelRouter(
+        deployments=container.deployments,
+        pool=pool,
+        health=health,
+        clock=clock,
+        tracer=resolved_telemetry.tracer,
+        max_attempts=settings.route_max_attempts,
+    )
     return container

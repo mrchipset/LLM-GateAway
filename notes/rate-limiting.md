@@ -93,12 +93,22 @@ model protection is the RPM/TPM bucket. Rejection is 429 `concurrency_limited`; 
 follows the same fail-open/fail-closed policy as the buckets, and a fail-open request holds no
 lease, so nothing is released later.
 
-Still missing:
+### Shared cooldown closes the failover gap
 
-1. shared deployment health (cooldown), which is still process-local.
+`DeploymentHealth` was a per-process dict: each worker had to discover a broken deployment on its
+own, so during a rolling failure every worker paid the same failed requests. With Redis configured
+the failure counter and the cooldown deadline are shared keys. `record_failure` increments the
+counter and, at the threshold, sets the deadline and clears the counter in one Lua script;
+`record_success` deletes both. The failure key expires after one cooldown window, so occasional
+failures spread over hours never accumulate to a threshold.
 
-Per-key/model/concurrency state uses the same `(scope, key)` namespace; the `storage` backend
-keeps it in a process-local structure, while Redis shares it across replicas.
+Redis errors here degrade to "available" and count `gateway_cooldown_degraded`. Cooldown is an
+optimization on top of retries and fallback; blocking routing because the health backend is down
+would turn a degradation into an outage.
+
+Still missing: none for G1.2. Per-key/model/concurrency/cooldown state uses the same `(scope, key)`
+namespace; the `storage` backend keeps the newer state in process-local structures, while Redis
+shares it across replicas.
 
 ## Consequences
 

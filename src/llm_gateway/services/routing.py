@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import random
 from collections.abc import AsyncGenerator
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from dataclasses import dataclass
+from datetime import datetime
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from opentelemetry.trace import Tracer
@@ -40,6 +40,7 @@ from llm_gateway.schemas.chat import (
     ChatCompletionResponse,
     Usage,
 )
+from llm_gateway.storage.cooldowns import DeploymentHealth
 from llm_gateway.storage.repositories import (
     ModelConfig,
     ModelDeployment,
@@ -48,35 +49,6 @@ from llm_gateway.storage.repositories import (
 )
 
 logger = get_logger(__name__)
-
-
-@dataclass(slots=True)
-class DeploymentHealth:
-    threshold: int = 3
-    cooldown_seconds: int = 30
-    _failures: dict[UUID, int] = field(default_factory=dict)
-    _cooldown_until: dict[UUID, datetime] = field(default_factory=dict)
-
-    def available(self, deployment_id: UUID, now: datetime) -> bool:
-        until = self._cooldown_until.get(deployment_id)
-        return until is None or now >= until
-
-    def cooldown_until(self, deployment_id: UUID) -> datetime | None:
-        return self._cooldown_until.get(deployment_id)
-
-    def record_success(self, deployment_id: UUID) -> None:
-        self._failures.pop(deployment_id, None)
-        self._cooldown_until.pop(deployment_id, None)
-
-    def record_failure(self, deployment_id: UUID, now: datetime) -> bool:
-        """Return True when this failure triggered a cooldown."""
-        failures = self._failures.get(deployment_id, 0) + 1
-        if failures < self.threshold:
-            self._failures[deployment_id] = failures
-            return False
-        self._failures[deployment_id] = 0
-        self._cooldown_until[deployment_id] = now + timedelta(seconds=self.cooldown_seconds)
-        return True
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,11 +147,15 @@ class ModelRouter:
             )
 
         now = self._clock.now()
-        ready = [row for row in enabled if self._health.available(row.id, now)]
-        pool = ready or sorted(
-            enabled,
-            key=lambda row: self._health.cooldown_until(row.id) or now,
-        )
+        ready: list[ModelDeployment] = []
+        cooldowns: dict[UUID, datetime] = {}
+        for row in enabled:
+            until = await self._health.cooldown_until(row.id)
+            if until is None or now >= until:
+                ready.append(row)
+            else:
+                cooldowns[row.id] = until
+        pool = ready or sorted(enabled, key=lambda row: cooldowns.get(row.id) or now)
         return weighted_order(pool, self._rng)[: self._max_attempts]
 
     def _provider_for(self, deployment: ModelDeployment) -> ChatProvider:
@@ -221,10 +197,10 @@ class ModelRouter:
         span.set_attribute("llm.route_status", status)  # pyright: ignore[reportAttributeAccessIssue]
         span.end()  # pyright: ignore[reportAttributeAccessIssue]
 
-    def _mark_failure(self, deployment: ModelDeployment, error: ProviderError) -> None:
+    async def _mark_failure(self, deployment: ModelDeployment, error: ProviderError) -> None:
         if not _should_failover(error):
             return
-        if self._health.record_failure(deployment.id, self._clock.now()):
+        if await self._health.record_failure(deployment.id, self._clock.now()):
             current_metrics().deployment_cooldowns.add(1, {"deployment": deployment.name})
             logger.warning(
                 "deployment_cooldown",
@@ -277,13 +253,13 @@ class ModelRouter:
                     attempt=attempt,
                     span=span,
                 )
-                self._mark_failure(deployment, exc)
+                await self._mark_failure(deployment, exc)
                 if _should_failover(exc) and attempt < len(candidates):
                     last_error = exc
                     continue
                 raise
 
-            self._health.record_success(deployment.id)
+            await self._health.record_success(deployment.id)
             self._record_attempt(
                 deployment=deployment,
                 model=model,
@@ -350,13 +326,13 @@ class ModelRouter:
                     attempt=attempt,
                     span=span,
                 )
-                self._mark_failure(deployment, exc)
+                await self._mark_failure(deployment, exc)
                 if _should_failover(exc) and attempt < len(candidates):
                     last_error = exc
                     continue
                 raise
 
-            self._health.record_success(deployment.id)
+            await self._health.record_success(deployment.id)
             self._record_attempt(
                 deployment=deployment,
                 model=model,

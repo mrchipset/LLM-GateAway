@@ -283,7 +283,7 @@ Invoke-RestMethod -Method Patch `
 - Quotas are soft: they are checked before the request, so concurrent or in-flight requests can slightly overshoot, and usage write failures can cause drift.
 - Rejected requests (rate-limited or over quota) do not create usage records.
 - Rate limiting applies only to `POST /v1/chat/completions`; `/v1/models`, health checks, and the management API are not tenant-limited.
-- The `storage` backend keeps the tenant counter in PostgreSQL (shared across workers, fixed window), but per-key/model buckets and TPM are process-local. Configure `GATEWAY_RATE_LIMIT_BACKEND=redis` when those limits must hold across replicas.
+- The `storage` backend keeps the tenant counter in PostgreSQL (shared across workers, fixed window), but per-key/model buckets, TPM, concurrency leases, and cooldown are process-local. Configure `GATEWAY_RATE_LIMIT_BACKEND=redis` when those limits must hold across replicas.
 
 ## Cost, plans, and budgets
 
@@ -356,7 +356,7 @@ Invoke-RestMethod -Method Post `
 
 - Deployments are tried in weighted-random order; the first is the primary and the rest are fallbacks.
 - Failover happens on retryable errors (timeouts, connection failures, 429/5xx, invalid upstream payload) and on upstream 401/403. A 400 does not fail over: the request is wrong everywhere.
-- Three consecutive failovers put a deployment into a 30-second cooldown (`GATEWAY_ROUTE_*`). Cooldown is process-local; a cooldown never removes the last candidate, so health state cannot take a model fully offline.
+- Three consecutive failovers put a deployment into a 30-second cooldown (`GATEWAY_ROUTE_*`). The state is shared through Redis when `GATEWAY_RATE_LIMIT_BACKEND=redis` and process-local otherwise; a cooldown never removes the last candidate, so health state cannot take a model fully offline.
 - Credentials are never stored: `credential_env` names an environment variable, and `base_url` can point at a different account or proxy for the same provider.
 - Success sets `x-llm-gateway-deployment`; a request served by a fallback also sets `x-llm-gateway-fallback: true`.
 - Provider-level retries still run inside each deployment. To fail over quickly, lower `GATEWAY_MAX_RETRIES` (0 means one attempt per deployment).
@@ -536,11 +536,10 @@ The container runs `uvicorn` with `--workers ${GATEWAY_WORKERS:-1}` and
 `--timeout-graceful-shutdown ${GATEWAY_SHUTDOWN_GRACE_SECONDS:-30}`; `docker compose` sets
 `stop_grace_period: 45s` so the drain has room before SIGKILL.
 
-- **Keep `GATEWAY_WORKERS=1` unless rate limiting is on Redis.** With
-  `GATEWAY_RATE_LIMIT_BACKEND=redis` the tenant buckets are shared, so workers no longer multiply
-  request limits. Deployment cooldown and login throttling are still process-local, so raising
-  workers weakens brute-force protection and makes failover health per-process; finish G1.2
-  before scaling out on the strength of those two.
+- **Workers can be raised with `GATEWAY_RATE_LIMIT_BACKEND=redis`.** Tenant/key/model limits,
+  TPM, in-flight leases, and deployment cooldown then share Redis, and login throttling is already
+  PostgreSQL-backed. On the `storage` backend, per-key/model/TPM and concurrency state is
+  process-local, so limits multiply per worker.
 - Shutdown drains in-flight requests, including active streams, for up to
   `GATEWAY_SHUTDOWN_GRACE_SECONDS`. Uvicorn enforces the same value as its hard ceiling; if it
   has to cancel, the gateway logs `shutdown_grace_exceeded`, increments
@@ -573,6 +572,10 @@ does.
   upstream call and released when the response (or the stream) finishes; the Redis lease expires
   after `GATEWAY_CONCURRENCY_LEASE_SECONDS`, so a crashed process cannot leak a slot forever.
   Exhaustion returns 429 `concurrency_limited` with `Retry-After: 1`.
+- **Deployment cooldown is shared** when Redis is configured: the failure counter and the cooldown
+  deadline live in Redis, so a deployment that one replica found broken is avoided by all of them.
+  Redis errors degrade to "available" and increment `gateway_cooldown_degraded`; routing keeps
+  working instead of stalling on a health backend.
 - `storage` keeps the tenant counter in PostgreSQL: one atomic row, shared by workers, but a fixed
   window and a write per request. Per-key/model buckets and TPM fall back to a process-local
   bucket there; use Redis for those across replicas.

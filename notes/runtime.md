@@ -70,10 +70,10 @@ enforce it, and the route cannot distinguish "slow model" from "dead connection"
 
 ### Workers stay gated
 
-`GATEWAY_WORKERS` is wired into the container command, default 1. With the Redis token bucket
-(`GATEWAY_RATE_LIMIT_BACKEND=redis`) request limits are shared across workers; deployment cooldown
-and login throttling are still process-local, so scaling out remains a deliberate trade-off until
-those move to Redis too. The lever exists so capacity testing can measure it.
+`GATEWAY_WORKERS` is wired into the container command, default 1. With the Redis backend the
+tenant/key/model limits, TPM, concurrency leases, and deployment cooldown are shared across
+workers; login throttling is PostgreSQL-backed. Scaling out is therefore safe on the Redis
+backend, while the `storage` backend keeps the newer scopes process-local.
 
 ## Trade-offs and open gaps
 

@@ -111,3 +111,27 @@ async def test_concurrency_leases_are_shared_and_expire(client: Redis) -> None:
     # A crashed process leaves the slot behind; the TTL must reclaim it.
     await asyncio.sleep(1.1)
     assert await replica_b.acquire(scope="tenant", key="lease", limit=1, ttl_seconds=1) is True
+
+
+async def test_deployment_cooldown_is_shared_between_replicas(client: Redis) -> None:
+    from llm_gateway.storage.cooldowns import RedisDeploymentHealth
+
+    prefix = f"test:{uuid4()}"
+    replica_a = RedisDeploymentHealth(
+        client=client, threshold=2, cooldown_seconds=30, key_prefix=prefix
+    )
+    replica_b = RedisDeploymentHealth(
+        client=client, threshold=2, cooldown_seconds=30, key_prefix=prefix
+    )
+    deployment_id = uuid4()
+
+    assert await replica_a.record_failure(deployment_id, NOW) is False
+    assert await replica_b.record_failure(deployment_id, NOW) is True
+
+    assert await replica_a.available(deployment_id, NOW) is False
+    until = await replica_b.cooldown_until(deployment_id)
+    assert until is not None
+    assert until > NOW
+
+    await replica_b.record_success(deployment_id)
+    assert await replica_a.available(deployment_id, NOW) is True

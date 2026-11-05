@@ -63,6 +63,7 @@ class Metrics:
     audit_export_rows: Counter
     forced_shutdowns: Counter
     rate_limit_degraded: Counter
+    cooldown_degraded: Counter
 
 
 def build_metrics(meter: Meter) -> Metrics:
@@ -156,6 +157,11 @@ def build_metrics(meter: Meter) -> Metrics:
             "gateway_rate_limit_degraded",
             unit="{request}",
             description="Requests admitted while the rate limiter backend was unavailable",
+        ),
+        cooldown_degraded=meter.create_counter(
+            "gateway_cooldown_degraded",
+            unit="{event}",
+            description="Routing decisions made while the cooldown backend was unavailable",
         ),
     )
 

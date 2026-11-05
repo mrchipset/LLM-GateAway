@@ -28,11 +28,8 @@ from llm_gateway.schemas.chat import (
     ChatDelta,
     ChatMessage,
 )
-from llm_gateway.services.routing import (
-    DeploymentHealth,
-    ModelRouter,
-    weighted_order,
-)
+from llm_gateway.services.routing import ModelRouter, weighted_order
+from llm_gateway.storage.cooldowns import InMemoryDeploymentHealth
 from llm_gateway.storage.memory import InMemoryModelDeploymentRepository
 from llm_gateway.storage.repositories import ModelConfig, ModelDeployment
 
@@ -167,12 +164,12 @@ async def _router(
     providers: dict[str, StubProvider | Exception],
     *,
     clock: FrozenClock | None = None,
-    health: DeploymentHealth | None = None,
+    health: InMemoryDeploymentHealth | None = None,
 ) -> ModelRouter:
     return ModelRouter(
         deployments=repo,
         pool=FakePool(providers),  # pyright: ignore[reportArgumentType]
-        health=health or DeploymentHealth(threshold=2, cooldown_seconds=30),
+        health=health or InMemoryDeploymentHealth(threshold=2, cooldown_seconds=30),
         clock=clock or FrozenClock(),
         rng=ZeroRandom(),
         max_attempts=3,
@@ -234,7 +231,7 @@ async def test_failures_put_a_deployment_into_cooldown() -> None:
     primary = StubProvider(error=ProviderUpstreamError(status_code=500, message="boom"))
     backup = StubProvider()
     clock = FrozenClock()
-    health = DeploymentHealth(threshold=2, cooldown_seconds=30)
+    health = InMemoryDeploymentHealth(threshold=2, cooldown_seconds=30)
     router = await _router(repo, {"a": primary, "b": backup}, clock=clock, health=health)
 
     await router.complete(model=_model(), request=_request())
@@ -244,10 +241,10 @@ async def test_failures_put_a_deployment_into_cooldown() -> None:
     assert primary.complete_calls == 2
     assert backup.complete_calls == 3
     deployment_a = (await repo.list_deployments(MODEL_ID))[0]
-    assert health.available(deployment_a.id, clock.now()) is False
+    assert await health.available(deployment_a.id, clock.now()) is False
 
     clock.advance(31)
-    assert health.available(deployment_a.id, clock.now()) is True
+    assert await health.available(deployment_a.id, clock.now()) is True
 
 
 async def test_missing_credentials_skip_to_the_next_deployment() -> None:
