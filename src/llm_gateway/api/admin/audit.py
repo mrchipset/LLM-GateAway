@@ -32,7 +32,7 @@ from fastapi import APIRouter, Depends, Path, Query
 from fastapi.responses import StreamingResponse
 
 from llm_gateway.auth.admin_auth import AdminPrincipal
-from llm_gateway.auth.admin_deps import require_audit_read, require_owner
+from llm_gateway.auth.admin_deps import current_admin, require_audit_read, require_owner
 from llm_gateway.container import Container, get_container
 from llm_gateway.errors import ApiError, ApiErrorCode
 from llm_gateway.metrics import current_metrics
@@ -432,6 +432,7 @@ async def list_audit_sessions(
 @router.get("/audit/sessions/{session_id}", response_model=AuditSessionDetailResponse)
 async def get_audit_session(
     container: Annotated[Container, Depends(get_container)],
+    principal: Annotated[AdminPrincipal, Depends(current_admin)],
     session_id: UUID,
     include_content: bool = False,
 ) -> AuditSessionDetailResponse:
@@ -473,6 +474,14 @@ async def get_audit_session(
         container,
         [turn.model_dump(mode="json", by_alias=True) for turn in turns],
     )
+    await record_admin_event_safely(
+        container=container,
+        principal=principal,
+        action="audit.session_viewed",
+        target_type="audit_session",
+        target_id=str(session_id),
+        after={"include_content": include_content, "turns": len(turns)},
+    )
     return AuditSessionDetailResponse(
         session=_to_session_summary(session),
         turns=turns,
@@ -482,6 +491,7 @@ async def get_audit_session(
 @router.get("/audit/requests/{request_id}", response_model=AuditRequestDetailResponse)
 async def get_audit_request(
     container: Annotated[Container, Depends(get_container)],
+    principal: Annotated[AdminPrincipal, Depends(current_admin)],
     request_id: Annotated[str, Path(min_length=1, max_length=64)],
 ) -> AuditRequestDetailResponse:
     record = await container.audit.get_request(request_id=request_id)
@@ -504,6 +514,13 @@ async def get_audit_request(
             "diff": None if diff is None else diff.model_dump(mode="json", by_alias=True),
         },
     )
+    await record_admin_event_safely(
+        container=container,
+        principal=principal,
+        action="audit.request_viewed",
+        target_type="audit_request",
+        target_id=request_id,
+    )
     return AuditRequestDetailResponse(
         request=detail,
         diff=diff,
@@ -514,6 +531,7 @@ async def get_audit_request(
 @router.get("/audit/export", response_class=StreamingResponse)
 async def export_audit_requests(
     container: Annotated[Container, Depends(get_container)],
+    principal: Annotated[AdminPrincipal, Depends(current_admin)],
     tenant_id: UUID,
     since: datetime,
     until: datetime,
@@ -521,6 +539,19 @@ async def export_audit_requests(
 ) -> StreamingResponse:
     _validate_window(since, until)
     await _ensure_tenant(container, tenant_id)
+    await record_admin_event_safely(
+        container=container,
+        principal=principal,
+        action="audit.exported",
+        target_type="audit_export",
+        target_id=str(tenant_id),
+        after={
+            "tenant_id": str(tenant_id),
+            "since": since.isoformat(),
+            "until": until.isoformat(),
+            "format": export_format,
+        },
+    )
 
     filename = (
         f"audit-{tenant_id}-{since.date().isoformat()}-{until.date().isoformat()}.{export_format}"

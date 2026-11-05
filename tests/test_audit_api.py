@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -1140,3 +1140,50 @@ async def test_session_detail_without_content_preserves_already_bounded_paramete
         assert "to" not in change
         assert change["truncated"] is True
     assert "d" * 500 not in response.text
+
+
+async def test_audit_reads_and_exports_are_recorded(
+    make_container: Callable[..., Container],
+    make_client: Callable[..., Any],
+    settings: Settings,
+) -> None:
+    container = make_container(settings, clock=FrozenClock())
+    master = _auth(_master(settings))
+    tenant = await seed_tenant(container)
+    key = await _key(container, tenant)
+    session_id = uuid4()
+    await _seed_turn(
+        container,
+        tenant_id=tenant.id,
+        key=key,
+        session_id=session_id,
+        request_id="req-audit-view",
+        created_at=BASE,
+    )
+
+    async with make_client(settings, container) as client:
+        viewed = await client.get(f"/api/v1/audit/sessions/{session_id}", headers=master)
+        request_viewed = await client.get("/api/v1/audit/requests/req-audit-view", headers=master)
+        exported = await client.get(
+            "/api/v1/audit/export",
+            headers=master,
+            params={
+                "tenant_id": str(tenant.id),
+                "since": BASE.isoformat(),
+                "until": (BASE + timedelta(days=1)).isoformat(),
+                "format": "jsonl",
+            },
+        )
+        events = await client.get("/api/v1/admin-audit", headers=master, params={"limit": 50})
+
+    assert viewed.status_code == 200
+    assert request_viewed.status_code == 200
+    assert exported.status_code == 200
+    payload = events.json()["items"]
+    actions = {(item["action"], item["target_id"]) for item in payload}
+    assert ("audit.session_viewed", str(session_id)) in actions
+    assert ("audit.request_viewed", "req-audit-view") in actions
+    assert ("audit.exported", str(tenant.id)) in actions
+    exported_event = next(item for item in payload if item["action"] == "audit.exported")
+    assert exported_event["target_type"] == "audit_export"
+    assert "format" in (exported_event["after"] or {})
