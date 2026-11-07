@@ -21,7 +21,9 @@ from llm_gateway.services.audit_diff import (
     message_preview,
     summarize_response,
     text_hash,
+    truncate_messages,
     truncate_snapshot,
+    truncate_snapshot_per_message,
 )
 
 
@@ -910,3 +912,31 @@ def test_bound_parameter_changes_passes_through_already_bounded_entries() -> Non
     assert result["tools"] == entry
     assert "from" not in result["tools"]
     assert "to" not in result["tools"]
+
+
+def test_truncate_messages_is_independent_of_neighbouring_messages() -> None:
+    message = _message("user", "x" * 5000)
+
+    alone, truncated_alone = truncate_messages(messages=[message], max_bytes=1024)
+    surrounded, truncated_surrounded = truncate_messages(
+        messages=[_message("system", "s" * 3000), message], max_bytes=1024
+    )
+
+    assert truncated_alone is True
+    assert truncated_surrounded is True
+    assert alone[0] == surrounded[1]
+    assert len(str(alone[0]["content"]).encode("utf-8")) <= 1024
+
+
+def test_truncate_snapshot_per_message_keeps_a_response_that_fits() -> None:
+    response = "r" * 100_000
+
+    snapshot = truncate_snapshot_per_message(
+        messages=[_message("user", "hi")],
+        response_content=response,
+        message_max_bytes=262_144,
+        extra_max_bytes=262_144,
+    )
+
+    assert snapshot.response_content == response
+    assert snapshot.truncated is False

@@ -424,7 +424,7 @@ Audit 标签用于只读查看审计：
 
 - 按租户、API key、模型、时间和标题/session/request id 检索会话，分页按最后活动倒序。
 - 会话详情展示轮次时间线、change_type、状态、消息增删改数量、参数变化、usage 差值与响应变化；diff 预览最多 160 字符。
-- `Show full content` 打开后才请求完整 messages/params/response；关闭时参数变化只显示 hash。内容模式响应超出预算时返回 413，可先隐藏全文、再逐条打开请求；未开启内容时若仍 413，本版本不提供分段渲染，可凭 request id 调用请求端点，或在网关侧调大 `GATEWAY_AUDIT_MAX_CONTENT_BYTES`（需重启）。
+- `Show full content` 打开后才请求完整 messages/params/response；关闭时参数变化只显示 hash。内容模式响应超出预算时返回 413，可先隐藏全文、再逐条打开请求；未开启内容时若仍 413，本版本不提供分段渲染，可凭 request id 调用请求端点，或在网关侧调大 `GATEWAY_AUDIT_MAX_RESPONSE_BYTES`（需重启）。
 - 审计内容不写入 localStorage、sessionStorage、cookie 或 URL；断开连接会清空审计查询缓存。
 
 master key 只保存在当前页面的内存中，不会写入 localStorage、sessionStorage、cookie 或 URL；断开连接会清除所有管理/用量查询缓存。

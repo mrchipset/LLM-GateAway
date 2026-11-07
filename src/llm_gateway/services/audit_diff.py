@@ -710,9 +710,12 @@ def truncate_snapshot_per_message(
     stored_extras: list[object] = [copy.deepcopy(value) for value in extras]
     response = response_content
 
-    if response is not None and _snapshot_size([], response, ()) > extra_max_bytes // 4:
-        response = _truncate_utf8_bytes(response, extra_max_bytes // 4)
+    if _snapshot_size([], response, stored_extras) > extra_max_bytes:
         truncated = True
+        # The response may use half the budget before extras start competing;
+        # a small response never shrinks just because of the cap.
+        if response is not None and _snapshot_size([], response, ()) > extra_max_bytes // 2:
+            response = _truncate_utf8_bytes(response, extra_max_bytes // 2)
     if _snapshot_size([], response, stored_extras) > extra_max_bytes:
         leaves = sum(_count_string_leaves(value) for value in stored_extras)
         per_text = max(1, (extra_max_bytes // 2) // max(1, leaves))

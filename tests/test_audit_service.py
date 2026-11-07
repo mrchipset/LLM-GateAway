@@ -443,7 +443,7 @@ async def test_truncation_bounds_stored_snapshot_and_marks_it() -> None:
     assert stored.truncated is True
     assert len(stored.request_messages[0]["content"].encode("utf-8")) <= 1024
     assert stored.response_content is not None
-    assert len(stored.response_content.encode("utf-8")) <= 256
+    assert len(stored.response_content.encode("utf-8")) <= 512
     assert stored.response_content_hash is not None
 
 
