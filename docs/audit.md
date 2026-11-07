@@ -16,7 +16,8 @@
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `GATEWAY_AUDIT_ENABLED` | `false` | 全局开关 |
-| `GATEWAY_AUDIT_MAX_CONTENT_BYTES` | `262144` | 单请求捕获内容的字节预算（截断点） |
+| `GATEWAY_AUDIT_MAX_CONTENT_BYTES` | `262144` | 单请求 params、响应与 tool calls 的捕获字节预算（截断点） |
+| `GATEWAY_AUDIT_MAX_MESSAGE_BYTES` | `262144` | 单条消息的捕获上限；每条消息独立截断，相同消息因此可以复用同一存储 |
 | `GATEWAY_AUDIT_MAX_RESPONSE_BYTES` | `8388608` | 审计读接口单次响应的字节预算；与捕获预算独立 |
 | `GATEWAY_AUDIT_WRITE_TIMEOUT_SECONDS` | `2.0` | 审计写入超时，超时不影响推理 |
 
@@ -58,9 +59,17 @@
 
 diff 保存公共前缀长度、新增/修改/删除消息的索引、role、hash 与 ≤160 字符预览、参数 from/to、usage 差值、响应变化。参数值过大时改为 `{from_hash,to_hash,truncated:true}`，不重复保存大字段。完整内容从 request 快照读取。
 
-### 截断
+### 截断与去重
 
-messages、响应、参数与 tool calls 共享 `GATEWAY_AUDIT_MAX_CONTENT_BYTES` 预算。超限时按 UTF-8 安全截断，`truncated=true`；消息哈希与 diff 始终基于截断前原文，匹配与变更判定不受影响。
+messages 按 `GATEWAY_AUDIT_MAX_MESSAGE_BYTES` 逐条截断；响应、参数与 tool calls 共享 `GATEWAY_AUDIT_MAX_CONTENT_BYTES` 预算。超限时按 UTF-8 安全截断，`truncated=true`；消息哈希与 diff 始终基于截断前原文，匹配与变更判定不受影响。
+
+逐条截断是去重的前提：同一段消息在不同轮次必须产生完全相同的存储字节。实际的截断只发生在单条消息超过 256 KiB 时。
+
+消息正文按 `(tenant_id, 内容哈希)` 存一份，请求通过 `audit_request_messages` 按序号引用；长会话中重复出现的历史消息因此只占一份存储。读接口按引用重组，返回结构与去重前一致（`request_messages` 数组）。同一租户内多条请求共享的 blob 不会被某一条请求的过期删除带走，删除请求后清理无引用的 blob。
+
+历史行可能仍是内联快照（`request_messages` 非 NULL）。读路径兼容两种形态；可用 `uv run python scripts/audit_backfill_messages.py`（分批、可重入、`--tenant` 可重复）把内联快照迁移为引用并回收重复字节。
+
+回填默认跳过 `truncated=true` 的历史行：旧实现按整请求预算截断，同一条消息在不同轮次被截成不同内容，无法去重，迁移只会增加引用行。确认要连这些行一起迁移时加 `--include-truncated`。
 
 读接口用独立的 `GATEWAY_AUDIT_MAX_RESPONSE_BYTES` 限制单次响应（会话详情或单请求详情）。它默认 8 MiB，因为长会话的 diff 预览与参数 hash 即使不带正文也可能达到数 MB；捕获预算仍保持 256 KiB，避免为了查看历史而放大新写入的存储。超过读预算返回 413 `audit_content_too_large`。
 

@@ -9,8 +9,10 @@ content, and plaintext parameter values are only present when
 hash-only form. ``AuditTurn.truncated`` and ``AuditRequestDetail.truncated``
 describe capture-time truncation, not an API-layer decision.
 
-The response budget (``audit_max_content_bytes``) covers the whole serialized
-payload at the route layer, including previews and hashed diffs.
+The read-response budget (``audit_max_response_bytes``) covers the whole
+serialized payload at the route layer, including previews and hashed diffs. It
+is unrelated to the capture budgets (``audit_max_message_bytes`` per message,
+``audit_max_content_bytes`` for params, response, and tool calls).
 """
 
 from __future__ import annotations

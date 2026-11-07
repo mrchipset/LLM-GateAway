@@ -106,8 +106,37 @@ already hashed.
 ### Performance
 
 The default timeline uses `list_session_request_summaries`, a column projection that never
-reads JSONB bodies (SQL computes `jsonb_array_length(request_messages)`). Diffs are fetched
-in one batched query. Content mode loads full rows only when requested.
+reads JSONB bodies. It takes the message count from `jsonb_array_length(request_messages)`
+for legacy inline rows and from a reference count subquery for deduplicated rows. Diffs are
+fetched in one batched query. Content mode loads full rows only when requested.
+
+### Deduplicated message storage
+
+A 268-turn session stored 9.7 MB of `request_messages` for 610 unique messages: every turn
+resends the whole history. Bodies are now keyed by `(tenant_id, content_hash)` in
+`audit_message_blobs`, and `audit_request_messages` stores `(request_id, created_at,
+ordinal) -> blob_id`. The write path upserts missing blobs and inserts references; the read
+path assembles the array again, so the API and UI shapes do not change.
+
+The hash identity stays SHA-256 over the redacted, pre-truncation canonical message JSON, so
+prefix matching, diffs, and dedupe all agree. That requires per-message truncation
+(`truncate_messages`): a per-request budget would store the same message with different bytes
+depending on its neighbours. `audit_max_message_bytes` (256 KiB) bounds each message;
+`audit_max_content_bytes` still bounds params, response, and tool calls.
+
+Deletion drops references through the composite `(request_id, created_at)` cascade, then
+deletes blobs no request references. A blob shared with a live request is retained.
+`backfill_inline_messages` converts legacy inline rows in `FOR UPDATE SKIP LOCKED` batches,
+hashing the *stored* body rather than trusting `message_hashes`, because legacy truncation may
+have shortened the body. Rows marked `truncated` are skipped by default: the old per-request
+budget shrank the same logical message differently in each turn, so those bodies cannot
+deduplicate and converting them only adds reference rows. Rows stay readable in both shapes,
+so the backfill is optional.
+
+Rejected: parent-plus-delta chains. Retention deletes individual requests, so a deleted parent
+would strand its children; branches would need replay from a shared ancestor. Rejected: keyed
+by `(request_id, ordinal)` refs, which would keep per-request duplication in the index and
+prevent tenant-wide reuse.
 
 ## Trade-offs and open gaps
 

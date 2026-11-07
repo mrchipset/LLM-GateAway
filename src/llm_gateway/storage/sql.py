@@ -1,12 +1,26 @@
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator, Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import String, and_, case, delete, func, literal, or_, select, text, tuple_, update
+from sqlalchemy import (
+    String,
+    and_,
+    case,
+    delete,
+    func,
+    insert,
+    literal,
+    or_,
+    select,
+    text,
+    tuple_,
+    update,
+)
 from sqlalchemy import cast as sa_cast
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import CursorResult
@@ -15,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.sql.elements import ColumnElement
 
 from llm_gateway.providers.base import ProviderName
+from llm_gateway.services.audit_diff import message_hash
 from llm_gateway.storage.repositories import (
     AdminActorType,
     AdminAuditEvent,
@@ -60,6 +75,8 @@ from llm_gateway.storage.tables import (
     AdminSessionRow,
     AdminUserRow,
     ApiKeyRow,
+    AuditMessageBlobRow,
+    AuditRequestMessageRow,
     AuditRequestRow,
     AuditSessionRow,
     AuditTurnDiffRow,
@@ -1013,7 +1030,34 @@ def _to_audit_session(row: AuditSessionRow) -> AuditSessionRecord:
     )
 
 
-def _to_audit_request(row: AuditRequestRow) -> AuditRequestRecord:
+def _audit_message_bytes(message: object) -> int:
+    return len(
+        json.dumps(
+            message,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
+
+
+# asyncpg rejects statements with more than 32767 bind parameters. Both the
+# per-request write path and the backfill insert one row per message, so a long
+# history must be split across statements.
+_MAX_BIND_PARAMS = 30_000
+
+
+def _message_row_chunks(
+    rows: Sequence[dict[str, Any]], *, params_per_row: int
+) -> list[list[dict[str, Any]]]:
+    size = max(1, _MAX_BIND_PARAMS // params_per_row)
+    return [list(rows[start : start + size]) for start in range(0, len(rows), size)]
+
+
+def _to_audit_request(
+    row: AuditRequestRow,
+    messages: list[dict[str, Any]] | None = None,
+) -> AuditRequestRecord:
     match_method = row.match_method
     if match_method not in ("explicit", "prefix", "new"):
         raise ValueError(f"stored audit request has unknown match_method {match_method!r}")
@@ -1029,7 +1073,7 @@ def _to_audit_request(row: AuditRequestRow) -> AuditRequestRecord:
         model_id=row.model_id,
         provider=row.provider,
         is_stream=row.is_stream,
-        request_messages=row.request_messages,
+        request_messages=(messages if messages is not None else (row.request_messages or [])),
         message_hashes=row.message_hashes,
         request_params=row.request_params,
         response_content=row.response_content,
@@ -1044,6 +1088,40 @@ def _to_audit_request(row: AuditRequestRow) -> AuditRequestRecord:
         truncated=row.truncated,
         created_at=row.created_at,
     )
+
+
+async def _load_message_map(
+    db: AsyncSession,
+    keys: Sequence[tuple[str, datetime]],
+) -> dict[tuple[str, datetime], list[dict[str, Any]]]:
+    """Load deduplicated messages for the given (request_id, created_at) keys."""
+
+    if not keys:
+        return {}
+    wanted = set(keys)
+    request_ids = sorted({request_id for request_id, _ in keys})
+    rows = (
+        await db.execute(
+            select(
+                AuditRequestMessageRow.request_id,
+                AuditRequestMessageRow.created_at,
+                AuditMessageBlobRow.content,
+            )
+            .join(AuditMessageBlobRow, AuditMessageBlobRow.id == AuditRequestMessageRow.blob_id)
+            .where(AuditRequestMessageRow.request_id.in_(request_ids))
+            .order_by(
+                AuditRequestMessageRow.request_id,
+                AuditRequestMessageRow.created_at,
+                AuditRequestMessageRow.ordinal,
+            )
+        )
+    ).all()
+    messages: dict[tuple[str, datetime], list[dict[str, Any]]] = {}
+    for request_id, created_at, content in rows:
+        key = (request_id, created_at)
+        if key in wanted:
+            messages.setdefault(key, []).append(content)
+    return messages
 
 
 def _to_audit_summary(row: Any) -> AuditRequestSummary:
@@ -1224,7 +1302,7 @@ class SqlAlchemyAuditRepository:
                     model_id=request.model_id,
                     provider=request.provider,
                     is_stream=request.is_stream,
-                    request_messages=request.request_messages,
+                    request_messages=None,
                     message_hashes=request.message_hashes,
                     request_params=request.request_params,
                     response_content=request.response_content,
@@ -1241,6 +1319,8 @@ class SqlAlchemyAuditRepository:
                     created_at=request.created_at,
                 )
             )
+            await db.flush()
+            await self._store_messages(db, request=request)
             if diff is not None:
                 db.add(
                     AuditTurnDiffRow(
@@ -1257,6 +1337,77 @@ class SqlAlchemyAuditRepository:
                         created_at=diff.created_at,
                     )
                 )
+
+    async def _store_messages(self, db: AsyncSession, *, request: AuditRequestRecord) -> None:
+        """Persist each message once per tenant and reference it by ordinal."""
+
+        messages = request.request_messages
+        if not messages:
+            return
+        hashes = list(request.message_hashes)
+        if len(hashes) != len(messages):
+            raise ValueError("request_messages and message_hashes must have the same length")
+        unique_hashes = list(dict.fromkeys(hashes))
+        existing = (
+            await db.execute(
+                select(AuditMessageBlobRow.content_hash, AuditMessageBlobRow.id).where(
+                    AuditMessageBlobRow.tenant_id == request.tenant_id,
+                    AuditMessageBlobRow.content_hash.in_(unique_hashes),
+                )
+            )
+        ).all()
+        blob_ids = dict(existing)
+
+        missing = [content_hash for content_hash in unique_hashes if content_hash not in blob_ids]
+        if missing:
+            first_message = dict(zip(hashes, messages, strict=True))
+            values = []
+            for content_hash in missing:
+                message = first_message[content_hash]
+                size = _audit_message_bytes(message)
+                values.append(
+                    {
+                        "tenant_id": request.tenant_id,
+                        "content_hash": content_hash,
+                        "content": message,
+                        "truncated": bool(message.get("truncated")),
+                        "original_bytes": size,
+                        "stored_bytes": size,
+                        "created_at": request.created_at,
+                    }
+                )
+            for chunk in _message_row_chunks(values, params_per_row=7):
+                await db.execute(
+                    pg_insert(AuditMessageBlobRow)
+                    .values(chunk)
+                    .on_conflict_do_nothing(
+                        index_elements=[
+                            AuditMessageBlobRow.tenant_id,
+                            AuditMessageBlobRow.content_hash,
+                        ]
+                    )
+                )
+            inserted = (
+                await db.execute(
+                    select(AuditMessageBlobRow.content_hash, AuditMessageBlobRow.id).where(
+                        AuditMessageBlobRow.tenant_id == request.tenant_id,
+                        AuditMessageBlobRow.content_hash.in_(missing),
+                    )
+                )
+            ).all()
+            blob_ids.update(dict(inserted))
+
+        references = [
+            {
+                "request_id": request.request_id,
+                "created_at": request.created_at,
+                "ordinal": ordinal,
+                "blob_id": blob_ids[content_hash],
+            }
+            for ordinal, content_hash in enumerate(hashes)
+        ]
+        for chunk in _message_row_chunks(references, params_per_row=4):
+            await db.execute(insert(AuditRequestMessageRow).values(chunk))
 
     async def get_session_by_external_id(
         self, *, tenant_id: UUID, external_session_id: str
@@ -1323,7 +1474,13 @@ class SqlAlchemyAuditRepository:
                 )
                 .limit(1)
             )
-            return _to_audit_request(row) if row is not None else None
+            if row is None:
+                return None
+            messages = None
+            if row.request_messages is None:
+                loaded = await _load_message_map(db, [(row.request_id, row.created_at)])
+                messages = loaded.get((row.request_id, row.created_at), [])
+            return _to_audit_request(row, messages)
 
     async def recent_prefix_requests(
         self, *, tenant_id: UUID, api_key_id: UUID, since: datetime, limit: int
@@ -1398,14 +1555,41 @@ class SqlAlchemyAuditRepository:
                     )
                 )
             ).all()
-            return [_to_audit_request(row) for row in rows]
+            missing = [
+                (row.request_id, row.created_at) for row in rows if row.request_messages is None
+            ]
+            messages = await _load_message_map(db, missing)
+            return [
+                _to_audit_request(
+                    row,
+                    messages.get((row.request_id, row.created_at))
+                    if row.request_messages is None
+                    else None,
+                )
+                for row in rows
+            ]
 
     async def list_session_request_summaries(
         self, *, session_id: UUID
     ) -> list[AuditRequestSummary]:
-        message_count = func.jsonb_array_length(AuditRequestRow.request_messages).label(
-            "request_message_count"
+        ref_count = (
+            select(func.count())
+            .select_from(AuditRequestMessageRow)
+            .where(
+                AuditRequestMessageRow.request_id == AuditRequestRow.request_id,
+                AuditRequestMessageRow.created_at == AuditRequestRow.created_at,
+            )
+            .scalar_subquery()
         )
+        # ``jsonb_array_length`` errors on a scalar, and the column is JSON ``null``
+        # for deduplicated rows, so dispatch on the JSON type instead of NULL-ness.
+        message_count = case(
+            (
+                func.jsonb_typeof(AuditRequestRow.request_messages) == "array",
+                func.jsonb_array_length(AuditRequestRow.request_messages),
+            ),
+            else_=ref_count,
+        ).label("request_message_count")
         async with self._session_factory() as db, db.begin():
             rows = (
                 await db.execute(
@@ -1460,7 +1644,13 @@ class SqlAlchemyAuditRepository:
                 .order_by(AuditRequestRow.created_at.desc())
                 .limit(1)
             )
-            return _to_audit_request(row) if row is not None else None
+            if row is None:
+                return None
+            messages = None
+            if row.request_messages is None:
+                loaded = await _load_message_map(db, [(row.request_id, row.created_at)])
+                messages = loaded.get((row.request_id, row.created_at), [])
+            return _to_audit_request(row, messages)
 
     async def get_diff(self, *, request_id: str) -> AuditTurnDiffRecord | None:
         async with self._session_factory() as db, db.begin():
@@ -1491,7 +1681,143 @@ class SqlAlchemyAuditRepository:
                     tuple_(AuditRequestRow.request_id, AuditRequestRow.created_at).in_(victims)
                 )
             )
-            return _deleted_rows(result)
+            deleted = _deleted_rows(result)
+            unreferenced = (
+                select(AuditMessageBlobRow.id)
+                .where(
+                    AuditMessageBlobRow.tenant_id == tenant_id,
+                    ~select(AuditRequestMessageRow.blob_id)
+                    .where(AuditRequestMessageRow.blob_id == AuditMessageBlobRow.id)
+                    .exists(),
+                )
+                .limit(batch_size)
+            )
+            await db.execute(
+                delete(AuditMessageBlobRow).where(AuditMessageBlobRow.id.in_(unreferenced))
+            )
+            return deleted
+
+    async def backfill_inline_messages(
+        self,
+        *,
+        tenant_id: UUID | None,
+        batch_size: int,
+        include_truncated: bool = False,
+    ) -> int:
+        """Move one batch of inline snapshots into the deduplicated store.
+
+        Hashes are recomputed from the stored body rather than reused from
+        ``message_hashes``: a legacy row may have been truncated in place, and
+        trusting the original hash would make a later full request reuse the
+        truncated body.
+
+        Rows marked ``truncated`` are skipped by default. Their messages were
+        shrunk per request, so the same logical message has a different body in
+        each turn and cannot deduplicate; converting them only adds references.
+        Returns the number of requests converted.
+        """
+
+        _validate_page(limit=batch_size, offset=0)
+        filters: list[ColumnElement[bool]] = [AuditRequestRow.request_messages.is_not(None)]
+        if not include_truncated:
+            filters.append(AuditRequestRow.truncated.is_(False))
+        if tenant_id is not None:
+            filters.append(AuditRequestRow.tenant_id == tenant_id)
+        async with self._session_factory() as db, db.begin():
+            rows = (
+                await db.scalars(
+                    select(AuditRequestRow)
+                    .where(*filters)
+                    .order_by(AuditRequestRow.created_at.asc(), AuditRequestRow.request_id.asc())
+                    .limit(batch_size)
+                    .with_for_update(skip_locked=True)
+                )
+            ).all()
+            if not rows:
+                return 0
+
+            pending: list[tuple[AuditRequestRow, list[str]]] = []
+            blobs: dict[tuple[UUID, str], dict[str, Any]] = {}
+            for row in rows:
+                messages = list(row.request_messages or [])
+                hashes = [message_hash(message) for message in messages]
+                pending.append((row, hashes))
+                for content_hash, message in zip(hashes, messages, strict=True):
+                    key = (row.tenant_id, content_hash)
+                    if key in blobs:
+                        continue
+                    size = _audit_message_bytes(message)
+                    blobs[key] = {
+                        "tenant_id": row.tenant_id,
+                        "content_hash": content_hash,
+                        "content": message,
+                        "truncated": bool(message.get("truncated")),
+                        "original_bytes": size,
+                        "stored_bytes": size,
+                        "created_at": row.created_at,
+                    }
+
+            blob_ids: dict[tuple[UUID, str], int] = {}
+            if blobs:
+                for chunk in _message_row_chunks(list(blobs.values()), params_per_row=7):
+                    await db.execute(
+                        pg_insert(AuditMessageBlobRow)
+                        .values(chunk)
+                        .on_conflict_do_nothing(
+                            index_elements=[
+                                AuditMessageBlobRow.tenant_id,
+                                AuditMessageBlobRow.content_hash,
+                            ]
+                        )
+                    )
+                found = (
+                    await db.execute(
+                        select(
+                            AuditMessageBlobRow.tenant_id,
+                            AuditMessageBlobRow.content_hash,
+                            AuditMessageBlobRow.id,
+                        ).where(
+                            AuditMessageBlobRow.tenant_id.in_(
+                                {row.tenant_id for row, _ in pending}
+                            ),
+                            AuditMessageBlobRow.content_hash.in_(
+                                {content_hash for _, hashes in pending for content_hash in hashes}
+                            ),
+                        )
+                    )
+                ).all()
+                blob_ids = {
+                    (tenant, content_hash): blob_id for tenant, content_hash, blob_id in found
+                }
+
+            keys = [(row.request_id, row.created_at) for row, _ in pending]
+            await db.execute(
+                delete(AuditRequestMessageRow).where(
+                    tuple_(
+                        AuditRequestMessageRow.request_id,
+                        AuditRequestMessageRow.created_at,
+                    ).in_(keys)
+                )
+            )
+            references = [
+                {
+                    "request_id": row.request_id,
+                    "created_at": row.created_at,
+                    "ordinal": ordinal,
+                    "blob_id": blob_ids[(row.tenant_id, content_hash)],
+                }
+                for row, hashes in pending
+                for ordinal, content_hash in enumerate(hashes)
+            ]
+            if references:
+                for chunk in _message_row_chunks(references, params_per_row=4):
+                    await db.execute(insert(AuditRequestMessageRow).values(chunk))
+            await db.execute(
+                update(AuditRequestRow)
+                .where(tuple_(AuditRequestRow.request_id, AuditRequestRow.created_at).in_(keys))
+                .values(request_messages=None)
+            )
+            return len(rows)
 
     async def delete_orphan_sessions_before(
         self, *, tenant_id: UUID, cutoff: datetime, batch_size: int
@@ -1572,10 +1898,23 @@ class SqlAlchemyAuditRepository:
                         .limit(batch_size)
                     )
                 ).all()
-            if not rows:
-                return
-            for row in rows:
-                yield _to_audit_request(row)
+                if not rows:
+                    return
+                missing = [
+                    (row.request_id, row.created_at) for row in rows if row.request_messages is None
+                ]
+                message_map = await _load_message_map(db, missing)
+                records = [
+                    _to_audit_request(
+                        row,
+                        message_map.get((row.request_id, row.created_at))
+                        if row.request_messages is None
+                        else None,
+                    )
+                    for row in rows
+                ]
+            for record in records:
+                yield record
             cursor_created = rows[-1].created_at
             cursor_request_id = rows[-1].request_id
 

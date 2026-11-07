@@ -37,7 +37,7 @@ from llm_gateway.services.audit_diff import (
     message_preview,
     summarize_response,
     text_hash,
-    truncate_snapshot,
+    truncate_snapshot_per_message,
 )
 from llm_gateway.services.redaction import Redactor
 from llm_gateway.services.usage import extract_token_counts
@@ -341,10 +341,11 @@ class AuditService:
             tool_calls=redacted_tool_calls,
             finish_reason=finish_reason,
         )
-        snapshot = truncate_snapshot(
+        snapshot = truncate_snapshot_per_message(
             messages=turn.messages,
             response_content=redacted_content,
-            max_bytes=self.settings.audit_max_content_bytes,
+            message_max_bytes=self.settings.audit_max_message_bytes,
+            extra_max_bytes=self.settings.audit_max_content_bytes,
             extras=(turn.params, redacted_tool_calls),
         )
         stored_params = snapshot.extras[0] if len(snapshot.extras) > 0 else turn.params

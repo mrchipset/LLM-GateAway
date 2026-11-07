@@ -19,6 +19,7 @@ from sqlalchemy import (
     PrimaryKeyConstraint,
     String,
     Text,
+    UniqueConstraint,
     Uuid,
     false,
     text,
@@ -260,7 +261,11 @@ class AuditRequestRow(Base):
     model_id: Mapped[str] = mapped_column(String(200), nullable=False)
     provider: Mapped[str] = mapped_column(String(32), nullable=False)
     is_stream: Mapped[bool] = mapped_column(Boolean, nullable=False)
-    request_messages: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
+    # ``none_as_null`` keeps Python ``None`` as SQL NULL so legacy rows (inline
+    # snapshot) and deduplicated rows (references only) are distinguishable.
+    request_messages: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        JSONB(none_as_null=True), nullable=True
+    )
     message_hashes: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
     request_params: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     response_content: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -309,6 +314,71 @@ class AuditTurnDiffRow(Base):
             name="fk_audit_turn_diffs_request_id",
             ondelete="CASCADE",
         ),
+    )
+
+
+class AuditMessageBlobRow(Base):
+    """One stored message body per tenant and content hash."""
+
+    __tablename__ = "audit_message_blobs"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey(
+            "tenants.id",
+            name="fk_audit_message_blobs_tenant_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    content: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    truncated: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=false())
+    original_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    stored_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "content_hash",
+            name="uq_audit_message_blobs_tenant_hash",
+        ),
+    )
+
+
+class AuditRequestMessageRow(Base):
+    """Ordered references from one request to deduplicated message bodies."""
+
+    __tablename__ = "audit_request_messages"
+
+    request_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    blob_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey(
+            "audit_message_blobs.id",
+            name="fk_audit_request_messages_blob_id",
+        ),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        PrimaryKeyConstraint(
+            "request_id",
+            "created_at",
+            "ordinal",
+            name="pk_audit_request_messages",
+        ),
+        ForeignKeyConstraint(
+            ["request_id", "created_at"],
+            ["audit_requests.request_id", "audit_requests.created_at"],
+            name="fk_audit_request_messages_request_id",
+            ondelete="CASCADE",
+        ),
+        Index("ix_audit_request_messages_blob_id", "blob_id"),
     )
 
 

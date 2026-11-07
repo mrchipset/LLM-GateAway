@@ -69,6 +69,7 @@ class Settings(BaseSettings):
     max_retries: int = Field(default=2, ge=0, le=5)
     audit_enabled: bool = False
     audit_max_content_bytes: int = Field(default=262144, ge=1024)
+    audit_max_message_bytes: int = Field(default=262144, ge=1024)
     audit_max_response_bytes: int = Field(default=8_388_608, ge=1024)
     audit_write_timeout_seconds: float = Field(default=2.0, gt=0)
     audit_retention_days: int = Field(default=90, ge=0)

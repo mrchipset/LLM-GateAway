@@ -99,7 +99,13 @@ is bounded by `created_at`.
 - Cleanup failures are logged and counted (`gateway_audit_cleanup_failures_total`); the job exits
   non-zero so the scheduler can alert.
 - Redaction adds one regex pass per captured payload. With audit off (the default) it costs
-  nothing; with audit on it is bounded by `audit_max_content_bytes`.
+  nothing; with audit on each message is bounded by `audit_max_message_bytes` and the remaining
+  payload by `audit_max_content_bytes`.
+- Message bodies are stored once per `(tenant_id, content_hash)` and referenced per request, so a
+  long session stores each repeated history message once. Deletion drops the references, then
+  removes blobs that no request references any more; a blob shared with a live request survives.
+  `scripts/audit_backfill_messages.py` converts pre-dedupe inline snapshots in bounded, reentrant
+  batches.
 - A lookup by `request_id` alone probes every partition's index; the audit APIs always know the
   session or add a time window, and the composite primary key keeps the per-partition index small.
 - Missing months do not drop writes: they land in `DEFAULT`, which must be drained before the

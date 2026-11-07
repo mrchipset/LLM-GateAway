@@ -663,3 +663,71 @@ def truncate_snapshot(
         truncated=True,
         extras=tuple(copied_extras),
     )
+
+
+def truncate_messages(
+    *,
+    messages: Sequence[Mapping[str, object]],
+    max_bytes: int,
+    min_text_chars: int = 64,
+) -> tuple[list[dict[str, object]], bool]:
+    """Bound each message independently so identical content deduplicates.
+
+    A per-request budget would truncate the same message differently depending on
+    the other messages in that request, which makes the stored bytes unstable.
+    """
+
+    copied: list[dict[str, object]] = [copy.deepcopy(dict(message)) for message in messages]
+    truncated = False
+    for message in copied:
+        if _snapshot_size([message], None, ()) <= max_bytes:
+            continue
+        truncated = True
+        leaves = max(1, _count_message_string_leaves(message))
+        per_text = max(1, (max_bytes // 2) // leaves)
+        _shrink_messages([message], per_text)
+        if _snapshot_size([message], None, ()) > max_bytes:
+            _shrink_messages([message], min_text_chars)
+    return copied, truncated
+
+
+def truncate_snapshot_per_message(
+    *,
+    messages: Sequence[Mapping[str, object]],
+    response_content: str | None,
+    message_max_bytes: int,
+    extra_max_bytes: int,
+    min_text_chars: int = 64,
+    extras: Sequence[object] = (),
+) -> TruncatedSnapshot:
+    """Truncate messages per message, and response/extras by a shared budget."""
+
+    stored_messages, truncated = truncate_messages(
+        messages=messages,
+        max_bytes=message_max_bytes,
+        min_text_chars=min_text_chars,
+    )
+    stored_extras: list[object] = [copy.deepcopy(value) for value in extras]
+    response = response_content
+
+    if response is not None and _snapshot_size([], response, ()) > extra_max_bytes // 4:
+        response = _truncate_utf8_bytes(response, extra_max_bytes // 4)
+        truncated = True
+    if _snapshot_size([], response, stored_extras) > extra_max_bytes:
+        leaves = sum(_count_string_leaves(value) for value in stored_extras)
+        per_text = max(1, (extra_max_bytes // 2) // max(1, leaves))
+        _shrink_extras(stored_extras, per_text)
+        if _snapshot_size([], response, stored_extras) > extra_max_bytes:
+            _shrink_extras(stored_extras, min_text_chars)
+            if response is not None:
+                response = _truncate_utf8_bytes(response, min_text_chars)
+            if _snapshot_size([], response, stored_extras) > extra_max_bytes:
+                stored_extras = [_empty_extra(value) for value in stored_extras]
+                response = None
+        truncated = True
+    return TruncatedSnapshot(
+        messages=stored_messages,
+        response_content=response,
+        truncated=truncated,
+        extras=tuple(stored_extras),
+    )

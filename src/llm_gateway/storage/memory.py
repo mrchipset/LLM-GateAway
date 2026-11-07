@@ -809,6 +809,17 @@ class InMemoryAuditRepository:
             self._diffs.pop(request.request_id, None)
         return len(victims)
 
+    async def backfill_inline_messages(
+        self,
+        *,
+        tenant_id: UUID | None,
+        batch_size: int,
+        include_truncated: bool = False,
+    ) -> int:
+        # The in-memory store keeps whole records in one object, so it never has
+        # an inline snapshot to migrate.
+        return 0
+
     async def delete_orphan_sessions_before(
         self, *, tenant_id: UUID, cutoff: datetime, batch_size: int
     ) -> int:

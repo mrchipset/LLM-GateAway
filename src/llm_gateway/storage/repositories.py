@@ -926,6 +926,21 @@ class AuditRepository(Protocol):
         """Delete up to ``batch_size`` requests older than ``cutoff``; diffs cascade."""
         ...
 
+    async def backfill_inline_messages(
+        self,
+        *,
+        tenant_id: UUID | None,
+        batch_size: int,
+        include_truncated: bool = False,
+    ) -> int:
+        """Convert up to ``batch_size`` inline snapshots into references.
+
+        Returns the number of requests converted; callers loop until it returns
+        zero. Idempotent: rows already converted have no inline snapshot left.
+        Truncated legacy rows are skipped unless ``include_truncated`` is set.
+        """
+        ...
+
     async def delete_orphan_sessions_before(
         self, *, tenant_id: UUID, cutoff: datetime, batch_size: int
     ) -> int:

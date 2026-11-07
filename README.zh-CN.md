@@ -312,7 +312,9 @@ Invoke-RestMethod -Method Patch `
 | `GATEWAY_CONNECT_TIMEOUT_SECONDS` | 连接超时，默认 10 |
 | `GATEWAY_MAX_RETRIES` | 首个字节前的最大重试次数，默认 2（上限 5） |
 | `GATEWAY_AUDIT_ENABLED` | 请求审计全局开关，默认 `false` |
-| `GATEWAY_AUDIT_MAX_CONTENT_BYTES` | 单请求/响应的审计内容预算，默认 262144 |
+| `GATEWAY_AUDIT_MAX_CONTENT_BYTES` | 单请求 params、响应与 tool calls 的审计内容预算，默认 262144 |
+| `GATEWAY_AUDIT_MAX_MESSAGE_BYTES` | 单条消息的审计捕获上限；按消息独立截断以便去重，默认 262144 |
+| `GATEWAY_AUDIT_MAX_RESPONSE_BYTES` | 审计读接口单次响应预算，与捕获预算独立，默认 8388608 |
 | `GATEWAY_AUDIT_WRITE_TIMEOUT_SECONDS` | 审计写入超时；失败不影响推理，默认 2 |
 
 `production` 会强制要求 `postgres` 后端、禁用 fake provider，并拒绝占位或过短的 master key，避免误用示例配置上线。

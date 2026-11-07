@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import os
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
@@ -204,6 +206,49 @@ def _audit_request(
         truncated=False,
         created_at=created_at if created_at is not None else BASE + timedelta(seconds=index),
     )
+
+
+def _audit_messages(tag: str, *, count: int) -> tuple[list[dict[str, Any]], list[str]]:
+    messages: list[dict[str, Any]] = [
+        {"role": "user" if index % 2 == 0 else "assistant", "content": f"{tag}-{index}"}
+        for index in range(count)
+    ]
+    return messages, [_hash(f"{tag}-{index}") for index in range(count)]
+
+
+async def _audit_storage_counts(database: Database, *, tenant_id: UUID) -> tuple[int, int, int]:
+    """Return (blobs, references, rows still storing inline messages) for a tenant."""
+
+    engine = create_async_engine(_test_url())
+    try:
+        async with engine.connect() as connection:
+            blobs = await connection.scalar(
+                text(
+                    "SELECT count(*) FROM audit_message_blobs "
+                    "WHERE tenant_id = CAST(:tenant_id AS uuid)"
+                ),
+                {"tenant_id": str(tenant_id)},
+            )
+            refs = await connection.scalar(
+                text(
+                    "SELECT count(*) FROM audit_request_messages AS m "
+                    "JOIN audit_requests AS r "
+                    "ON r.request_id = m.request_id AND r.created_at = m.created_at "
+                    "WHERE r.tenant_id = CAST(:tenant_id AS uuid)"
+                ),
+                {"tenant_id": str(tenant_id)},
+            )
+            inline = await connection.scalar(
+                text(
+                    "SELECT count(*) FROM audit_requests "
+                    "WHERE tenant_id = CAST(:tenant_id AS uuid) "
+                    "AND jsonb_typeof(request_messages) = 'array'"
+                ),
+                {"tenant_id": str(tenant_id)},
+            )
+    finally:
+        await engine.dispose()
+    return int(blobs or 0), int(refs or 0), int(inline or 0)
 
 
 def _audit_diff(
@@ -1647,6 +1692,324 @@ async def test_audit_list_session_requests_and_latest_request(database: Database
             created_at=second.created_at,
         )
     ]
+
+
+async def test_audit_record_turn_stores_repeated_messages_once(database: Database) -> None:
+    tenant = await database.tenants.create_tenant(_tenant(1))
+    key = _key(1, tenant_id=tenant.id)
+    await database.api_keys.create_key(key)
+    session = _audit_session(0, tenant_id=tenant.id, api_key_id=key.id)
+    shared_messages, shared_hashes = _audit_messages("shared", count=3)
+    fresh_messages, fresh_hashes = _audit_messages("fresh", count=2)
+    first = replace(
+        _audit_request(
+            0,
+            session_id=session.id,
+            tenant_id=tenant.id,
+            api_key_id=key.id,
+            turn_index=0,
+        ),
+        request_messages=shared_messages,
+        message_hashes=shared_hashes,
+    )
+    second = replace(
+        _audit_request(
+            1,
+            session_id=session.id,
+            tenant_id=tenant.id,
+            api_key_id=key.id,
+            turn_index=1,
+            created_at=BASE + timedelta(seconds=5),
+        ),
+        request_messages=[*shared_messages, *fresh_messages],
+        message_hashes=[*shared_hashes, *fresh_hashes],
+    )
+    await database.audit.record_turn(session=session, request=first, diff=None)
+    await database.audit.record_turn(session=session, request=second, diff=None)
+
+    blobs, refs, inline = await _audit_storage_counts(database, tenant_id=tenant.id)
+    assert blobs == 5
+    assert refs == 8
+    assert inline == 0
+
+    assert await database.audit.get_request(request_id=first.request_id) == first
+    assert await database.audit.get_request(request_id=second.request_id) == second
+
+
+async def test_audit_record_turn_splits_large_reference_batches(
+    database: Database,
+) -> None:
+    tenant = await database.tenants.create_tenant(_tenant(1))
+    key = _key(1, tenant_id=tenant.id)
+    await database.api_keys.create_key(key)
+    session = _audit_session(0, tenant_id=tenant.id, api_key_id=key.id)
+    messages = [{"role": "user", "content": f"bulk-{index % 2}"} for index in range(7600)]
+    hashes = [_hash(f"bulk-{index % 2}") for index in range(len(messages))]
+    request = replace(
+        _audit_request(
+            0,
+            session_id=session.id,
+            tenant_id=tenant.id,
+            api_key_id=key.id,
+            turn_index=0,
+        ),
+        request_messages=messages,
+        message_hashes=hashes,
+    )
+    await database.audit.record_turn(session=session, request=request, diff=None)
+
+    blobs, refs, _ = await _audit_storage_counts(database, tenant_id=tenant.id)
+    assert (blobs, refs) == (2, 7600)
+    assert await database.audit.get_request(request_id=request.request_id) == request
+
+
+async def test_audit_reads_reconstruct_messages_from_references(database: Database) -> None:
+    tenant = await database.tenants.create_tenant(_tenant(1))
+    key = _key(1, tenant_id=tenant.id)
+    await database.api_keys.create_key(key)
+    session = _audit_session(0, tenant_id=tenant.id, api_key_id=key.id)
+    shared_messages, shared_hashes = _audit_messages("shared", count=2)
+    extra_messages, extra_hashes = _audit_messages("extra", count=1)
+    first = replace(
+        _audit_request(
+            0,
+            session_id=session.id,
+            tenant_id=tenant.id,
+            api_key_id=key.id,
+            turn_index=0,
+        ),
+        request_messages=shared_messages,
+        message_hashes=shared_hashes,
+    )
+    second = replace(
+        _audit_request(
+            1,
+            session_id=session.id,
+            tenant_id=tenant.id,
+            api_key_id=key.id,
+            turn_index=1,
+            created_at=BASE + timedelta(seconds=5),
+        ),
+        request_messages=[*shared_messages, *extra_messages],
+        message_hashes=[*shared_hashes, *extra_hashes],
+    )
+    await database.audit.record_turn(session=session, request=first, diff=None)
+    await database.audit.record_turn(session=session, request=second, diff=None)
+
+    assert await database.audit.list_session_requests(session_id=session.id) == [first, second]
+    assert await database.audit.get_latest_request(session_id=session.id) == second
+
+    summaries = await database.audit.list_session_request_summaries(session_id=session.id)
+    assert [(item.request_id, item.request_message_count) for item in summaries] == [
+        (first.request_id, 2),
+        (second.request_id, 3),
+    ]
+
+    exported = [
+        record
+        async for record in database.audit.iter_requests_for_export(
+            tenant_id=tenant.id,
+            since=BASE - timedelta(days=1),
+            until=BASE + timedelta(days=1),
+            batch_size=10,
+        )
+    ]
+    assert exported == [first, second]
+
+
+async def test_audit_reads_legacy_inline_messages_when_references_are_absent(
+    database: Database,
+) -> None:
+    tenant = await database.tenants.create_tenant(_tenant(1))
+    key = _key(1, tenant_id=tenant.id)
+    await database.api_keys.create_key(key)
+    session = _audit_session(0, tenant_id=tenant.id, api_key_id=key.id)
+    request = _audit_request(
+        0,
+        session_id=session.id,
+        tenant_id=tenant.id,
+        api_key_id=key.id,
+        turn_index=0,
+    )
+    await database.audit.record_turn(session=session, request=request, diff=None)
+    legacy_messages = [{"role": "user", "content": "legacy"}]
+
+    engine = create_async_engine(_test_url())
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(
+                text(
+                    "UPDATE audit_requests SET request_messages = :messages "
+                    "WHERE request_id = :request_id"
+                ),
+                {"messages": json.dumps(legacy_messages), "request_id": request.request_id},
+            )
+            await connection.execute(
+                text("DELETE FROM audit_request_messages WHERE request_id = :request_id"),
+                {"request_id": request.request_id},
+            )
+    finally:
+        await engine.dispose()
+
+    stored = await database.audit.get_request(request_id=request.request_id)
+    assert stored is not None
+    assert stored.request_messages == legacy_messages
+
+
+async def test_audit_backfill_moves_inline_snapshots_into_references(
+    database: Database,
+) -> None:
+    tenant = await database.tenants.create_tenant(_tenant(1))
+    key = _key(1, tenant_id=tenant.id)
+    await database.api_keys.create_key(key)
+    session = _audit_session(0, tenant_id=tenant.id, api_key_id=key.id)
+    messages, hashes = _audit_messages("legacy", count=2)
+    request = replace(
+        _audit_request(
+            0,
+            session_id=session.id,
+            tenant_id=tenant.id,
+            api_key_id=key.id,
+            turn_index=0,
+        ),
+        request_messages=messages,
+        message_hashes=hashes,
+    )
+    await database.audit.record_turn(session=session, request=request, diff=None)
+
+    engine = create_async_engine(_test_url())
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(
+                text(
+                    "UPDATE audit_requests SET request_messages = :messages "
+                    "WHERE request_id = :request_id"
+                ),
+                {"messages": json.dumps(messages), "request_id": request.request_id},
+            )
+            await connection.execute(
+                text("DELETE FROM audit_request_messages WHERE request_id = :request_id"),
+                {"request_id": request.request_id},
+            )
+            await connection.execute(
+                text(
+                    "DELETE FROM audit_message_blobs WHERE tenant_id = CAST(:tenant_id AS uuid) "
+                    "AND id NOT IN (SELECT blob_id FROM audit_request_messages)"
+                ),
+                {"tenant_id": str(tenant.id)},
+            )
+    finally:
+        await engine.dispose()
+    assert await _audit_storage_counts(database, tenant_id=tenant.id) == (0, 0, 1)
+
+    assert await database.audit.backfill_inline_messages(tenant_id=tenant.id, batch_size=10) == 1
+    assert await _audit_storage_counts(database, tenant_id=tenant.id) == (2, 2, 0)
+    assert await database.audit.get_request(request_id=request.request_id) == request
+    assert await database.audit.backfill_inline_messages(tenant_id=tenant.id, batch_size=10) == 0
+
+
+async def test_audit_backfill_skips_per_request_truncated_rows(
+    database: Database,
+) -> None:
+    tenant = await database.tenants.create_tenant(_tenant(1))
+    key = _key(1, tenant_id=tenant.id)
+    await database.api_keys.create_key(key)
+    session = _audit_session(0, tenant_id=tenant.id, api_key_id=key.id)
+    messages, hashes = _audit_messages("truncated", count=2)
+    request = replace(
+        _audit_request(
+            0,
+            session_id=session.id,
+            tenant_id=tenant.id,
+            api_key_id=key.id,
+            turn_index=0,
+        ),
+        request_messages=messages,
+        message_hashes=hashes,
+        truncated=True,
+    )
+    await database.audit.record_turn(session=session, request=request, diff=None)
+
+    engine = create_async_engine(_test_url())
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(
+                text(
+                    "UPDATE audit_requests SET request_messages = :messages "
+                    "WHERE request_id = :request_id"
+                ),
+                {"messages": json.dumps(messages), "request_id": request.request_id},
+            )
+            await connection.execute(
+                text("DELETE FROM audit_request_messages WHERE request_id = :request_id"),
+                {"request_id": request.request_id},
+            )
+            await connection.execute(
+                text(
+                    "DELETE FROM audit_message_blobs WHERE tenant_id = CAST(:tenant_id AS uuid) "
+                    "AND id NOT IN (SELECT blob_id FROM audit_request_messages)"
+                ),
+                {"tenant_id": str(tenant.id)},
+            )
+    finally:
+        await engine.dispose()
+
+    assert await database.audit.backfill_inline_messages(tenant_id=tenant.id, batch_size=10) == 0
+    assert await _audit_storage_counts(database, tenant_id=tenant.id) == (0, 0, 1)
+    assert (
+        await database.audit.backfill_inline_messages(
+            tenant_id=tenant.id, batch_size=10, include_truncated=True
+        )
+        == 1
+    )
+    assert await _audit_storage_counts(database, tenant_id=tenant.id) == (2, 2, 0)
+
+
+async def test_audit_delete_requests_before_collects_unreferenced_blobs(
+    database: Database,
+) -> None:
+    tenant = await database.tenants.create_tenant(_tenant(1))
+    key = _key(1, tenant_id=tenant.id)
+    await database.api_keys.create_key(key)
+    session = _audit_session(0, tenant_id=tenant.id, api_key_id=key.id, request_count=2)
+    shared_messages, shared_hashes = _audit_messages("shared", count=1)
+    old_only_messages, old_only_hashes = _audit_messages("old-only", count=1)
+    fresh_only_messages, fresh_only_hashes = _audit_messages("fresh-only", count=1)
+    old = replace(
+        _audit_request(
+            0,
+            session_id=session.id,
+            tenant_id=tenant.id,
+            api_key_id=key.id,
+            turn_index=0,
+        ),
+        request_messages=[*shared_messages, *old_only_messages],
+        message_hashes=[*shared_hashes, *old_only_hashes],
+    )
+    fresh = replace(
+        _audit_request(
+            1,
+            session_id=session.id,
+            tenant_id=tenant.id,
+            api_key_id=key.id,
+            turn_index=1,
+            created_at=BASE + timedelta(days=5),
+        ),
+        request_messages=[*shared_messages, *fresh_only_messages],
+        message_hashes=[*shared_hashes, *fresh_only_hashes],
+    )
+    await database.audit.record_turn(session=session, request=old, diff=None)
+    await database.audit.record_turn(session=session, request=fresh, diff=None)
+
+    deleted = await database.audit.delete_requests_before(
+        tenant_id=tenant.id, cutoff=BASE + timedelta(days=1), batch_size=10
+    )
+    assert deleted == 1
+
+    blobs, refs, _ = await _audit_storage_counts(database, tenant_id=tenant.id)
+    assert (blobs, refs) == (2, 2)
+    assert await database.audit.get_request(request_id=old.request_id) is None
+    assert await database.audit.get_request(request_id=fresh.request_id) == fresh
 
 
 async def test_audit_get_diffs_round_trips_and_unknown_returns_none(

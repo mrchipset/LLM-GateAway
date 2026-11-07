@@ -43,6 +43,7 @@ def _settings(
     *,
     audit_enabled: bool = True,
     audit_max_content_bytes: int = 262144,
+    audit_max_message_bytes: int = 262144,
 ) -> Settings:
     return Settings(
         **{
@@ -51,6 +52,7 @@ def _settings(
             "master_key": MASTER_KEY,
             "audit_enabled": audit_enabled,
             "audit_max_content_bytes": audit_max_content_bytes,
+            "audit_max_message_bytes": audit_max_message_bytes,
         }
     )
 
@@ -421,7 +423,7 @@ async def test_truncation_bounds_stored_snapshot_and_marks_it() -> None:
     tenant = await _tenant(tenants)
     capture = CapturingAuditRepository()
     service = _service(
-        _settings(audit_max_content_bytes=1024),
+        _settings(audit_max_content_bytes=1024, audit_max_message_bytes=1024),
         repository=capture,
         tenants=tenants,
     )
@@ -439,7 +441,9 @@ async def test_truncation_bounds_stored_snapshot_and_marks_it() -> None:
 
     stored = capture.requests[0]
     assert stored.truncated is True
-    assert _snapshot_bytes(stored.request_messages, stored.response_content) <= 1024
+    assert len(stored.request_messages[0]["content"].encode("utf-8")) <= 1024
+    assert stored.response_content is not None
+    assert len(stored.response_content.encode("utf-8")) <= 256
     assert stored.response_content_hash is not None
 
 
@@ -575,7 +579,7 @@ async def test_finish_truncates_params_and_tool_calls_but_diffs_original_values(
     tenant = await _tenant(tenants)
     capture = CapturingAuditRepository()
     service = _service(
-        _settings(audit_max_content_bytes=1024),
+        _settings(audit_max_content_bytes=1024, audit_max_message_bytes=1024),
         repository=capture,
         tenants=tenants,
     )
