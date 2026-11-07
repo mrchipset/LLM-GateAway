@@ -90,10 +90,13 @@ content before truncation so matching stays stable; `truncated=true` is stored w
 anything was shortened.
 
 The read API measures the actual serialized response in both content modes. This matters
-because previews and hashes still consume bytes. `include_content=false` returns metadata
-plus diff previews (explicitly allowed by TODO and useful) but no full snapshots, and all
-parameter changes are hashed. The UI copy says "preview excerpts", not "no content". A
-session over budget returns 413 and the UI falls back to per-request detail.
+because previews and hashes still consume bytes. The read budget is
+`GATEWAY_AUDIT_MAX_RESPONSE_BYTES` (default 8 MiB) and is deliberately separate from the
+capture budget: a long session can have megabytes of previews without justifying 8 MiB of
+new capture per request. `include_content=false` returns metadata plus diff previews
+(explicitly allowed by TODO and useful) but no full snapshots, and all parameter changes are
+hashed. The UI copy says "preview excerpts", not "no content". A session over the read budget
+returns 413 and the UI falls back to per-request detail.
 
 Rejected: stripping previews entirely from the default view. It would make the default
 timeline useless and contradict TODO's "short preview" allowance while providing no real

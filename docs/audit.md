@@ -16,7 +16,8 @@
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `GATEWAY_AUDIT_ENABLED` | `false` | 全局开关 |
-| `GATEWAY_AUDIT_MAX_CONTENT_BYTES` | `262144` | 单请求/单次响应的内容字节预算 |
+| `GATEWAY_AUDIT_MAX_CONTENT_BYTES` | `262144` | 单请求捕获内容的字节预算（截断点） |
+| `GATEWAY_AUDIT_MAX_RESPONSE_BYTES` | `8388608` | 审计读接口单次响应的字节预算；与捕获预算独立 |
 | `GATEWAY_AUDIT_WRITE_TIMEOUT_SECONDS` | `2.0` | 审计写入超时，超时不影响推理 |
 
 修改后需要重启后端；租户开关可通过 API/管理台即时生效。
@@ -60,6 +61,8 @@ diff 保存公共前缀长度、新增/修改/删除消息的索引、role、has
 ### 截断
 
 messages、响应、参数与 tool calls 共享 `GATEWAY_AUDIT_MAX_CONTENT_BYTES` 预算。超限时按 UTF-8 安全截断，`truncated=true`；消息哈希与 diff 始终基于截断前原文，匹配与变更判定不受影响。
+
+读接口用独立的 `GATEWAY_AUDIT_MAX_RESPONSE_BYTES` 限制单次响应（会话详情或单请求详情）。它默认 8 MiB，因为长会话的 diff 预览与参数 hash 即使不带正文也可能达到数 MB；捕获预算仍保持 256 KiB，避免为了查看历史而放大新写入的存储。超过读预算返回 413 `audit_content_too_large`。
 
 ## 管理 API
 
@@ -157,7 +160,7 @@ Audit 标签与 Models/Usage/Access 同级：
 - Sessions 列表：租户、key 前缀（key 名称用于筛选下拉）、模型、请求数、最后活动、标题预览、token；支持租户/key/模型/时间/搜索与分页。
 - 会话详情：轮次时间线，显示 change_type、状态、新增/修改/删除消息数、参数变化、usage 差值、响应变化；可展开内容。
 - “Show full content” 开关按需请求正文；关闭时仍显示 diff 预览片段与参数 hash。
-- 413 时提示响应过大：内容模式可先隐藏全文、改用每轮“Open request”逐条读取；未开启内容时若仍 413，说明该会话本身超出响应预算，本版本不提供分段渲染，可凭 request id 调用 `/api/v1/audit/requests/{request_id}`，或在网关侧调大 `GATEWAY_AUDIT_MAX_CONTENT_BYTES`（需重启）。
+- 413 时提示响应过大：内容模式可先隐藏全文、改用每轮“Open request”逐条读取；未开启内容时若仍 413，说明该会话本身超出读响应预算，本版本不提供分段渲染，可凭 request id 调用 `/api/v1/audit/requests/{request_id}`，或在网关侧调大 `GATEWAY_AUDIT_MAX_RESPONSE_BYTES`（需重启，默认 8 MiB）。
 - 审计内容不写入 localStorage/sessionStorage/cookie/URL；断开连接会清空审计查询缓存。
 
 ## 隐私与保留（必读）

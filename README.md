@@ -572,7 +572,8 @@ GATEWAY_OIDC_JIT_PROVISIONING=true
 | `GATEWAY_WORKERS` | uvicorn worker processes in the container, default 1; keep at 1 until shared rate limiting lands |
 | `GATEWAY_MAX_RETRIES` | Max retries before the first byte, default 2 (cap 5) |
 | `GATEWAY_AUDIT_ENABLED` | Global request-audit kill switch, default `false` |
-| `GATEWAY_AUDIT_MAX_CONTENT_BYTES` | Per-request/response audit content budget, default 262144 |
+| `GATEWAY_AUDIT_MAX_CONTENT_BYTES` | Per-request audit capture budget; longer content is truncated, default 262144 |
+| `GATEWAY_AUDIT_MAX_RESPONSE_BYTES` | Budget for one audit read response (session or request detail), default 8388608; independent of capture |
 | `GATEWAY_AUDIT_WRITE_TIMEOUT_SECONDS` | Audit write timeout; failures never affect inference, default 2 |
 | `GATEWAY_AUDIT_RETENTION_DAYS` | Global audit retention in days, default 90; `0` disables cleanup. A tenant's `audit_retention_days` overrides it, and per-tenant `0` is a legal hold |
 | `GATEWAY_AUDIT_REDACT_PATTERNS` | Optional JSON array of `{"name","pattern"}` regex rules applied to captured content before hashing; matches become `[redacted:<name>]` |

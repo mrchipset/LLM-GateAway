@@ -616,7 +616,7 @@ async def test_session_detail_content_budget_returns_413(
     make_client: Callable[..., Any],
     settings: Settings,
 ) -> None:
-    tiny = settings.model_copy(update={"audit_max_content_bytes": 1024})
+    tiny = settings.model_copy(update={"audit_max_response_bytes": 1024})
     container = make_container(tiny, clock=FrozenClock())
     tenant = await seed_tenant(container)
     key = await _key(container, tenant)
@@ -742,7 +742,7 @@ async def test_request_detail_unknown_and_content_budget(
     make_client: Callable[..., Any],
     settings: Settings,
 ) -> None:
-    tiny = settings.model_copy(update={"audit_max_content_bytes": 1024})
+    tiny = settings.model_copy(update={"audit_max_response_bytes": 1024})
     container = make_container(tiny, clock=FrozenClock())
     tenant = await seed_tenant(container)
     key = await _key(container, tenant)
@@ -879,7 +879,7 @@ async def test_session_detail_budget_applies_without_content(
     make_client: Callable[..., Any],
     settings: Settings,
 ) -> None:
-    tiny = settings.model_copy(update={"audit_max_content_bytes": 1024})
+    tiny = settings.model_copy(update={"audit_max_response_bytes": 1024})
     container = make_container(tiny, clock=FrozenClock())
     tenant = await seed_tenant(container)
     key = await _key(container, tenant)
@@ -1187,3 +1187,41 @@ async def test_audit_reads_and_exports_are_recorded(
     exported_event = next(item for item in payload if item["action"] == "audit.exported")
     assert exported_event["target_type"] == "audit_export"
     assert "format" in (exported_event["after"] or {})
+
+
+async def test_session_detail_read_budget_is_independent_of_capture_budget(
+    make_container: Callable[..., Container],
+    make_client: Callable[..., Any],
+    settings: Settings,
+) -> None:
+    split = settings.model_copy(
+        update={"audit_max_content_bytes": 1024, "audit_max_response_bytes": 1_000_000}
+    )
+    container = make_container(split, clock=FrozenClock())
+    tenant = await seed_tenant(container)
+    key = await _key(container, tenant)
+    session_id = uuid4()
+    for index in range(8):
+        await _seed_turn(
+            container,
+            tenant_id=tenant.id,
+            key=key,
+            session_id=session_id,
+            request_id=f"req-split-{index}",
+            created_at=BASE.replace(minute=index),
+            turn_index=index + 1,
+            diff=_diff(
+                f"req-split-{index}",
+                created_at=BASE.replace(minute=index),
+                added_messages=[{"index": 0, "role": "user", "hash": "h", "preview": "p" * 160}],
+            ),
+        )
+
+    async with make_client(split, container) as client:
+        response = await client.get(
+            f"/api/v1/audit/sessions/{session_id}",
+            headers=_auth(_master(split)),
+        )
+
+    assert response.status_code == 200
+    assert len(response.json()["turns"]) == 8

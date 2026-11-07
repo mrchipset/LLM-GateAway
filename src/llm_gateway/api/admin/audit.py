@@ -11,7 +11,7 @@ Bounded previews are considered safe and are the value of the diff.
 
 Content budget
 --------------
-``settings.audit_max_content_bytes`` limits the *whole* returned payload, not
+``settings.audit_max_response_bytes`` limits the *whole* returned payload, not
 just full message bodies. Both modes measure the canonical UTF-8 JSON of the
 response after it has been built: the ``turns`` array for session detail and
 ``{request, diff}`` for request detail. Over-budget responses fail with 413
@@ -261,7 +261,7 @@ def _ensure_payload_budget(container: Container, payload: object) -> None:
             separators=(",", ":"),
         ).encode("utf-8")
     )
-    if size > container.settings.audit_max_content_bytes:
+    if size > container.settings.audit_max_response_bytes:
         raise ApiError(
             status_code=413,
             code=ApiErrorCode.AUDIT_CONTENT_TOO_LARGE,
