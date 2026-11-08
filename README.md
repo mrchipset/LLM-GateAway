@@ -1,6 +1,6 @@
 # LLM-GateAway
 
-**English** | [绠€浣撲腑鏂嘳(README.zh-CN.md)
+**English** | [简体中文](README.zh-CN.md)
 
 A self-hosted, multi-provider, OpenAI-compatible LLM gateway. Current state: a runnable backend, OpenAI / DeepSeek (OpenAI-compatible) / Fake providers, tenant-scoped API keys, a model registry, PostgreSQL persistence, token usage accounting, tenant quotas and rate limiting, opt-in request/session auditing with deterministic turn diffs, and an admin console with usage, access, and audit panels.
 
@@ -469,7 +469,7 @@ Metrics are off by default. When enabled, Prometheus scrapes a dedicated port (n
 | `gateway_upstream_ttft_seconds` | histogram | `provider`, `model` |
 | `gateway_rejections` | counter | `reason` |
 | `gateway_usage_write_failures` | counter | `reason` |
-| `gateway_audit_write_failures` | counter | 鈥?|
+| `gateway_audit_write_failures` | counter | — |
 
 ```dotenv
 GATEWAY_METRICS_ENABLED=true
@@ -898,4 +898,4 @@ Repository-level skill: [`.opencode/skills/llm-gateway/SKILL.md`](.opencode/skil
 
 ## License
 
-MIT 鈥?see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE).
