@@ -1,8 +1,14 @@
 FROM node:22-alpine AS builder
 WORKDIR /app
 
+# npm registry for installs. The lockfile already pins registry.npmmirror.com
+# tarball URLs; this keeps ad-hoc installs consistent and lets CI override the
+# source without editing the Dockerfile.
+ARG NPM_CONFIG_REGISTRY=https://registry.npmjs.org
+ENV NPM_CONFIG_REGISTRY=${NPM_CONFIG_REGISTRY}
+
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm npm ci
 
 COPY . .
 RUN npm run build
