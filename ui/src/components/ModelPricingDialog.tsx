@@ -139,6 +139,7 @@ export function ModelPricingDialog({ model, returnFocusRef, onClose }: ModelPric
       closeDisabled={pending}
       initialFocusRef={inputRef}
       returnFocusRef={returnFocusRef}
+      panelClassName="max-w-2xl"
     >
       <div className="flex items-start justify-between gap-3 border-b border-line px-5 py-3.5">
         <div>
@@ -244,7 +245,7 @@ export function ModelPricingDialog({ model, returnFocusRef, onClose }: ModelPric
           </p>
 
           <div className="mt-2 grid gap-3 sm:grid-cols-3">
-            <div>
+            <div className="min-w-0">
               <label htmlFor={inputId} className="block text-[12px] font-medium text-ink">
                 Input per million tokens
               </label>
@@ -274,7 +275,7 @@ export function ModelPricingDialog({ model, returnFocusRef, onClose }: ModelPric
               )}
             </div>
 
-            <div>
+            <div className="min-w-0">
               <label htmlFor={cachedId} className="block text-[12px] font-medium text-ink">
                 Cached input per million tokens
               </label>
@@ -306,7 +307,7 @@ export function ModelPricingDialog({ model, returnFocusRef, onClose }: ModelPric
               )}
             </div>
 
-            <div>
+            <div className="min-w-0">
               <label htmlFor={outputId} className="block text-[12px] font-medium text-ink">
                 Output per million tokens
               </label>
