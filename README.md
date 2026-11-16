@@ -893,6 +893,7 @@ design.md            LLM-GateAway design guidance
 - [`docs/docker.md`](docs/docker.md): Docker Compose deployment, configuration, upgrades, and backups
 - [`docs/runbook-backup.md`](docs/runbook-backup.md): backup, restore drill, integrity checks, and recovery steps
 - [`docs/status.md`](docs/status.md): delivery status, acceptance evidence, explicit gaps, and the production checklist
+- [`docs/adr/`](docs/adr/): architecture decision records for irreversible or expensive choices
 - [`TODO.md`](TODO.md): roadmap, enterprise readiness items (G0/G1/G2), and their acceptance criteria
 
 ## Agent skill
