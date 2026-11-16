@@ -41,6 +41,22 @@ export interface ModelListResponse {
   offset: number;
 }
 
+export interface ThroughputStats {
+  provider: string;
+  model: string;
+  samples: number;
+  prefill_tokens_per_second_p50: number | null;
+  prefill_tokens_per_second_p95: number | null;
+  decode_tokens_per_second_p50: number | null;
+  decode_tokens_per_second_p95: number | null;
+  last_observed_at: string;
+}
+
+export interface ThroughputResponse {
+  window_seconds: number;
+  items: ThroughputStats[];
+}
+
 export type ModelProvider = 'openai' | 'deepseek' | 'azure' | 'anthropic' | 'fake';
 
 export interface CreateModelInput {
@@ -626,6 +642,24 @@ function isModelSummary(value: unknown): value is ModelSummary {
     isOptionalPositiveInt(value.max_output_tokens) &&
     isOptionalBoolean(value.supports_tools) &&
     isOptionalBoolean(value.supports_streaming)
+  );
+}
+
+function isNullableNumber(value: unknown): value is number | null {
+  return value === null || typeof value === 'number';
+}
+
+function isThroughputStats(value: unknown): value is ThroughputStats {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.provider === 'string' &&
+    typeof value.model === 'string' &&
+    isCount(value.samples) &&
+    isNullableNumber(value.prefill_tokens_per_second_p50) &&
+    isNullableNumber(value.prefill_tokens_per_second_p95) &&
+    isNullableNumber(value.decode_tokens_per_second_p50) &&
+    isNullableNumber(value.decode_tokens_per_second_p95) &&
+    typeof value.last_observed_at === 'string'
   );
 }
 
@@ -1601,6 +1635,26 @@ export async function listModels(signal?: AbortSignal): Promise<ModelListRespons
     limit: payload.limit,
     offset: payload.offset,
   };
+}
+
+/**
+ * Live per-model streamed throughput measured by this worker. Models with no
+ * streamed traffic in the window are absent from the response.
+ */
+export async function getThroughput(signal?: AbortSignal): Promise<ThroughputResponse> {
+  const path = '/api/v1/throughput';
+  const response = await sendAdmin(path, signal);
+  const payload = await readJson(response, path);
+  if (
+    !isRecord(payload) ||
+    !isCount(payload.window_seconds) ||
+    !Array.isArray(payload.items) ||
+    !payload.items.every(isThroughputStats)
+  ) {
+    throw unexpectedPayload(response, 'throughput');
+  }
+
+  return { window_seconds: payload.window_seconds, items: payload.items };
 }
 
 export async function listTenants(

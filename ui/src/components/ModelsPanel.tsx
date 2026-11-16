@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 
-import type { ModelSummary } from '../api/client';
+import type { ModelSummary, ThroughputStats } from '../api/client';
 import type { ModelsQuery } from '../hooks/useModels';
+import { useThroughput } from '../hooks/useThroughput';
 import {
   formatCompactNumber,
   formatCreatedAt,
@@ -30,6 +31,7 @@ type EditModelHandler = (model: ModelSummary, trigger: HTMLButtonElement) => voi
 
 export function ModelsPanel({ query }: ModelsPanelProps) {
   const { canWrite } = useAdminSession();
+  const throughputQuery = useThroughput();
   const [notice, setNotice] = useState<string | null>(null);
   const [registerOpen, setRegisterOpen] = useState(false);
   const [deletingModel, setDeletingModel] = useState<ModelSummary | null>(null);
@@ -129,6 +131,7 @@ export function ModelsPanel({ query }: ModelsPanelProps) {
         )}
         <ModelsContent
           query={query}
+          throughput={throughputQuery.data?.items ?? []}
           canWrite={canWrite}
           onRegister={openRegister}
           onDelete={handleDelete}
@@ -198,6 +201,7 @@ export function ModelsPanel({ query }: ModelsPanelProps) {
 
 interface ModelsContentProps {
   query: ModelsQuery;
+  throughput: ThroughputStats[];
   canWrite: boolean;
   onRegister: () => void;
   onDelete: DeleteModelHandler;
@@ -208,6 +212,7 @@ interface ModelsContentProps {
 
 function ModelsContent({
   query,
+  throughput,
   canWrite,
   onRegister,
   onDelete,
@@ -227,6 +232,11 @@ function ModelsContent({
     );
   }
 
+  // A throughput failure must never block the table; rows fall back to a dash.
+  const throughputByModel = new Map<string, ThroughputStats>(
+    throughput.map((item) => [item.model, item]),
+  );
+
   return (
     <>
       {query.dataUpdatedAt > 0 && (
@@ -244,6 +254,7 @@ function ModelsContent({
       ) : (
         <ModelsTable
           models={query.data.items}
+          throughputByModel={throughputByModel}
           canWrite={canWrite}
           onDelete={onDelete}
           onPricing={onPricing}
@@ -263,9 +274,9 @@ function ModelsSkeleton() {
         {[0, 1, 2, 3].map((row) => (
           <div
             key={row}
-            className="grid grid-cols-[1.5fr_0.8fr_1.3fr_0.7fr_1fr_0.4fr] gap-4 rounded border border-line/70 px-3 py-3"
+            className="grid grid-cols-[1.5fr_0.8fr_1.3fr_0.7fr_0.7fr_1fr_0.4fr] gap-4 rounded border border-line/70 px-3 py-3"
           >
-            {[0, 1, 2, 3, 4, 5].map((cell) => (
+            {[0, 1, 2, 3, 4, 5, 6].map((cell) => (
               <span
                 key={cell}
                 className="h-3.5 w-4/5 animate-pulse rounded bg-surface-sunken motion-reduce:animate-none"
@@ -296,8 +307,102 @@ function EmptyRegistry({ canWrite, onRegister }: { canWrite: boolean; onRegister
   );
 }
 
+const SPEED_HEADER_DESCRIPTION =
+  'P50 tokens per second, measured by this gateway worker for streamed requests over the last 15 minutes.';
+const NO_SPEED_DESCRIPTION = 'No streamed requests in the last 15 minutes';
+
+interface SpeedView {
+  decode: number | null;
+  prefill: number | null;
+  primary: string | null;
+  secondary: string | null;
+  description: string;
+  label: string;
+}
+
+function throughputSpeedView(stats: ThroughputStats | null): SpeedView {
+  const decode =
+    stats !== null && stats.decode_tokens_per_second_p50 !== null
+      ? Math.round(stats.decode_tokens_per_second_p50)
+      : null;
+  const prefill =
+    stats !== null && stats.prefill_tokens_per_second_p50 !== null
+      ? Math.round(stats.prefill_tokens_per_second_p50)
+      : null;
+
+  const primary = decode ?? prefill;
+  if (primary === null) {
+    return {
+      decode,
+      prefill,
+      primary: null,
+      secondary: null,
+      description: NO_SPEED_DESCRIPTION,
+      label: NO_SPEED_DESCRIPTION,
+    };
+  }
+
+  const exactParts: string[] = [];
+  if (decode !== null) exactParts.push(`decode ${formatExactNumber(decode)} tok/s`);
+  if (prefill !== null) exactParts.push(`prefill ${formatExactNumber(prefill)} tok/s`);
+  const description = `Effective upstream throughput: ${exactParts.join(', ')} (P50, last 15 minutes, streamed requests only, measured by this worker).`;
+
+  // Decode speed is the headline number; prompt processing is the fallback.
+  const secondary =
+    decode !== null && prefill !== null ? `prefill ${formatExactNumber(prefill)}` : null;
+
+  return {
+    decode,
+    prefill,
+    primary: `${formatExactNumber(primary)} tok/s`,
+    secondary,
+    description,
+    label: description,
+  };
+}
+
+function SpeedCell({ stats }: { stats: ThroughputStats | null }) {
+  const view = throughputSpeedView(stats);
+  if (view.primary === null) {
+    return (
+      <td
+        className="py-2.5 pr-3 align-top font-mono text-[11px] tabular-nums text-ink-muted"
+        title={view.description}
+        aria-label={view.label}
+      >
+        —
+      </td>
+    );
+  }
+
+  return (
+    <td
+      className="py-2.5 pr-3 align-top font-mono text-[11.5px] tabular-nums"
+      title={view.description}
+      aria-label={view.label}
+    >
+      <span className="block">{view.primary}</span>
+      {view.secondary !== null && (
+        <span className="mt-0.5 block text-[11px] text-ink-muted">{view.secondary}</span>
+      )}
+    </td>
+  );
+}
+
+function modelSpeedSummary(stats: ThroughputStats | null): { summary: string; exact: string } {
+  const view = throughputSpeedView(stats);
+  if (view.primary === null) {
+    return { summary: '—', exact: view.description };
+  }
+  const parts: string[] = [];
+  if (view.decode !== null) parts.push(`${formatExactNumber(view.decode)} dec`);
+  if (view.prefill !== null) parts.push(`${formatExactNumber(view.prefill)} pre`);
+  return { summary: `${parts.join(' · ')} tok/s`, exact: view.description };
+}
+
 function ModelsTable({
   models,
+  throughputByModel,
   canWrite,
   onDelete,
   onPricing,
@@ -305,40 +410,56 @@ function ModelsTable({
   onEdit,
 }: {
   models: ModelSummary[];
+  throughputByModel: Map<string, ThroughputStats>;
   canWrite: boolean;
   onDelete: DeleteModelHandler;
   onPricing: PriceModelHandler;
   onDeployments: DeploymentsHandler;
   onEdit: EditModelHandler;
 }) {
+  const columns: { label: string; description?: string }[] = [
+    { label: 'Model' },
+    { label: 'Provider' },
+    { label: 'Upstream model' },
+    { label: 'Status' },
+    { label: 'Speed', description: SPEED_HEADER_DESCRIPTION },
+    { label: 'Created (UTC)' },
+  ];
+  if (canWrite) columns.push({ label: 'Actions' });
+
   return (
     <>
       <div className="hidden md:block">
         <table className="w-full table-fixed border-collapse text-left text-[13px]">
           <caption className="sr-only">Registered models</caption>
           <colgroup>
-            <col className={canWrite ? 'w-[20%]' : 'w-[24%]'} />
-            <col className={canWrite ? 'w-[8%]' : 'w-[9%]'} />
-            <col className={canWrite ? 'w-[23%]' : 'w-[30%]'} />
-            <col className={canWrite ? 'w-[11%]' : 'w-[12%]'} />
-            <col className={canWrite ? 'w-[16%]' : 'w-[25%]'} />
-            {canWrite && <col className="w-[22%]" />}
+            <col className={canWrite ? 'w-[18%]' : 'w-[22%]'} />
+            <col className={canWrite ? 'w-[7%]' : 'w-[8%]'} />
+            <col className={canWrite ? 'w-[20%]' : 'w-[26%]'} />
+            <col className={canWrite ? 'w-[10%]' : 'w-[11%]'} />
+            <col className={canWrite ? 'w-[14%]' : 'w-[15%]'} />
+            <col className={canWrite ? 'w-[14%]' : 'w-[18%]'} />
+            {canWrite && <col className="w-[17%]" />}
           </colgroup>
           <thead>
             <tr className="border-b border-line">
-              {['Model', 'Provider', 'Upstream model', 'Status', 'Created (UTC)']
-                .concat(canWrite ? ['Actions'] : [])
-                .map((label, index, labels) => (
-                  <th
-                    key={label}
-                    scope="col"
-                    className={`py-2 pr-3 font-mono text-[10px] font-medium uppercase tracking-[0.12em] text-ink-muted last:pr-0 ${
-                      index === labels.length - 1 && canWrite ? 'text-right' : 'text-left'
-                    }`}
-                  >
-                    {label}
-                  </th>
-                ))}
+              {columns.map((column, index) => (
+                <th
+                  key={column.label}
+                  scope="col"
+                  className={`py-2 pr-3 font-mono text-[10px] font-medium uppercase tracking-[0.12em] text-ink-muted last:pr-0 ${
+                    index === columns.length - 1 && canWrite ? 'text-right' : 'text-left'
+                  }`}
+                  title={column.description}
+                  aria-label={
+                    column.description === undefined
+                      ? undefined
+                      : `${column.label}: ${column.description}`
+                  }
+                >
+                  {column.label}
+                </th>
+              ))}
             </tr>
           </thead>
           <tbody className="divide-y divide-line">
@@ -346,6 +467,7 @@ function ModelsTable({
               <ModelRow
                 key={model.id}
                 model={model}
+                stats={throughputByModel.get(model.id) ?? null}
                 canWrite={canWrite}
                 onDelete={onDelete}
                 onPricing={onPricing}
@@ -361,6 +483,7 @@ function ModelsTable({
           <ModelCard
             key={model.id}
             model={model}
+            stats={throughputByModel.get(model.id) ?? null}
             canWrite={canWrite}
             onDelete={onDelete}
             onPricing={onPricing}
@@ -419,6 +542,7 @@ function modelLimitSummary(model: ModelSummary): { summary: string; exact: strin
 
 function ModelRow({
   model,
+  stats,
   canWrite,
   onDelete,
   onPricing,
@@ -426,6 +550,7 @@ function ModelRow({
   onEdit,
 }: {
   model: ModelSummary;
+  stats: ThroughputStats | null;
   canWrite: boolean;
   onDelete: DeleteModelHandler;
   onPricing: PriceModelHandler;
@@ -469,6 +594,7 @@ function ModelRow({
       <td className="py-2.5 pr-3 align-top">
         <ModelStatusBadge enabled={model.enabled} />
       </td>
+      <SpeedCell stats={stats} />
       <td className="py-2.5 pr-3 align-top font-mono text-[11.5px] tabular-nums">
         <time dateTime={model.created_at}>{formatCreatedAt(model.created_at)}</time>
       </td>
@@ -520,6 +646,7 @@ function ModelRow({
 
 function ModelCard({
   model,
+  stats,
   canWrite,
   onDelete,
   onPricing,
@@ -527,6 +654,7 @@ function ModelCard({
   onEdit,
 }: {
   model: ModelSummary;
+  stats: ThroughputStats | null;
   canWrite: boolean;
   onDelete: DeleteModelHandler;
   onPricing: PriceModelHandler;
@@ -535,6 +663,7 @@ function ModelCard({
 }) {
   const limits = modelLimitSummary(model);
   const capabilities = modelCapabilitySummary(model);
+  const speed = modelSpeedSummary(stats);
   return (
     <li className={`py-3 ${model.enabled ? '' : 'bg-surface-sunken/30'}`}>
       <div className="flex items-start justify-between gap-3">
@@ -556,6 +685,14 @@ function ModelCard({
         <dd className="break-words">{model.provider}</dd>
         <dt className="text-ink-muted">Upstream</dt>
         <dd className="break-words font-mono text-[11.5px]">{model.upstream_model}</dd>
+        <dt className="text-ink-muted">Speed</dt>
+        <dd
+          className="break-words font-mono text-[11px] tabular-nums text-ink-muted"
+          title={speed.exact}
+          aria-label={speed.exact}
+        >
+          {speed.summary}
+        </dd>
         {limits !== null && (
           <>
             <dt className="text-ink-muted">Limits</dt>

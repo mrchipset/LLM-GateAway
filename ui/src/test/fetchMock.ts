@@ -12,6 +12,7 @@ export interface Routes {
   '/api/v1/auth/me'?: RouteHandler;
   '/api/v1/auth/oidc/status'?: RouteHandler;
   '/api/v1/models'?: RouteHandler;
+  '/api/v1/throughput'?: RouteHandler;
   'POST /api/v1/models'?: RouteHandler;
   'PATCH /api/v1/models/:id'?: RouteHandler;
   'DELETE /api/v1/models/:id'?: RouteHandler;
@@ -199,6 +200,7 @@ function createDefaultRoutes(
     '/api/v1/auth/oidc/status': () => jsonResponse({ enabled: false }),
 
     '/api/v1/models': () => jsonResponse({ items: [], total: 0, limit: 100, offset: 0 }),
+    '/api/v1/throughput': () => jsonResponse({ window_seconds: 900, items: [] }),
     'POST /api/v1/models': () => {
       throw new Error('Unexpected request: POST /api/v1/models');
     },

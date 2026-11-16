@@ -23,6 +23,7 @@ const EXPECTED_ADMIN_PREFIXES = [
   'audit-request',
   'admin-admins',
   'admin-audit-events',
+  'admin-throughput',
 ];
 
 const LOADED_ADMIN_PREFIXES = EXPECTED_ADMIN_PREFIXES.filter(
