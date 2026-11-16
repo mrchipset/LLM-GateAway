@@ -32,6 +32,7 @@ from llm_gateway.providers.base import (
     ProviderUpstreamError,
 )
 from llm_gateway.providers.retry import RetryPolicy, Sleeper, asyncio_sleep
+from llm_gateway.providers.throughput import record_stream_throughput
 from llm_gateway.schemas.chat import (
     ChatCompletionChoice,
     ChatCompletionChunk,
@@ -821,6 +822,8 @@ class AnthropicProvider:
         translator = _StreamTranslator(model=request.model)
         first_chunk = True
         outcome = "cancelled"
+        first_chunk_at: float | None = None
+        stream_usage: Usage | None = None
         try:
             async for event, data in self._iter_sse_events(response):
                 _, body = _parse_event(event, data)
@@ -828,13 +831,16 @@ class AnthropicProvider:
                 if chunk is None:
                     continue
                 if first_chunk:
-                    ttft = perf_counter() - started
+                    first_chunk_at = perf_counter()
+                    ttft = first_chunk_at - started
                     span.set_attribute("llm.ttft_ms", round(ttft * 1000, 2))
                     current_metrics().upstream_ttft.record(
                         ttft,
                         {"provider": self.name.value, "model": request.model},
                     )
                     first_chunk = False
+                if chunk.usage is not None:
+                    stream_usage = chunk.usage
                 yield chunk
             if not translator.completed:
                 raise ProviderResponseError("Upstream stream ended before completion")
@@ -844,8 +850,18 @@ class AnthropicProvider:
             self._mark_attempt_failed(span, exc)
             raise
         finally:
+            ended = perf_counter()
             await response.aclose()
             span.set_attribute("llm.stream_completed", translator.completed)
+            if outcome == "ok" and first_chunk_at is not None:
+                record_stream_throughput(
+                    provider=self.name.value,
+                    model=request.model,
+                    span=span,
+                    usage=stream_usage,
+                    ttft_seconds=first_chunk_at - started,
+                    decode_seconds=ended - first_chunk_at,
+                )
             span.end()
             self._record_attempt(
                 model_id=request.model,

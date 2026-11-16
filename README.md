@@ -467,6 +467,8 @@ Metrics are off by default. When enabled, Prometheus scrapes a dedicated port (n
 | `gateway_upstream_requests` | counter | `provider`, `model`, `status` |
 | `gateway_upstream_duration_seconds` | histogram | `provider`, `model` |
 | `gateway_upstream_ttft_seconds` | histogram | `provider`, `model` |
+| `gateway_upstream_prefill_tokens_per_second` | histogram | `provider`, `model` |
+| `gateway_upstream_decode_tokens_per_second` | histogram | `provider`, `model` |
 | `gateway_rejections` | counter | `reason` |
 | `gateway_usage_write_failures` | counter | `reason` |
 | `gateway_audit_write_failures` | counter | — |
@@ -479,6 +481,7 @@ GATEWAY_METRICS_PORT=9464
 
 - `route` is the matched route template, never the concrete path, so ids cannot become label values. Tenant, key, request id, prompts, and completions are never labels.
 - Time to first token is a histogram, not just a span attribute: a per-request value in a trace cannot be aggregated into P95.
+- Prefill throughput is non-cached prompt tokens divided by time to first token; decode throughput is completion tokens after the first divided by the interval between the first and last streamed chunk. Both are *effective* rates measured at the gateway: connection setup, upstream queueing, network latency, and slow-client backpressure all lower them. Non-streaming requests record neither, because the response exposes no first-token timestamp.
 - If the port cannot bind, the gateway logs `metrics_endpoint_bind_failed` and keeps serving traffic; it does not lose metrics silently and does not crash.
 - Dashboards, alert rules, and OTLP metric export are not included.
 

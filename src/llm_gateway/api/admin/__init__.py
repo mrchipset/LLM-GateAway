@@ -12,6 +12,7 @@ from llm_gateway.api.admin import (
     models,
     oidc,
     tenants,
+    throughput,
     usage,
 )
 
@@ -26,5 +27,6 @@ router.include_router(models.router)
 router.include_router(deployments.router)
 router.include_router(tenants.router)
 router.include_router(usage.router)
+router.include_router(throughput.router)
 
 __all__ = ["router"]

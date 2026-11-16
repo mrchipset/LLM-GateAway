@@ -33,6 +33,7 @@ logger = logging.getLogger(__name__)
 _METER_NAME = "llm_gateway"
 _DURATION_BUCKETS = (0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0)
 _TTFT_BUCKETS = (0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0)
+_THROUGHPUT_BUCKETS = (1.0, 2.5, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0)
 
 _lock = threading.RLock()
 _current: Metrics | None = None
@@ -50,6 +51,8 @@ class Metrics:
     upstream_requests: Counter
     upstream_duration: Histogram
     upstream_ttft: Histogram
+    upstream_prefill_tokens_per_second: Histogram
+    upstream_decode_tokens_per_second: Histogram
     rejections: Counter
     usage_write_failures: Counter
     audit_write_failures: Counter
@@ -92,6 +95,22 @@ def build_metrics(meter: Meter) -> Metrics:
             "gateway_upstream_ttft_seconds",
             unit="s",
             description="Upstream time to first streamed chunk",
+        ),
+        upstream_prefill_tokens_per_second=meter.create_histogram(
+            "gateway_upstream_prefill_tokens_per_second",
+            unit="{token}/s",
+            description=(
+                "Effective upstream prefill throughput: non-cached prompt tokens "
+                "per second until the first streamed chunk"
+            ),
+        ),
+        upstream_decode_tokens_per_second=meter.create_histogram(
+            "gateway_upstream_decode_tokens_per_second",
+            unit="{token}/s",
+            description=(
+                "Effective upstream decode throughput: completion tokens per second "
+                "between the first and last streamed chunk"
+            ),
         ),
         rejections=meter.create_counter(
             "gateway_rejections",
@@ -225,6 +244,14 @@ def configure_metrics(settings: Settings) -> Metrics:
             View(
                 instrument_name="gateway_upstream_ttft_seconds",
                 aggregation=ExplicitBucketHistogramAggregation(_TTFT_BUCKETS),
+            ),
+            View(
+                instrument_name="gateway_upstream_prefill_tokens_per_second",
+                aggregation=ExplicitBucketHistogramAggregation(_THROUGHPUT_BUCKETS),
+            ),
+            View(
+                instrument_name="gateway_upstream_decode_tokens_per_second",
+                aggregation=ExplicitBucketHistogramAggregation(_THROUGHPUT_BUCKETS),
             ),
         ],
     )

@@ -23,10 +23,12 @@ from llm_gateway.providers.base import (
     ProviderUpstreamError,
 )
 from llm_gateway.providers.retry import RetryPolicy, Sleeper, asyncio_sleep
+from llm_gateway.providers.throughput import record_stream_throughput
 from llm_gateway.schemas.chat import (
     ChatCompletionChunk,
     ChatCompletionRequest,
     ChatCompletionResponse,
+    Usage,
 )
 from llm_gateway.telemetry import inject_trace_context, mark_span_error
 
@@ -304,6 +306,8 @@ class OpenAIProvider:
         first_chunk = True
         completed = False
         outcome = "cancelled"
+        first_chunk_at: float | None = None
+        stream_usage: Usage | None = None
         try:
             async for data in self._iter_sse_data(response):
                 if data == "[DONE]":
@@ -312,13 +316,16 @@ class OpenAIProvider:
                     break
                 chunk = self._parse_chunk(data)
                 if first_chunk:
-                    ttft = perf_counter() - started
+                    first_chunk_at = perf_counter()
+                    ttft = first_chunk_at - started
                     span.set_attribute("llm.ttft_ms", round(ttft * 1000, 2))
                     current_metrics().upstream_ttft.record(
                         ttft,
                         {"provider": self.name.value, "model": request.model},
                     )
                     first_chunk = False
+                if chunk.usage is not None:
+                    stream_usage = chunk.usage
                 if any(choice.finish_reason is not None for choice in chunk.choices):
                     seen_finish = True
                 yield chunk
@@ -331,8 +338,18 @@ class OpenAIProvider:
             self._mark_attempt_failed(span, exc)
             raise
         finally:
+            ended = perf_counter()
             await response.aclose()
             span.set_attribute("llm.stream_completed", completed)
+            if outcome == "ok" and first_chunk_at is not None:
+                record_stream_throughput(
+                    provider=self.name.value,
+                    model=request.model,
+                    span=span,
+                    usage=stream_usage,
+                    ttft_seconds=first_chunk_at - started,
+                    decode_seconds=ended - first_chunk_at,
+                )
             span.end()
             self._record_attempt(
                 model_id=request.model,

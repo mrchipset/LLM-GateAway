@@ -56,6 +56,16 @@ STREAM_BODY = (
     "data: [DONE]\n\n"
 )
 
+STREAM_USAGE_BODY = (
+    'data: {"id":"c1","object":"chat.completion.chunk","created":1,"model":"m",'
+    '"choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":null}]}\n\n'
+    'data: {"id":"c1","object":"chat.completion.chunk","created":1,"model":"m",'
+    '"choices":[{"index":0,"delta":{"content":"there"},"finish_reason":"stop"}]}\n\n'
+    'data: {"id":"c1","object":"chat.completion.chunk","created":1,"model":"m",'
+    '"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":3,"total_tokens":103}}\n\n'
+    "data: [DONE]\n\n"
+)
+
 
 @pytest.fixture(name="metric_reader")
 def metric_reader_fixture() -> Iterator[InMemoryMetricReader]:
@@ -276,6 +286,57 @@ async def test_streaming_records_time_to_first_token(
         )
         == 1
     )
+
+
+async def test_streaming_records_prefill_and_decode_throughput(
+    metric_reader: InMemoryMetricReader,
+) -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            text=STREAM_USAGE_BODY,
+            headers={"content-type": "text/event-stream"},
+        )
+
+    provider = make_provider(handler)
+
+    with trace.get_tracer("test").start_as_current_span("root"):
+        chunks = [
+            chunk async for chunk in provider.stream(upstream_model="upstream", request=_request())
+        ]
+
+    assert len(chunks) == 3
+    for name in (
+        "gateway_upstream_prefill_tokens_per_second",
+        "gateway_upstream_decode_tokens_per_second",
+    ):
+        assert (
+            histogram_count(
+                metric_reader,
+                name,
+                provider="openai",
+                model="public-model",
+            )
+            == 1
+        )
+
+
+async def test_non_streaming_requests_do_not_record_throughput(
+    metric_reader: InMemoryMetricReader,
+) -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=COMPLETION_BODY)
+
+    provider = make_provider(handler)
+
+    with trace.get_tracer("test").start_as_current_span("root"):
+        await provider.complete(upstream_model="upstream", request=_request())
+
+    for name in (
+        "gateway_upstream_prefill_tokens_per_second",
+        "gateway_upstream_decode_tokens_per_second",
+    ):
+        assert histogram_count(metric_reader, name) == 0
 
 
 async def _fake_stack(
