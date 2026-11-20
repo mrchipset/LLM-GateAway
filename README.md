@@ -571,6 +571,7 @@ GATEWAY_OIDC_JIT_PROVISIONING=true
 | `GATEWAY_REQUEST_TIMEOUT_SECONDS` | Total upstream request timeout, default 60 |
 | `GATEWAY_CONNECT_TIMEOUT_SECONDS` | Connect timeout, default 10 |
 | `GATEWAY_STREAM_IDLE_TIMEOUT_SECONDS` | Maximum gap between streamed upstream bytes before the stream is failed, default 60; `0` disables |
+| `GATEWAY_STREAM_KEEPALIVE_SECONDS` | SSE comment (`: keepalive`) interval while a streamed response waits for the next upstream chunk, default 0 (disabled); clients that ignore SSE comments are unaffected |
 | `GATEWAY_SHUTDOWN_GRACE_SECONDS` | In-flight drain budget during shutdown, default 30; uvicorn uses the same value as its hard timeout |
 | `GATEWAY_WORKERS` | uvicorn worker processes in the container, default 1; keep at 1 until shared rate limiting lands |
 | `GATEWAY_MAX_RETRIES` | Max retries before the first byte, default 2 (cap 5) |

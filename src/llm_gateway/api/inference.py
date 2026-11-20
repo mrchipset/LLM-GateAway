@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from collections.abc import AsyncGenerator, Mapping
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 
 import anyio
 from fastapi import APIRouter, Depends, Request, Response
@@ -16,6 +17,7 @@ from llm_gateway.logging import get_logger
 from llm_gateway.providers.base import ProviderError
 from llm_gateway.request_context import get_request_id
 from llm_gateway.schemas.chat import (
+    ChatCompletionChunk,
     ChatCompletionRequest,
     ChatCompletionResponse,
     ModelListResponse,
@@ -144,6 +146,55 @@ def _merged_tool_calls(merged: dict[int, dict[str, Any]]) -> list[dict[str, Any]
     return [merged[index] for index in sorted(merged)]
 
 
+_KEEPALIVE_FRAME = b": keepalive\n\n"
+_STREAM_DONE = object()
+
+
+async def _stream_chunks(
+    stream: ChatStream, keepalive_seconds: float
+) -> AsyncGenerator[ChatCompletionChunk | None, None]:
+    """Yield upstream chunks, inserting a keepalive tick when none arrive in time.
+
+    ``None`` means "no chunk yet, emit a keepalive". The pump task owns the
+    upstream iterator, so a timeout only cancels the queue wait and never the
+    upstream read; client disconnects still cancel the pump and close the stream.
+    """
+    if keepalive_seconds <= 0:
+        async for chunk in stream.chunks():
+            yield chunk
+        return
+
+    queue: asyncio.Queue[object] = asyncio.Queue(maxsize=16)
+
+    async def pump() -> None:
+        try:
+            async for chunk in stream.chunks():
+                await queue.put(chunk)
+        except BaseException as exc:  # forwarded to the consumer
+            await queue.put(exc)
+        finally:
+            with contextlib.suppress(asyncio.QueueFull):
+                queue.put_nowait(_STREAM_DONE)
+
+    task = asyncio.create_task(pump())
+    try:
+        while True:
+            try:
+                item = await asyncio.wait_for(queue.get(), timeout=keepalive_seconds)
+            except TimeoutError:
+                yield None
+                continue
+            if item is _STREAM_DONE:
+                return
+            if isinstance(item, BaseException):
+                raise item
+            yield cast(ChatCompletionChunk, item)
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+
 async def _stream_sse(
     stream: ChatStream,
     *,
@@ -155,6 +206,7 @@ async def _stream_sse(
     audit_timeout_seconds: float = DEFAULT_AUDIT_WRITE_TIMEOUT_SECONDS,
     container: Container | None = None,
     leases: list[tuple[BucketScope, str]] | None = None,
+    keepalive_seconds: float = 0.0,
 ) -> AsyncGenerator[bytes, None]:
     status = "completed"
     content_parts: list[str] = []
@@ -162,7 +214,10 @@ async def _stream_sse(
     finish_reason: str | None = None
 
     try:
-        async for chunk in stream.chunks():
+        async for chunk in _stream_chunks(stream, keepalive_seconds):
+            if chunk is None:
+                yield _KEEPALIVE_FRAME
+                continue
             for choice in chunk.choices:
                 if choice.index != 0:
                     continue
@@ -369,6 +424,7 @@ async def create_chat_completion(
             audit_timeout_seconds=audit_service.settings.audit_write_timeout_seconds,
             container=container,
             leases=leases,
+            keepalive_seconds=container.settings.stream_keepalive_seconds,
         ),
         media_type="text/event-stream",
         headers={
